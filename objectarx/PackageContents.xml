@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Autoloader package for Mac AutoCAD 2027.
+     The outer MEP-Bridge.bundle IS the ObjectARX module (exports acrxEntryPoint).
+     Do NOT nest another .bundle — ApplicationAddins loads the top-level .bundle
+     as Runtime Extension and requires acrxEntryPoint there. -->
+<ApplicationPackage SchemaVersion="1.0" AppVersion="1.0.1"
+    ProductType="Application"
+    Name="MEP-Bridge"
+    Description="MEP Studio bridge - file watch + ObjectARX raw for AutoCAD Mac"
+    Author="SmartCoreX"
+    ProductCode="{434ADAF1-829F-4B6A-90A1-32A266C3091A}">
+  <CompanyDetails Name="SmartCoreX" Url="" Email=""/>
+  <Components Description="Mac AutoCAD 2027 (R26.0)">
+    <RuntimeRequirements OS="Mac" Platform="AutoCAD"
+        SeriesMin="R26.0" SeriesMax="R26.0"/>
+    <!-- ModuleName points at this package bundle itself (flat ARX layout). -->
+    <ComponentEntry AppName="MepBridge"
+        ModuleName="./"
+        AppType="ARX"
+        LoadOnAutoCADStartup="True">
+      <Commands GroupName="MEP_BRIDGE">
+        <Command Global="MEPARX"     Local="MEPARX"/>
+        <Command Global="MEPDOCS"    Local="MEPDOCS"/>
+        <Command Global="MEPWATCH"   Local="MEPWATCH"/>
+        <Command Global="MEPUNWATCH" Local="MEPUNWATCH"/>
+        <Command Global="MEPRAW"     Local="MEPRAW"/>
+      </Commands>
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>

@@ -1,0 +1,87 @@
+# MEP Studio
+
+App desktop khung chat điều khiển tool AutoCAD MEP — dựng đúng stack **giống Open Design**
+(Next.js + Electron + Express daemon + SQLite). Bạn gõ yêu cầu tiếng Việt, app spawn một
+**CLI agent local (Claude / Codex / Grok)** headless chạy trong thư mục dự án, agent tự dùng
+`app/cli.py` và `acad-lisp/mep.lsp` để thực thi, kết quả stream về khung chat và lưu lịch sử.
+
+## Stack
+
+| Tầng | Công nghệ | Thư mục |
+|---|---|---|
+| Frontend | **Next.js 16 App Router + React 19 + TS** | `apps/web` |
+| Daemon | **Node 24 · Express · SSE streaming · SQLite** (`node:sqlite`) | `apps/daemon` |
+| Desktop | **Electron 33** shell nạp UI web, quản lý vòng đời | `apps/desktop` |
+| Lifecycle | **1 entrypoint** `pnpm tools-dev` | `scripts/tools-dev.mjs` |
+
+> Ghi chú: bảng gốc Open Design ghi `better-sqlite3`; ở đây dùng **`node:sqlite`** built-in của
+> Node 24 — cùng engine SQLite, không cần build native (tránh xung đột ABI với Electron).
+
+## Chạy
+
+```bash
+cd mep-studio
+pnpm install          # lần đầu
+pnpm tools-dev        # dựng daemon + web + mở cửa sổ app
+```
+
+- `pnpm tools-dev` — full app desktop (cửa sổ Electron).
+- `pnpm tools-dev web` — chỉ daemon + web, mở trong trình duyệt (không cần Electron).
+- Đóng cửa sổ hoặc Ctrl+C ở terminal → tắt sạch cả 3 tiến trình.
+
+Yêu cầu: có ít nhất một CLI agent trên PATH — `claude`, `codex`, hoặc `grok`.
+
+## Kiến trúc luồng
+
+```
+apps/web (Next.js)  ──fetch POST /api/chat (SSE)──►  apps/daemon (Express)
+   khung chat, sidebar lịch sử          │  spawn claude/codex/grok headless
+   đọc /api/agents, /api/conversations   │  cwd = thư mục tool-autocad
+        ▲                                 │  parser → event chuẩn hoá → SSE
+        └───────── stream event ──────────┘  lưu hội thoại vào SQLite
+apps/desktop (Electron) bọc apps/web thành cửa sổ native.
+```
+
+**Daemon endpoints** (`http://127.0.0.1:8788`):
+- `GET /api/agents` — CLI nào đã cài.
+- `POST /api/chat` — SSE; body `{agent, message, sessionId?, conversationId?}`; event
+  `{kind: conversation|session|thinking|text|tool|log|done|error|end}`.
+- `GET /api/conversations`, `GET /api/conversations/:id/messages` — lịch sử (SQLite).
+- `POST /api/acad/*` — **điều khiển AutoCAD for Mac** (headless/batch/live). Xem
+  [`ACAD-CONTROL.md`](ACAD-CONTROL.md). Đã verify: đọc + **sửa bản vẽ thật** (KHBV,
+  layer, entity) không cần mở GUI, và điều khiển được ngay từ khung chat.
+
+**Registry agent** (`apps/daemon/src/agents.ts`): mỗi agent có `buildArgs()` (câu lệnh
+headless) + `parse()` (chuẩn hoá JSONL) — mô phỏng `runtimes/defs/*` của Open Design.
+Vai trò trợ lý MEP ở `MEP_PROMPT`.
+
+## Dữ liệu
+
+SQLite tại `~/Library/Application Support/mep-studio/mep.db` (đổi bằng `MEP_DATA_DIR`).
+
+## Đóng gói thành .app / .dmg cài đặt được
+
+```bash
+pnpm package
+```
+
+Chạy `scripts/package.mjs`: (1) Next static export → `apps/web/out`, (2) bundle daemon
+1 file bằng esbuild → `apps/desktop/build/daemon.cjs`, (3) copy `sql-wasm.wasm` + UI tĩnh,
+(4) electron-builder. Kết quả trong **`apps/desktop/dist/`**:
+- `MEP Studio.app` — app tự chứa (double-click chạy; tự spawn daemon phục vụ UI + API).
+- `MEP Studio-0.1.0.dmg` — bộ cài (kéo app vào Applications).
+
+Trong bản đóng gói:
+- Daemon chạy bằng **Node của Electron** (`ELECTRON_RUN_AS_NODE`), phục vụ UI tĩnh + `/api` ở
+  cùng cổng 8788 → không cần Next server.
+- Storage **sql.js (WASM)** → không phụ thuộc phiên bản Node/Electron.
+- **Thư mục dự án** mà agent thao tác: mặc định `~/Desktop/tool-autocad` (đổi bằng biến
+  môi trường `MEP_PROJECT_ROOT`). Dữ liệu lịch sử ở `~/Library/Application Support/MEP Studio/`.
+- App **chưa ký (unsigned)**: lần đầu mở có thể phải chuột phải → *Open* (Gatekeeper).
+
+## Bước sau
+
+- Ký (code sign) + notarize để chia sẻ máy khác không bị Gatekeeper chặn; thêm icon `.icns`.
+- Cho người dùng **chọn thư mục dự án** trong app (thay cho mặc định cứng).
+- Bổ sung PATH đầy đủ khi mở từ Finder để nhận cả `codex` (`~/.nvm/...`).
+- Preview file/Excel agent tạo; nút chức năng MEP sẵn; chọn model trong mỗi agent.
