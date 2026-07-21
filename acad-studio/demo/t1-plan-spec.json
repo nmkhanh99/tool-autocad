@@ -1,0 +1,94 @@
+{
+  "source": "B_MBT1 trong As-built drawing/ABD_He thong thoat nuoc tang 1_Tran tang 1_V.00.dwg",
+  "extracted_by": "walk.lsp (nở phẳng đệ quy block) → đo cụm toạ độ. Xem DRAW-T1-REAL.md §1.3",
+  "provenance": {
+    "do_duoc": [
+      "grid.x / grid.y: toạ độ đường trục dài 19.5-25.5 m trên layer 'A10 - Hatch'",
+      "grid.bubble_r: bán kính CIRCLE lặp 60 lần = 337",
+      "walls: cặp đường song song cách 80/110/210/220 mm, lọc theo tổng chiều dài",
+      "cores.stair: LINE ngang cách đều 250 mm (bậc) trong x 2847..5177",
+      "cores.elevators: 2 chữ X (4 đường chéo mỗi cái) trên layer 0-8",
+      "cores.wc.fixtures: ARC r=472 (xí) và r=614 (chậu) trong vùng y > 22300",
+      "doors: ARC r=650 quét 90°",
+      "rooms: TEXT layer 0-TEXT (byte TCVN3 → Unicode đối chiếu thủ công)"
+    ],
+    "suy_ra": [
+      "cores.stair.steps = 16 (suy từ bước bậc 250 mm trên chiều dài hộp thang 4110 mm)",
+      "ramp.outline: bao vùng hatch 45° ở x > 14606 — lấy hình chữ nhật bao, không theo đường bao cong của bản mẫu"
+    ]
+  },
+  "extent_mm": [21909, 26463],
+
+  "grid": {
+    "x": { "A": 1837, "B": 6047, "C": 14606, "D": 18397 },
+    "y": { "1": 2265, "2": 5965, "3": 12945, "4": 16985, "5": 22205, "6": 25244 },
+    "bubble_r": 337,
+    "label_h": 240
+  },
+
+  "walls": [
+    { "p1": [1942, 5965],   "p2": [1942, 15250],  "thickness": 210, "kind": "bao" },
+    { "p1": [1947, 17095],  "p2": [1947, 25025],  "thickness": 110, "kind": "bao" },
+    { "p1": [1837, 25189],  "p2": [18397, 25189], "thickness": 110, "kind": "bao" },
+    { "p1": [17996, 3665],  "p2": [17996, 12115], "thickness": 220, "kind": "bao" },
+    { "p1": [6252, 6765],   "p2": [6252, 22315],  "thickness": 110, "kind": "ngan" },
+    { "p1": [14551, 3791],  "p2": [14551, 15284], "thickness": 110, "kind": "ngan" },
+    { "p1": [6447, 5561],   "p2": [14496, 5561],  "thickness": 80,  "kind": "ngan" },
+    { "p1": [1947, 23825],  "p2": [5787, 23825],  "thickness": 110, "kind": "ngan" },
+    { "p1": [1837, 17095],  "p2": [4737, 17095],  "thickness": 110, "kind": "ngan" },
+    { "p1": [14606, 12669], "p2": [17886, 12669], "thickness": 110, "kind": "ngan" },
+    { "p1": [14496, 15229], "p2": [17996, 15229], "thickness": 110, "kind": "ngan" },
+    { "p1": [2047, 12835],  "p2": [4787, 12835],  "thickness": 110, "kind": "ngan" },
+    { "p1": [4737, 12835],  "p2": [4737, 17095],  "thickness": 110, "kind": "ngan" }
+  ],
+
+  "cores": {
+    "stair": {
+      "box": [2847, 18095, 4517, 22205],
+      "steps": 16,
+      "step_dir": "V",
+      "note": "cầu thang bộ, bước bậc đo được 250 mm"
+    },
+    "elevators": [
+      { "box": [3237, 13378, 4437, 14528] },
+      { "box": [3237, 15405, 4437, 16555] }
+    ],
+    "wc": {
+      "box": [1837, 22415, 6307, 25244],
+      "fixtures": [
+        { "kind": "xi",   "p": [2687, 23637], "r": 472 },
+        { "kind": "chau", "p": [1990, 23263], "r": 614 },
+        { "kind": "chau", "p": [2903, 23263], "r": 614 },
+        { "kind": "xi",   "p": [2637, 24947], "r": 472 },
+        { "kind": "chau", "p": [1940, 24573], "r": 614 },
+        { "kind": "chau", "p": [2853, 24573], "r": 614 }
+      ]
+    }
+  },
+
+  "doors": [
+    { "hinge": [4837, 22465], "width": 650, "angle_deg": 0 },
+    { "hinge": [5787, 23825], "width": 650, "angle_deg": 90 },
+    { "hinge": [6252, 8500],  "width": 900, "angle_deg": 0 },
+    { "hinge": [6252, 14098], "width": 900, "angle_deg": 270 },
+    { "hinge": [4737, 15600], "width": 800, "angle_deg": 0 },
+    { "hinge": [14551, 8130], "width": 900, "angle_deg": 180 }
+  ],
+
+  "rooms": [
+    { "name": "SẢNH KHÁCH SẠN",         "p": [3172, 8166],   "h": 186.3 },
+    { "name": "PHÒNG GỬI HÀNH LÝ",      "p": [2559, 12267],  "h": 186.3 },
+    { "name": "SẢNH THANG MÁY",         "p": [5433, 14098],  "h": 186.3 },
+    { "name": "KHU VĂN PHÒNG",          "p": [9825, 8130],   "h": 186.3 },
+    { "name": "bv+trực",                "p": [13471, 5126],  "h": 220.0 },
+    { "name": "PCCC",                   "p": [13632, 4736],  "h": 220.0 },
+    { "name": "lối lên xuống tầng hầm", "p": [16581, 8521],  "h": 112.5 },
+    { "name": "wc nữ",                  "p": [3093, 22774],  "h": 287.3 },
+    { "name": "wc nam",                 "p": [3514, 24163],  "h": 287.3 }
+  ],
+
+  "ramp": {
+    "outline": [[14606, 1567], [18397, 1567], [18397, 12115], [14606, 12115]],
+    "note": "lối lên xuống tầng hầm — vùng hatch 45°"
+  }
+}

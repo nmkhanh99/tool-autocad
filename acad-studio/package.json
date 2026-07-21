@@ -1,0 +1,17 @@
+{
+  "name": "acad-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Acad Studio — shell UI/daemon for AutoCAD Toolkit (Offline + ACAD Control + ObjectARX)",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "daemon": "pnpm --filter @acad/daemon dev",
+    "web": "pnpm --filter @acad/web dev",
+    "desktop": "pnpm --filter @acad/desktop dev",
+    "tools-dev": "node scripts/tools-dev.mjs",
+    "package": "node scripts/package.mjs"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "electron"]
+  }
+}

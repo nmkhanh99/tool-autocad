@@ -368,43 +368,58 @@
 (defun c:MEP-PDF ( ) (mep-pdf))
 
 ;; ---------------------------------------------------------------------------
-;;  CẦU NỐI app ngoài -> AutoCAD (hybrid)
-;;  App ngoài (web/Tauri) ghi job ra ~/MEP-Bridge/mep_job.lsp gồm các lệnh
-;;  (mep-pipe ...)/(mep-fit ...)/(c:MEP-INIT). Trong CAD gõ MEP-RUN để nạp.
-;;  Mac: người dùng bấm MEP-RUN (Mac không cho app tự bơm vào bản vẽ đang mở).
-;;  Windows: app có thể tự gọi qua COM/accoreconsole (tùy chọn nâng cao).
+;;  CẦU NỐI app ngoài -> AutoCAD (hybrid) — domain-agnostic bridge
+;;  App ghi job ra ~/Acad-Bridge/job.lsp (legacy: ~/MEP-Bridge/mep_job.lsp).
+;;  Plugin AcadBridge auto-load; hoặc gõ ACAD-RUN / MEP-RUN.
 ;; ---------------------------------------------------------------------------
-(defun mep:bridgedir ( / d)
+(defun acad:bridgedir ( / d primary legacy)
   (setq d (cond ((getenv "HOME")) ((getenv "USERPROFILE")) (".")))
   (if (and (> (strlen d) 0)
            (/= (substr d (strlen d)) "/") (/= (substr d (strlen d)) "\\"))
     (setq d (strcat d "/")))
-  (strcat d "MEP-Bridge/"))
+  (setq primary (strcat d "Acad-Bridge/")
+        legacy  (strcat d "MEP-Bridge/"))
+  (cond
+    ((vl-file-directory-p primary) primary)
+    ((vl-file-directory-p legacy) legacy)
+    (T primary)))
 
-(defun c:MEP-RUN ( / p)
-  (setq p (strcat (mep:bridgedir) "mep_job.lsp"))
+(defun mep:bridgedir ( ) (acad:bridgedir))
+
+(defun acad:job-path ( / dir p)
+  (setq dir (acad:bridgedir)
+        p (strcat dir "job.lsp"))
+  (if (findfile p) p
+    (progn
+      (setq p (strcat dir "mep_job.lsp"))
+      (if (findfile p) p (strcat dir "job.lsp")))))
+
+(defun c:ACAD-RUN ( / p)
+  (setq p (acad:job-path))
   (cond
     ((findfile p)
-     (princ (strcat "\n[MEP] Nap job tu app: " p))
+     (princ (strcat "\n[ACAD] Nap job tu app: " p))
      (load p)
-     (princ "\n[MEP] Da chay xong job."))
-    (T (princ (strcat "\n[MEP] Khong thay job file. Can: " p))))
+     (princ "\n[ACAD] Da chay xong job."))
+    (T (princ (strcat "\n[ACAD] Khong thay job file. Can: " p))))
   (princ))
 
-;; Alias ngan: go MR = MEP-RUN (dung cho nut bam macro ^C^CMR hoac go nhanh)
-(defun c:MR ( ) (c:MEP-RUN))
+;; Legacy aliases
+(defun c:MEP-RUN ( ) (c:ACAD-RUN))
+(defun c:MR ( ) (c:ACAD-RUN))
 
-;; Tu TRUST thu muc bridge + lib de MEP-RUN nap job khong bi hoi SECURELOAD.
-(defun mep:trust ( / hp tp)
+(defun acad:trust ( / hp tp)
   (setq hp (getenv "HOME"))
   (if (and hp (= (type (getvar "TRUSTEDPATHS")) 'STR))
     (progn
       (setq tp (getvar "TRUSTEDPATHS"))
-      (if (not (vl-string-search "MEP-Bridge" tp))
+      (if (not (or (vl-string-search "Acad-Bridge" tp) (vl-string-search "MEP-Bridge" tp)))
         (setvar "TRUSTEDPATHS"
-          (strcat tp ";" hp "/MEP-Bridge/...;" hp "/Desktop/tool-autocad/acad-lisp/...")))))
+          (strcat tp ";" hp "/Acad-Bridge/...;" hp "/MEP-Bridge/...;"
+                  hp "/Desktop/tool-autocad/acad-lisp/...")))))
   (princ))
-(mep:trust)
+(defun mep:trust ( ) (acad:trust))
+(acad:trust)
 
-(princ "\n[MEP] San sang. Go  MEP-RUN (hoac MR)  de chay job tu app MEP Studio.")
+(princ "\n[ACAD] San sang. Go ACAD-RUN (hoac MEP-RUN / MR) de chay job. Bridge: ~/Acad-Bridge/job.lsp")
 (princ)

@@ -1,0 +1,396 @@
+{
+  "version": 1,
+  "source": "As-built drawing/ABD_He thong thoat nuoc tang 1_Tran tang 1_V.00.dwg",
+  "generatedAt": "2026-07-15T14:27:50.834Z",
+  "note": "Stairs/elevators/doors are nested inside B_MBT*; place parent footprint + symbols, do not clone full as-built.",
+  "instances": [
+    {
+      "name": "A3-1-1-ISO3TGROUP",
+      "layer": "0",
+      "x": 0,
+      "y": 0,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "khung_title"
+      ]
+    },
+    {
+      "name": "B_MBT2",
+      "layer": "RSA -HACK",
+      "x": -3747546.627,
+      "y": -1041540.316,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "cau_thang",
+        "thang_may",
+        "cua",
+        "truc_Axis",
+        "noi_that"
+      ]
+    },
+    {
+      "name": "B_MBT1",
+      "layer": "RSA -HACK",
+      "x": -3800391.458,
+      "y": -1041540.316,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "cau_thang",
+        "thang_may",
+        "cua",
+        "truc_Axis",
+        "noi_that"
+      ]
+    },
+    {
+      "name": "A3-1-1-ISO3TGROUP",
+      "layer": "0-9",
+      "x": -3761239.764,
+      "y": -1068289.509,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "khung_title"
+      ]
+    },
+    {
+      "name": "B_HienTrang",
+      "layer": "P-ThoatRua",
+      "x": 4132.273,
+      "y": 815.917,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "hien_trang"
+      ]
+    },
+    {
+      "name": "A3-1-1-ISO3TGROUP",
+      "layer": "0-9",
+      "x": -3812288.961,
+      "y": -1068289.509,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "khung_title"
+      ]
+    },
+    {
+      "name": "B_HienTrang",
+      "layer": "P-ThoatRua",
+      "x": -48712.558,
+      "y": 815.917,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "hien_trang"
+      ]
+    },
+    {
+      "name": "B_ThoatRua_Tang1",
+      "layer": "P-ThoatRua",
+      "x": -3800391.458,
+      "y": -1064519.569,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "mep_container"
+      ]
+    },
+    {
+      "name": "B_ThoatXi_Tang1",
+      "layer": "P-ThoatRua",
+      "x": -3800391.458,
+      "y": -1064519.569,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "mep_container"
+      ]
+    },
+    {
+      "name": "B_MBT1",
+      "layer": "RSA -HACK",
+      "x": -3800391.458,
+      "y": -1072340.316,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "cau_thang",
+        "thang_may",
+        "cua",
+        "truc_Axis",
+        "noi_that"
+      ]
+    },
+    {
+      "name": "A3-1-1-ISO3TGROUP",
+      "layer": "0-9",
+      "x": -3812288.961,
+      "y": -1099089.509,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "khung_title"
+      ]
+    },
+    {
+      "name": "B_ThoatRua_Tang1",
+      "layer": "P-ThoatRua",
+      "x": -3800391.458,
+      "y": -1095319.569,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "mep_container"
+      ]
+    },
+    {
+      "name": "B_MBT1",
+      "layer": "RSA -HACK",
+      "x": -3800391.458,
+      "y": -1103140.316,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "cau_thang",
+        "thang_may",
+        "cua",
+        "truc_Axis",
+        "noi_that"
+      ]
+    },
+    {
+      "name": "A3-1-1-ISO3TGROUP",
+      "layer": "0-9",
+      "x": -3812288.961,
+      "y": -1129889.509,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "khung_title"
+      ]
+    },
+    {
+      "name": "B_ThoatXi_Tang1",
+      "layer": "P-ThoatRua",
+      "x": -3800391.458,
+      "y": -1126119.569,
+      "scale": 1,
+      "rotation": 0,
+      "nested": [
+        "mep_container"
+      ]
+    }
+  ],
+  "byName": {
+    "A3-1-1-ISO3TGROUP": [
+      {
+        "name": "A3-1-1-ISO3TGROUP",
+        "layer": "0",
+        "x": 0,
+        "y": 0,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "khung_title"
+        ]
+      },
+      {
+        "name": "A3-1-1-ISO3TGROUP",
+        "layer": "0-9",
+        "x": -3812288.961,
+        "y": -1068289.509,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "khung_title"
+        ]
+      },
+      {
+        "name": "A3-1-1-ISO3TGROUP",
+        "layer": "0-9",
+        "x": -3761239.764,
+        "y": -1068289.509,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "khung_title"
+        ]
+      },
+      {
+        "name": "A3-1-1-ISO3TGROUP",
+        "layer": "0-9",
+        "x": -3812288.961,
+        "y": -1099089.509,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "khung_title"
+        ]
+      },
+      {
+        "name": "A3-1-1-ISO3TGROUP",
+        "layer": "0-9",
+        "x": -3812288.961,
+        "y": -1129889.509,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "khung_title"
+        ]
+      }
+    ],
+    "B_MBT2": [
+      {
+        "name": "B_MBT2",
+        "layer": "RSA -HACK",
+        "x": -3747546.627,
+        "y": -1041540.316,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "cau_thang",
+          "thang_may",
+          "cua",
+          "truc_Axis",
+          "noi_that"
+        ]
+      }
+    ],
+    "B_MBT1": [
+      {
+        "name": "B_MBT1",
+        "layer": "RSA -HACK",
+        "x": -3800391.458,
+        "y": -1041540.316,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "cau_thang",
+          "thang_may",
+          "cua",
+          "truc_Axis",
+          "noi_that"
+        ]
+      },
+      {
+        "name": "B_MBT1",
+        "layer": "RSA -HACK",
+        "x": -3800391.458,
+        "y": -1072340.316,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "cau_thang",
+          "thang_may",
+          "cua",
+          "truc_Axis",
+          "noi_that"
+        ]
+      },
+      {
+        "name": "B_MBT1",
+        "layer": "RSA -HACK",
+        "x": -3800391.458,
+        "y": -1103140.316,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "cau_thang",
+          "thang_may",
+          "cua",
+          "truc_Axis",
+          "noi_that"
+        ]
+      }
+    ],
+    "B_HienTrang": [
+      {
+        "name": "B_HienTrang",
+        "layer": "P-ThoatRua",
+        "x": -48712.558,
+        "y": 815.917,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "hien_trang"
+        ]
+      },
+      {
+        "name": "B_HienTrang",
+        "layer": "P-ThoatRua",
+        "x": 4132.273,
+        "y": 815.917,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "hien_trang"
+        ]
+      }
+    ],
+    "B_ThoatRua_Tang1": [
+      {
+        "name": "B_ThoatRua_Tang1",
+        "layer": "P-ThoatRua",
+        "x": -3800391.458,
+        "y": -1064519.569,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "mep_container"
+        ]
+      },
+      {
+        "name": "B_ThoatRua_Tang1",
+        "layer": "P-ThoatRua",
+        "x": -3800391.458,
+        "y": -1095319.569,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "mep_container"
+        ]
+      }
+    ],
+    "B_ThoatXi_Tang1": [
+      {
+        "name": "B_ThoatXi_Tang1",
+        "layer": "P-ThoatRua",
+        "x": -3800391.458,
+        "y": -1064519.569,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "mep_container"
+        ]
+      },
+      {
+        "name": "B_ThoatXi_Tang1",
+        "layer": "P-ThoatRua",
+        "x": -3800391.458,
+        "y": -1126119.569,
+        "scale": 1,
+        "rotation": 0,
+        "nested": [
+          "mep_container"
+        ]
+      }
+    ]
+  },
+  "counts": {
+    "A3-1-1-ISO3TGROUP": 5,
+    "B_MBT2": 1,
+    "B_MBT1": 3,
+    "B_HienTrang": 2,
+    "B_ThoatRua_Tang1": 2,
+    "B_ThoatXi_Tang1": 2
+  },
+  "metrics": {
+    "mbtPitchY": 30800.000000000116,
+    "mbtSpanX": 52844.83100000024
+  }
+}

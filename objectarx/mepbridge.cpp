@@ -1,11 +1,11 @@
-// mepbridge.cpp — ObjectARX plugin "MepBridge" cho AutoCAD 2027 for Mac (R26.0)
+// mepbridge.cpp — ObjectARX plugin "AcadBridge" cho AutoCAD 2027 for Mac (R26.0)
 //
-// Cau 2 CHIEU giua app MEP Studio va AutoCAD:
-//   1. App ghi ~/MEP-Bridge/docs.req      -> plugin ghi docs.json (danh sach ban ve dang mo,
+// Cau 2 CHIEU giua app AutoCAD Toolkit va AutoCAD:
+//   1. App ghi ~/Acad-Bridge/docs.req      -> plugin ghi docs.json (danh sach ban ve dang mo,
 //      ban ve active). Day cung la HEARTBEAT: app biet plugin song.
-//   2. App ghi ~/MEP-Bridge/job_target.txt (ten ban ve dich, UTF-8, tuy chon)
-//      roi ghi ~/MEP-Bridge/mep_job.lsp   -> plugin tu (load) job vao DUNG ban ve do
-//      (khong co target -> ban ve dang active). Truoc khi load, tu them ~/MEP-Bridge
+//   2. App ghi ~/Acad-Bridge/job_target.txt (ten ban ve dich, UTF-8, tuy chon)
+//      roi ghi ~/Acad-Bridge/job.lsp   -> plugin tu (load) job vao DUNG ban ve do
+//      (khong co target -> ban ve dang active). Truoc khi load, tu them ~/Acad-Bridge
 //      vao TRUSTEDPATHS de khong bi SECURELOAD chan im lang.
 //   3. Lenh tay: MEPARX (chay job ngay), MEPDOCS (ghi docs.json), MEPWATCH/MEPUNWATCH.
 //
@@ -41,14 +41,14 @@
 static FSEventStreamRef gStream       = nullptr;
 static struct timespec  gJobMtime     = {0, 0};
 static struct timespec  gReqMtime     = {0, 0};
-std::string             gBridgeDir;               // /Users/<x>/MEP-Bridge (shared with mepraw.cpp)
+std::string             gBridgeDir;               // /Users/<x>/Acad-Bridge (shared with mepraw.cpp)
 static std::string      gJobPath, gReqPath, gDocsPath, gTargetPath;
 static std::string      gBomReqPath, gBomPath, gTblReqPath, gNativePath, gNativeDonePath, gSelReqPath;
 static struct timespec  gNativeMtime = {0, 0};
 static struct timespec  gSelReqMtime = {0, 0};
 static std::string      gHiLayer;   // layer dang duoc highlight (de unhighlight khi doi)
 
-static const ACHAR* kGroup = L"MEP_BRIDGE";
+static const ACHAR* kGroup = L"ACAD_BRIDGE";
 
 // ============================ UTF-8 <-> wchar_t (UTF-32 tren Mac) ============================
 std::string toUtf8(const wchar_t* w) {
@@ -104,9 +104,17 @@ static std::string gEventsPath;
 
 static void initPaths() {
     const char* home = std::getenv("HOME");
-    gBridgeDir = std::string(home ? home : "/tmp") + "/MEP-Bridge";
+    std::string primary = std::string(home ? home : "/tmp") + "/Acad-Bridge";
+    std::string legacy  = std::string(home ? home : "/tmp") + "/MEP-Bridge";
+    // Prefer primary; fall back to legacy dir if only that exists
+    struct stat stHome;
+    if (stat(primary.c_str(), &stHome) != 0 && stat(legacy.c_str(), &stHome) == 0)
+        gBridgeDir = legacy;
+    else
+        gBridgeDir = primary;
     mkdir(gBridgeDir.c_str(), 0755);
-    gJobPath    = gBridgeDir + "/mep_job.lsp";
+    // Primary live job filename (domain-agnostic). Legacy mep_job.lsp also watched below.
+    gJobPath    = gBridgeDir + "/job.lsp";
     gReqPath    = gBridgeDir + "/docs.req";
     gDocsPath   = gBridgeDir + "/docs.json";
     gTargetPath = gBridgeDir + "/job_target.txt";
@@ -193,13 +201,13 @@ static AcApDocument* resolveTarget() { return findDocByName(readAll(gTargetPath)
 static void runJob() {
     if (acDocManager == nullptr) return;
     AcApDocument* pDoc = resolveTarget();
-    if (pDoc == nullptr) { acutPrintf(L"\n[MepBridge] Chua co ban ve mo -- bo qua job."); return; }
-    // Tu trust ~/MEP-Bridge de (load) khong bi SECURELOAD hoi/chan, roi load job.
+    if (pDoc == nullptr) { acutPrintf(L"\n[AcadBridge] Chua co ban ve mo -- bo qua job."); return; }
+    // Tu trust ~/Acad-Bridge de (load) khong bi SECURELOAD hoi/chan, roi load job.
     std::wstring dirW = toWide(gBridgeDir);
     std::wstring jobW = toWide(gJobPath);
     std::wstring cmd =
         L"(progn (setq mep:tp (getvar \"TRUSTEDPATHS\")) (if (null mep:tp) (setq mep:tp \"\")) "
-        L"(if (null (vl-string-search \"MEP-Bridge\" mep:tp)) "
+        L"(if (and (null (vl-string-search \"Acad-Bridge\" mep:tp)) (null (vl-string-search \"MEP-Bridge\" mep:tp))) "
         L"(setvar \"TRUSTEDPATHS\" (strcat mep:tp \";" + dirW + L"/...\"))) "
         L"(load \"" + jobW + L"\")) ";
     // Chu y thu tu tham so DUNG: (doc, str, bActivate, bWrapUpInactiveDoc, bEchoString)
@@ -254,9 +262,23 @@ static void fsCallback(ConstFSEventStreamRef, void*, size_t, void*,
         execNativeJob(readAll(gNativePath));   // vẽ C++ thuần, khong LISP/SECURELOAD
     }
     mepRawOnWatchTick();   // ObjectARX raw catalog (raw.job → raw.done)
+    // Primary job.lsp
     if (stat(gJobPath.c_str(), &st) == 0 && tsChanged(st.st_mtimespec, gJobMtime)) {
         gJobMtime = st.st_mtimespec;
         runJob();
+    }
+    // Legacy alias mep_job.lsp (one release) — load if mtime newer than primary last run
+    {
+        static struct timespec gLegJobMtime = {0, 0};
+        std::string legJob = gBridgeDir + "/mep_job.lsp";
+        if (stat(legJob.c_str(), &st) == 0 && tsChanged(st.st_mtimespec, gLegJobMtime)) {
+            gLegJobMtime = st.st_mtimespec;
+            // Temporarily point load path at legacy file for this run
+            std::string saved = gJobPath;
+            gJobPath = legJob;
+            runJob();
+            gJobPath = saved;
+        }
     }
 }
 
@@ -278,7 +300,7 @@ static void startWatch() {
         kFSEventStreamEventIdSinceNow, 0.25,
         kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer);
     CFRelease(paths); CFRelease(dir);
-    if (!gStream) { acutPrintf(L"\n[MepBridge] Loi: khong tao duoc FSEventStream."); return; }
+    if (!gStream) { acutPrintf(L"\n[AcadBridge] Loi: khong tao duoc FSEventStream."); return; }
     FSEventStreamSetDispatchQueue(gStream, dispatch_get_main_queue());
     FSEventStreamStart(gStream);
 }
@@ -373,7 +395,7 @@ static void insertBomTable(AcApDocument* pDoc, double x, double y) {
     tbl->setColumnWidth(0, 4000.0); tbl->setColumnWidth(1, 1500.0); tbl->setColumnWidth(2, 2000.0);
     tbl->setRowHeight(600.0);
     tbl->setPosition(AcGePoint3d(x, y, 0));
-    tbl->setTextString(0, 0, L"BANG KHOI LUONG (MEP Studio)");
+    tbl->setTextString(0, 0, L"BANG KHOI LUONG (AutoCAD Toolkit)");
     int r = 1;
     tbl->setTextString(r, 0, L"Layer / He"); tbl->setTextString(r, 1, L"DN"); tbl->setTextString(r, 2, L"Dai (m)"); r++;
     for (auto& kv : pipes) {
@@ -404,7 +426,7 @@ static void insertBomTable(AcApDocument* pDoc, double x, double y) {
     tbl->close();
     acDocManager->unlockDocument(pDoc);
     emitEvent("bomTableInserted", "");
-    acutPrintf(L"\n[MepBridge] Da chen bang BOQ.");
+    acutPrintf(L"\n[AcadBridge] Da chen bang BOQ.");
 }
 
 static void writeBom(AcApDocument* pDoc) {
@@ -441,7 +463,7 @@ static void writeBom(AcApDocument* pDoc) {
 }
 
 // ============================ NATIVE JOB: vẽ bằng C++ thuần (rank 2+6) ============================
-// Không LISP, không SECURELOAD: app ghi ~/MEP-Bridge/native.job (bảng, phân tách TAB),
+// Không LISP, không SECURELOAD: app ghi ~/Acad-Bridge/native.job (bảng, phân tách TAB),
 // plugin dựng entity trực tiếp qua AcDb trong document lock -> nhanh + chính xác.
 // Định dạng mỗi dòng:
 //   MODE   \t COMMIT|PREVIEW|APPLY|REJECT              (mặc định COMMIT = vẽ thẳng)
@@ -614,7 +636,7 @@ static int execNativeJob(const std::string& raw) {
     };
 
     AcApDocument* pDoc = findDocByName(target);
-    if (!pDoc) { acutPrintf(L"\n[MepBridge] native.job: khong co ban ve dich.");
+    if (!pDoc) { acutPrintf(L"\n[AcadBridge] native.job: khong co ban ve dich.");
         failDone("no document"); return 0; }
     if (acDocManager->lockDocument(pDoc, AcAp::kWrite) != Acad::eOk) {
         failDone("lock failed"); return 0; }
@@ -693,12 +715,77 @@ static int execNativeJob(const std::string& raw) {
                         pl->close(); count++;
                     } else delete pl;
                 }
-            } else if (op == "TEXT" && t.size() >= 6 && !isPreview) {
-                ensureLayer(db, toWide(t[1]), 0);
+            } else if (op == "TEXT" && t.size() >= 6) {
+                // TEXT layer x y height string — works in PREVIEW (draw layer) and COMMIT
+                std::string drawLayer = isPreview ? toUtf8(kPreviewLayer) : t[1];
+                if (!isPreview) ensureLayer(db, toWide(t[1]), 0);
                 AcDbText* tx = new AcDbText(AcGePoint3d(atof(t[2].c_str()), atof(t[3].c_str()), 0),
                                            toWide(t[5]).c_str(), db->textstyle(), atof(t[4].c_str()), 0);
-                tx->setLayer(toWide(t[1]).c_str());
-                if (ms->appendAcDbEntity(newId, tx) == Acad::eOk) { tx->close(); count++; } else delete tx;
+                tx->setLayer(toWide(drawLayer).c_str());
+                if (isPreview) {
+                    AcCmColor col; col.setColorIndex((Adesk::UInt16)kPreviewAci);
+                    tx->setColor(col);
+                }
+                if (ms->appendAcDbEntity(newId, tx) == Acad::eOk) {
+                    if (isPreview) setPreviewXData(tx, opId, "0", "plan", t[1]);
+                    handles.push_back(handleOfEnt(tx));
+                    tx->close(); count++;
+                } else delete tx;
+            } else if (op == "RECT" && t.size() >= 6) {
+                // RECT layer x1 y1 x2 y2 — closed polyline footprint for plan blocks
+                std::string destLayer = t[1];
+                std::string drawLayer = isPreview ? toUtf8(kPreviewLayer) : destLayer;
+                if (!isPreview) ensureLayer(db, toWide(destLayer), 0);
+                double x1 = atof(t[2].c_str()), y1 = atof(t[3].c_str());
+                double x2 = atof(t[4].c_str()), y2 = atof(t[5].c_str());
+                AcDbPolyline* pl = new AcDbPolyline(4);
+                pl->addVertexAt(0, AcGePoint2d(x1, y1));
+                pl->addVertexAt(1, AcGePoint2d(x2, y1));
+                pl->addVertexAt(2, AcGePoint2d(x2, y2));
+                pl->addVertexAt(3, AcGePoint2d(x1, y2));
+                pl->setClosed(Adesk::kTrue);
+                pl->setLayer(toWide(drawLayer).c_str());
+                pl->setConstantWidth(80.0);
+                if (isPreview) {
+                    AcCmColor col; col.setColorIndex((Adesk::UInt16)kPreviewAci);
+                    pl->setColor(col);
+                }
+                if (ms->appendAcDbEntity(newId, pl) == Acad::eOk) {
+                    if (isPreview) setPreviewXData(pl, opId, "0", "plan", destLayer);
+                    handles.push_back(handleOfEnt(pl));
+                    pl->close(); count++;
+                } else delete pl;
+            } else if (op == "SYMBOL" && t.size() >= 6) {
+                // SYMBOL layer x y size label — circle + text (stair/elevator stand-in)
+                std::string destLayer = t[1];
+                std::string drawLayer = isPreview ? toUtf8(kPreviewLayer) : destLayer;
+                if (!isPreview) ensureLayer(db, toWide(destLayer), 0);
+                double cx = atof(t[2].c_str()), cy = atof(t[3].c_str());
+                double r = atof(t[4].c_str());
+                if (r < 50) r = 50;
+                AcDbCircle* c = new AcDbCircle(AcGePoint3d(cx, cy, 0), AcGeVector3d(0, 0, 1), r);
+                c->setLayer(toWide(drawLayer).c_str());
+                if (isPreview) {
+                    AcCmColor col; col.setColorIndex((Adesk::UInt16)kPreviewAci);
+                    c->setColor(col);
+                }
+                if (ms->appendAcDbEntity(newId, c) == Acad::eOk) {
+                    if (isPreview) setPreviewXData(c, opId, "0", "symbol", destLayer);
+                    handles.push_back(handleOfEnt(c));
+                    c->close(); count++;
+                } else delete c;
+                AcDbText* tx = new AcDbText(AcGePoint3d(cx + r * 1.2, cy, 0),
+                    toWide(t[5]).c_str(), db->textstyle(), r * 0.8, 0);
+                tx->setLayer(toWide(drawLayer).c_str());
+                if (isPreview) {
+                    AcCmColor col; col.setColorIndex((Adesk::UInt16)kPreviewAci);
+                    tx->setColor(col);
+                }
+                if (ms->appendAcDbEntity(newId, tx) == Acad::eOk) {
+                    if (isPreview) setPreviewXData(tx, opId, "0", "symbol", destLayer);
+                    handles.push_back(handleOfEnt(tx));
+                    tx->close(); count++;
+                } else delete tx;
             } else if (op == "CIRCLE" && t.size() >= 5 && !isPreview) {
                 ensureLayer(db, toWide(t[1]), 0);
                 AcDbCircle* c = new AcDbCircle(AcGePoint3d(atof(t[2].c_str()), atof(t[3].c_str()), 0),
@@ -717,7 +804,7 @@ static int execNativeJob(const std::string& raw) {
         acDocManager->sendStringToExecute(pDoc, L"(command \"_.ZOOM\" \"_E\") ", true, false, false);
         if (mode == "PREVIEW") {
             // Thaw/on preview layer if frozen; print clear cue on command line.
-            acutPrintf(L"\n[MepBridge] PREVIEW: %d doi tuong tren layer MEP-PREVIEW (mau cam). Zoom Extents.", count);
+            acutPrintf(L"\n[AcadBridge] PREVIEW: %d doi tuong tren layer MEP-PREVIEW (mau cam). Zoom Extents.", count);
         }
     }
 
@@ -742,12 +829,12 @@ static int execNativeJob(const std::string& raw) {
               mode == "APPLY" ? "nativeApply" :
               mode == "REJECT" ? "nativeReject" : "nativeJobDone",
               std::to_string(count) + (opId.empty() ? "" : (" op=" + opId)));
-    acutPrintf(L"\n[MepBridge] native.job %s: %d doi tuong.", toWide(mode).c_str(), count);
+    acutPrintf(L"\n[AcadBridge] native.job %s: %d doi tuong.", toWide(mode).c_str(), count);
     return count;
 }
 
 // ============================ QA highlight + zoom theo layer (rank 7) ============================
-// App ghi ~/MEP-Bridge/select.req = "<target>|<layer>"  -> plugin sáng mọi đối tượng trên layer
+// App ghi ~/Acad-Bridge/select.req = "<target>|<layer>"  -> plugin sáng mọi đối tượng trên layer
 // đó (tắt sáng layer trước) rồi ZOOM tới vùng bao. layer="CLEAR" -> tắt sáng.
 static void highlightLayer(AcApDocument* pDoc, const std::string& layer) {
     if (!pDoc || !acDocManager) return;
@@ -793,12 +880,13 @@ static void highlightLayer(AcApDocument* pDoc, const std::string& layer) {
         acDocManager->sendStringToExecute(pDoc, buf, true, false, false);
     }
     emitEvent("highlighted", layer + " (" + std::to_string(n) + ")");
-    acutPrintf(L"\n[MepBridge] Highlight '%s': %d doi tuong.", toWide(layer).c_str(), n);
+    acutPrintf(L"\n[AcadBridge] Highlight '%s': %d doi tuong.", toWide(layer).c_str(), n);
 }
 
 // ============================ reactors: su kien realtime -> app ============================
 static bool gDirty = false;
 static void attachDbReactor();   // forward
+static void detachDbReactor();
 
 class MepDocReactor : public AcApDocManagerReactor {
 public:
@@ -806,14 +894,26 @@ public:
         emitEvent("docOpened", d ? toUtf8(d->docTitle()) : "");
         writeDocs();
     }
+    // CRITICAL: detach DB reactor WHILE the document/database is still valid.
+    // Crash stack (CER): removeReactor on a destroyed AcDbDatabase after tab switch/close
+    // (MepDocReactor::documentActivated → attachDbReactor → removeReactor).
     void documentToBeDestroyed(AcApDocument* d) override {
+        if (d) detachDbReactorIfDoc(d);
         emitEvent("docClosed", d ? toUtf8(d->docTitle()) : "");
-    }
-    void documentActivated(AcApDocument* d) override {
-        emitEvent("docActivated", d ? toUtf8(d->docTitle()) : "");
-        attachDbReactor();   // theo doi thay doi cua ban ve moi active
         writeDocs();
     }
+    void documentActivated(AcApDocument* d) override {
+        // Re-attach only after activation; never removeReactor on a dead db pointer.
+        attachDbReactor();
+        emitEvent("docActivated", d ? toUtf8(d->docTitle()) : "");
+        writeDocs();
+    }
+    void documentToBeDeactivated(AcApDocument* d) override {
+        // Optional early detach when leaving a doc (safe while db still alive).
+        if (d) detachDbReactorIfDoc(d);
+    }
+private:
+    void detachDbReactorIfDoc(AcApDocument* d);
 };
 class MepEdReactor : public AcEditorReactor {
 public:
@@ -835,16 +935,52 @@ public:
 static MepDocReactor gDocReactor;
 static MepEdReactor  gEdReactor;
 static MepDbReactor  gDbReactor;
+// Track BOTH document and database so we never removeReactor on a freed AcDbDatabase*
+// after the owning document is destroyed (common when opening many demo DWGs).
+static AcApDocument* gDocWatched = nullptr;
 static AcDbDatabase* gDbWatched = nullptr;
 static bool gReactorsOn = false;
 
+static void detachDbReactor() {
+    if (gDbWatched) {
+        // Database must still be alive here (called only while doc is valid).
+        gDbWatched->removeReactor(&gDbReactor);
+        gDbWatched = nullptr;
+    }
+    gDocWatched = nullptr;
+}
+
+// Detach only if the watched pair matches this document.
+static void detachDbReactorIfDoc(AcApDocument* d) {
+    if (!d) return;
+    if (gDocWatched == d || (gDbWatched && d->database() == gDbWatched)) {
+        detachDbReactor();
+    }
+}
+
+void MepDocReactor::detachDbReactorIfDoc(AcApDocument* d) {
+    ::detachDbReactorIfDoc(d);
+}
+
 // Gan database reactor vao db cua ban ve active (goi khi nap + khi doi document).
 static void attachDbReactor() {
-    AcDbDatabase* db = nullptr;
-    if (acDocManager && acDocManager->mdiActiveDocument())
-        db = acDocManager->mdiActiveDocument()->database();
-    if (db == gDbWatched) return;
-    if (gDbWatched) gDbWatched->removeReactor(&gDbReactor);
+    AcApDocument* doc = (acDocManager) ? acDocManager->mdiActiveDocument() : nullptr;
+    AcDbDatabase* db = doc ? doc->database() : nullptr;
+    if (doc == gDocWatched && db == gDbWatched) return;
+
+    // If we still track a previous live doc (tab switch, not destroy), remove cleanly.
+    // If documentToBeDestroyed already ran, gDbWatched is null — no remove on freed heap.
+    if (gDbWatched && gDocWatched) {
+        gDbWatched->removeReactor(&gDbReactor);
+        gDbWatched = nullptr;
+        gDocWatched = nullptr;
+    } else {
+        // Dangling or already cleared — never call removeReactor on a free pointer.
+        gDbWatched = nullptr;
+        gDocWatched = nullptr;
+    }
+
+    gDocWatched = doc;
     gDbWatched = db;
     if (gDbWatched) gDbWatched->addReactor(&gDbReactor);
 }
@@ -860,25 +996,25 @@ static void stopReactors() {
     if (!gReactorsOn) return;
     if (acDocManager) acDocManager->removeReactor(&gDocReactor);
     if (acedEditor)   acedEditor->removeReactor(&gEdReactor);
-    if (gDbWatched)   { gDbWatched->removeReactor(&gDbReactor); gDbWatched = nullptr; }
+    detachDbReactor();
     gReactorsOn = false;
 }
 
 // ============================ lenh AutoCAD ============================
-static void cmdMepArx()     { acutPrintf(L"\n[MepBridge] MEPARX: chay mep_job.lsp."); runJob(); }
+static void cmdMepArx()     { acutPrintf(L"\n[AcadBridge] ACADARX: chay job.lsp."); runJob(); }
 static void cmdMepNative()  { execNativeJob(readAll(gNativePath)); }
 static void cmdMepBomTable() { insertBomTable(acDocManager ? acDocManager->mdiActiveDocument() : nullptr, 0, 0); }
-static void cmdMepBom()     { writeBom(acDocManager ? acDocManager->mdiActiveDocument() : nullptr); acutPrintf(L"\n[MepBridge] Da ghi bom.json."); }
-static void cmdMepDocs()    { writeDocs(); acutPrintf(L"\n[MepBridge] Da ghi docs.json."); }
-static void cmdMepWatch()   { startWatch();  acutPrintf(L"\n[MepBridge] Watcher: ON."); }
-static void cmdMepUnwatch() { stopWatch();   acutPrintf(L"\n[MepBridge] Watcher: OFF."); }
+static void cmdMepBom()     { writeBom(acDocManager ? acDocManager->mdiActiveDocument() : nullptr); acutPrintf(L"\n[AcadBridge] Da ghi bom.json."); }
+static void cmdMepDocs()    { writeDocs(); acutPrintf(L"\n[AcadBridge] Da ghi docs.json."); }
+static void cmdMepWatch()   { startWatch();  acutPrintf(L"\n[AcadBridge] Watcher: ON."); }
+static void cmdMepUnwatch() { stopWatch();   acutPrintf(L"\n[AcadBridge] Watcher: OFF."); }
 
 // MEPPIPE: vẽ ống tương tác trong AutoCAD — hỏi DN + hệ, nhặt điểm (rubber-band),
 // dựng polyline auto layer/màu + XDATA (dn/hệ). Enter/ESC để kết thúc.
 static void cmdMepPipe() {
     if (!acDocManager) return;
     AcApDocument* pDoc = acDocManager->mdiActiveDocument();
-    if (!pDoc) { acutPrintf(L"\n[MepBridge] Chua co ban ve mo."); return; }
+    if (!pDoc) { acutPrintf(L"\n[AcadBridge] Chua co ban ve mo."); return; }
 
     int dn = 90;
     AcString dnStr;
@@ -898,14 +1034,14 @@ static void cmdMepPipe() {
 
     std::vector<AcGePoint2d> pts;
     ads_point p, base;
-    if (acedGetPoint(nullptr, L"\nDiem dau ong: ", p) != RTNORM) { acutPrintf(L"\n[MepBridge] Da huy."); return; }
+    if (acedGetPoint(nullptr, L"\nDiem dau ong: ", p) != RTNORM) { acutPrintf(L"\n[AcadBridge] Da huy."); return; }
     pts.push_back(AcGePoint2d(p[0], p[1]));
     while (true) {
         base[0] = pts.back().x; base[1] = pts.back().y; base[2] = 0;
         if (acedGetPoint(base, L"\nDiem tiep (Enter=ket thuc): ", p) != RTNORM) break;
         pts.push_back(AcGePoint2d(p[0], p[1]));
     }
-    if (pts.size() < 2) { acutPrintf(L"\n[MepBridge] Can it nhat 2 diem."); return; }
+    if (pts.size() < 2) { acutPrintf(L"\n[AcadBridge] Can it nhat 2 diem."); return; }
 
     if (acDocManager->lockDocument(pDoc, AcAp::kWrite) != Acad::eOk) return;
     AcDbDatabase* db = pDoc->database();
@@ -929,7 +1065,7 @@ static void cmdMepPipe() {
     }
     acDocManager->unlockDocument(pDoc);
     emitEvent("drawingModified", "");   // app tu refresh BOM/BOQ
-    acutPrintf(L"\n[MepBridge] Da ve ong %d diem, DN%d, layer %s.", (int)pts.size(), dn, toWide(layer).c_str());
+    acutPrintf(L"\n[AcadBridge] Da ve ong %d diem, DN%d, layer %s.", (int)pts.size(), dn, toWide(layer).c_str());
 }
 
 // ============================ entry point ============================
@@ -940,6 +1076,13 @@ acrxEntryPoint(AcRx::AppMsgCode msg, void* pkt) {
         acrxDynamicLinker->unlockApplication(pkt);
         acrxRegisterAppMDIAware(pkt);
         initPaths();
+        // Primary domain-agnostic commands
+        acedRegCmds->addCommand(kGroup, L"ACADARX",    L"ACADARX",    ACRX_CMD_MODAL, &cmdMepArx);
+        acedRegCmds->addCommand(kGroup, L"ACADDOCS",   L"ACADDOCS",   ACRX_CMD_MODAL, &cmdMepDocs);
+        acedRegCmds->addCommand(kGroup, L"ACADWATCH",  L"ACADWATCH",  ACRX_CMD_MODAL, &cmdMepWatch);
+        acedRegCmds->addCommand(kGroup, L"ACADUNWATCH",L"ACADUNWATCH",ACRX_CMD_MODAL, &cmdMepUnwatch);
+        acedRegCmds->addCommand(kGroup, L"ACADNATIVE", L"ACADNATIVE", ACRX_CMD_MODAL, &cmdMepNative);
+        // Legacy aliases (one release)
         acedRegCmds->addCommand(kGroup, L"MEPARX",     L"MEPARX",     ACRX_CMD_MODAL, &cmdMepArx);
         acedRegCmds->addCommand(kGroup, L"MEPBOM",     L"MEPBOM",     ACRX_CMD_MODAL, &cmdMepBom);
         acedRegCmds->addCommand(kGroup, L"MEPBOMTABLE",L"MEPBOMTABLE",ACRX_CMD_MODAL, &cmdMepBomTable);
@@ -948,12 +1091,12 @@ acrxEntryPoint(AcRx::AppMsgCode msg, void* pkt) {
         acedRegCmds->addCommand(kGroup, L"MEPDOCS",    L"MEPDOCS",    ACRX_CMD_MODAL, &cmdMepDocs);
         acedRegCmds->addCommand(kGroup, L"MEPWATCH",   L"MEPWATCH",   ACRX_CMD_MODAL, &cmdMepWatch);
         acedRegCmds->addCommand(kGroup, L"MEPUNWATCH", L"MEPUNWATCH", ACRX_CMD_MODAL, &cmdMepUnwatch);
-        mepRawRegisterCommands();   // MEPRAW — interactive raw ObjectARX ops
+        mepRawRegisterCommands();   // ACADRAW / MEPRAW — interactive raw ObjectARX ops
         startWatch();
         startReactors();
         writeDocs();   // heartbeat dau tien
-        emitEvent("pluginLoaded", "MepBridge v9-raw");
-        acutPrintf(L"\n[MepBridge v9] Da nap. Raw ObjectARX menu + ~/MEP-Bridge/raw.job."
+        emitEvent("pluginLoaded", "AcadBridge v9-raw");
+        acutPrintf(L"\n[AcadBridge v9] Da nap. Raw ObjectARX menu + ~/Acad-Bridge/raw.job."
                    L" Lenh: MEPARX / MEPRAW / MEPDOCS / MEPWATCH / MEPUNWATCH.");
         break;
     case AcRx::kUnloadAppMsg:

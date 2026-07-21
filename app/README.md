@@ -1,8 +1,10 @@
-# acadtool — Công cụ MEP as-built (offline, Mac)
+# acadtool — Offline core (AutoCAD Toolkit)
 
-Công cụ hỗ trợ làm bản vẽ hoàn công cơ điện (MEP). Chạy **offline trên Mac**,
-không cần mở AutoCAD cho các tác vụ đọc/bóc tách. Phần đặt linh kiện live trong
-AutoCAD (ObjectARX) sẽ làm ở giai đoạn sau.
+Cột **A** trong toolkit 3 cột (Offline · ACAD Control · ObjectARX).  
+Chạy **offline** — không cần AutoCAD mở — để inventory / takeoff / title.  
+Sửa bản vẽ “thật” trong/gần CAD = cột B (AcCoreConsole) hoặc C (AcadBridge), không thay bằng offline-only.
+
+MEP/plumbing BOM là **profile sample**, không phải product identity.
 
 ## Trạng thái (MVP)
 

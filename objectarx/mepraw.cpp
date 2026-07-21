@@ -1,5 +1,5 @@
 // mepraw.cpp — ObjectARX raw capability dispatcher (Mac).
-// Protocol: app writes ~/MEP-Bridge/raw.job (TAB lines) → plugin writes raw.done (JSON).
+// Protocol: app writes ~/Acad-Bridge/raw.job (TAB lines) → plugin writes raw.done (JSON).
 // One entry per catalog capability id; interactive ops run via command context.
 
 #include <cstdio>
@@ -1553,5 +1553,6 @@ void mepRawOnStartWatch() {
 }
 
 void mepRawRegisterCommands() {
-    acedRegCmds->addCommand(L"MEP_BRIDGE", L"MEPRAW", L"MEPRAW", ACRX_CMD_MODAL, &cmdRawInteractive);
+    acedRegCmds->addCommand(L"ACAD_BRIDGE", L"ACADRAW", L"ACADRAW", ACRX_CMD_MODAL, &cmdRawInteractive);
+    acedRegCmds->addCommand(L"ACAD_BRIDGE", L"MEPRAW", L"MEPRAW", ACRX_CMD_MODAL, &cmdRawInteractive); // legacy alias
 }

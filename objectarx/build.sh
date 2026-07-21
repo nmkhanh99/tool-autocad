@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# build.sh — ObjectARX "MepBridge" for AutoCAD 2027 Mac (flat .bundle with acrxEntryPoint).
+# build.sh — ObjectARX "AcadBridge" for AutoCAD 2027 Mac (flat .bundle with acrxEntryPoint).
 # Layout (required so ApplicationAddins/APPLOAD find the entry point):
-#   MEP-Bridge.bundle/
+#   Acad-Bridge.bundle/
 #     Contents/
-#       Info.plist          CFBundleExecutable=MepBridge
-#       MacOS/MepBridge     Mach-O BUNDLE with _acrxEntryPoint
+#       Info.plist          CFBundleExecutable=AcadBridge
+#       MacOS/AcadBridge    Mach-O BUNDLE with _acrxEntryPoint
 #       PackageContents.xml Autoloader metadata
 set -euo pipefail
 
@@ -15,8 +15,8 @@ SDK_INC="/Library/Developer/Autodesk/ObjectARX 2027/inc"
 SRC="mepbridge.cpp"
 RAW="mepraw.cpp"
 XML="PackageContents.xml"
-PKG_NAME="MEP-Bridge"
-MOD_NAME="MepBridge"
+PKG_NAME="Acad-Bridge"
+MOD_NAME="AcadBridge"
 BUILD="build"
 PKG="$BUILD/$PKG_NAME.bundle"
 DEST_PLUGINS="$HOME/Library/Application Support/Autodesk/ApplicationPlugins"
@@ -53,8 +53,8 @@ cat > "$PKG/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>$MOD_NAME</string>
   <key>CFBundleIdentifier</key><string>io.smartcorex.$MOD_NAME</string>
   <key>CFBundleName</key><string>$MOD_NAME</string>
-  <key>CFBundleShortVersionString</key><string>1.0.1</string>
-  <key>CFBundleVersion</key><string>2</string>
+  <key>CFBundleShortVersionString</key><string>1.1.0</string>
+  <key>CFBundleVersion</key><string>3</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
 </dict>
 </plist>
@@ -79,6 +79,8 @@ codesign -dv "$PKG" 2>&1 | head -5 || true
 for D in "$DEST_PLUGINS" "$DEST_ADDINS"; do
   mkdir -p "$D"
   rm -rf "$D/$PKG_NAME.bundle"
+  # Remove legacy package name so only Acad-Bridge remains active
+  rm -rf "$D/MEP-Bridge.bundle"
   cp -R "$PKG" "$D/"
   # Verify installed binary has entry point
   nm -gU "$D/$PKG_NAME.bundle/Contents/MacOS/$MOD_NAME" | grep -q acrxEntryPoint \
@@ -89,5 +91,5 @@ done
 echo ""
 echo "OK. Flat package exports acrxEntryPoint."
 echo "APPLOAD path: $DEST_PLUGINS/$PKG_NAME.bundle"
-echo "-> Restart AutoCAD 2027. Expect [MepBridge] on command line."
-echo "-> Commands: MEPARX / MEPDOCS / MEPWATCH / MEPRAW"
+echo "-> Restart AutoCAD 2027. Expect [AcadBridge] on command line."
+echo "-> Commands: ACADARX / ACADRAW / ACADDOCS / ACADWATCH (legacy MEP* still work)"

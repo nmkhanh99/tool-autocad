@@ -23,14 +23,14 @@ Biến các lệnh thành **nút bấm chuột** — không cần gõ. AutoCAD f
 
 | Tên nút (Name) | Macro | Tác dụng |
 |---|---|---|
-| **▶ Chạy job (từ app)** | `^C^CMEP-RUN` | **Vẽ live** thứ app MEP Studio vừa gửi (thay vì gõ MEP-RUN) |
+| **▶ Chạy job (từ app)** | `^C^CMEP-RUN` | **Vẽ live** thứ app Acad Studio vừa gửi (thay vì gõ MEP-RUN) |
 | **Vẽ ống** | `^C^CMEP-ONG` | Chọn hệ thống + DN rồi vẽ |
 | **Phụ kiện** | `^C^CMEP-PK` | Chú thích phụ kiện (BOM đọc được) |
 | **Layer chuẩn** | `^C^CMEP-INIT` | Tạo bộ layer chuẩn |
 | **Ký hiệu BV** | `^C^CMEP-KHBV` | Sinh ký hiệu `ME-…` |
 
 > **Nút quan trọng nhất cho luồng "app vẽ live"**: **▶ Chạy job** (macro `^C^CMEP-RUN`).
-> Sau khi bấm nút chức năng trong MEP Studio (Vẽ ống LIVE / Áp dụng LIVE), chỉ cần bấm nút này
+> Sau khi bấm nút chức năng trong Acad Studio (Vẽ ống LIVE / Áp dụng LIVE), chỉ cần bấm nút này
 > trong AutoCAD là hình được vẽ vào bản vẽ đang mở — khỏi gõ. (Gõ tắt cũng được: `MR`.)
 
 ### Nút "một-chạm" cho ống hay dùng (tùy chọn — gọi thẳng, khỏi chọn)

@@ -62,10 +62,6 @@ node_modules/
 *.tsbuildinfo
 next-env.d.ts
 
-# mep-studio local
-mep-studio/.work/
-mep-studio/apps/web/out/
-
-# mep-studio local / export
-mep-studio/.work/
-mep-studio/apps/web/out/
+# acad-studio local / export
+acad-studio/.work/
+acad-studio/apps/web/out/

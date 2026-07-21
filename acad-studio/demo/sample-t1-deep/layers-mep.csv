@@ -1,0 +1,44 @@
+layer,color,on,frozen,locked,linetype
+0,7,1,0,0,Continuous
+Defpoints,7,1,0,0,Continuous
+A16 - Chu - Text,8,1,0,0,Continuous
+251,8,1,0,0,Continuous
+!HATCH,8,1,0,0,Continuous
+0-8,8,1,0,0,Continuous
+0-9,8,1,0,0,Continuous
+0-CON,8,1,0,0,Continuous
+0-4,8,1,0,0,Continuous
+0-TEXT,8,1,0,0,Continuous
+NOITHAT,8,1,0,0,Continuous
+0-HAT,8,1,0,0,Continuous
+0-LINE1,8,1,0,0,Continuous
+A-Door+Window,8,1,0,0,Continuous
+A-Normal_line,8,1,0,0,Continuous
+RSA -HACK,8,1,0,0,Continuous
+A3 - Net thay - Continous line,8,1,0,0,Continuous
+A10 - Hatch,8,1,0,0,Continuous
+A5 - Net tim - Center line,8,1,0,0,CENTER
+A8 - Noi that - Furnitures,8,1,0,0,Continuous
+9,8,1,0,0,Continuous
+0-FUR,8,1,0,0,Continuous
+0-PATTERN,8,1,0,0,Continuous
+A-Dimension,8,1,0,0,Continuous
+AC2D-OA,8,1,0,0,Continuous
+253,8,1,0,0,Continuous
+KCS_HATCH_COL,8,1,0,0,Continuous
+0-LINE2,8,1,0,0,Continuous
+001.M-AC-Hatch,8,1,0,0,Continuous
+P-ThoatRua,50,1,0,0,CONTINOUS
+P-ThoatXi,190,1,0,0,CONTINOUS
+Leader,255,1,0,0,Continuous
+P-Hientrang,8,1,0,0,Continuous
+DCCD-nuoclanh,90,1,0,0,Continuous
+S-DIM,7,1,0,0,Continuous
+A.DIM,7,1,0,0,Continuous
+0.Sleeve,100,1,0,0,Continuous
+2. SLAB OPENING,31,1,0,0,Continuous
+DIM DETAIL,7,1,0,0,Continuous
+DCCD-text,93,1,0,0,Continuous
+P-ThongHoi,5,1,0,0,CONTINOUS
+CT-Leader,7,1,0,0,Continuous
+A.DIM_D20_CW,8,1,0,0,Continuous

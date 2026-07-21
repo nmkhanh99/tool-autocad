@@ -1,0 +1,44 @@
+layer,color,linetype,on,frozen,locked,plot
+0,7,Continuous,1,0,0,1
+Defpoints,7,Continuous,1,0,0,1
+A16 - Chu - Text,8,Continuous,1,0,0,1
+251,8,Continuous,1,0,0,1
+!HATCH,8,Continuous,1,0,0,1
+0-8,8,Continuous,1,0,0,1
+0-9,8,Continuous,1,0,0,1
+0-CON,8,Continuous,1,0,0,1
+0-4,8,Continuous,1,0,0,1
+0-TEXT,8,Continuous,1,0,0,1
+NOITHAT,8,Continuous,1,0,0,1
+0-HAT,8,Continuous,1,0,0,1
+0-LINE1,8,Continuous,1,0,0,1
+A-Door+Window,8,Continuous,1,0,0,1
+A-Normal_line,8,Continuous,1,0,0,1
+RSA -HACK,8,Continuous,1,0,0,1
+A3 - Net thay - Continous line,8,Continuous,1,0,0,1
+A10 - Hatch,8,Continuous,1,0,0,1
+A5 - Net tim - Center line,8,CENTER,1,0,0,1
+A8 - Noi that - Furnitures,8,Continuous,1,0,0,1
+9,8,Continuous,1,0,0,1
+0-FUR,8,Continuous,1,0,0,1
+0-PATTERN,8,Continuous,1,0,0,1
+A-Dimension,8,Continuous,1,0,0,1
+AC2D-OA,8,Continuous,1,0,0,1
+253,8,Continuous,1,0,0,1
+KCS_HATCH_COL,8,Continuous,1,0,0,1
+0-LINE2,8,Continuous,1,0,0,1
+001.M-AC-Hatch,8,Continuous,1,0,0,1
+P-ThoatRua,50,CONTINOUS,1,0,0,1
+P-ThoatXi,190,CONTINOUS,1,0,0,1
+Leader,255,Continuous,1,0,0,1
+P-Hientrang,8,Continuous,1,0,0,1
+DCCD-nuoclanh,90,Continuous,1,0,0,1
+S-DIM,7,Continuous,1,0,0,1
+A.DIM,7,Continuous,1,0,0,1
+0.Sleeve,100,Continuous,1,0,0,1
+2. SLAB OPENING,31,Continuous,1,0,0,1
+DIM DETAIL,7,Continuous,1,0,0,1
+DCCD-text,93,Continuous,1,0,0,1
+P-ThongHoi,5,CONTINOUS,1,0,0,1
+CT-Leader,7,Continuous,1,0,0,1
+A.DIM_D20_CW,8,Continuous,1,0,0,1

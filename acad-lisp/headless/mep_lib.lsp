@@ -1,5 +1,5 @@
 ;;; ============================================================================
-;;;  mep_lib.lsp — thư viện AutoLISP HEADLESS cho MEP Studio (AcCoreConsole/Mac)
+;;;  mep_lib.lsp — thư viện AutoLISP HEADLESS cho Acad Studio (AcCoreConsole/Mac)
 ;;;  Chỉ dùng hàm CORE (đã probe trên AutoCAD 2027 Mac): ent*/ss*/tbl*/file I/O.
 ;;;  KHÔNG dùng: vla-*/vlax-*/getpropertyvalue/dumpallproperties (không có trên Mac).
 ;;;  Đo chiều dài tính tay từ DXF group codes (có xử lý cung bulge).

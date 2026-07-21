@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""acadtool CLI — công cụ MEP as-built (offline).
+"""acadtool CLI — Offline core của AutoCAD Toolkit (không cần AutoCAD GUI).
+
+Cột A trong kiến trúc 3 cột (Offline / ACAD Control / ObjectARX).
+Profile plumbing (BOM ống) là optional sample, không phải product identity.
 
 Lệnh:
-  bom <file_hoặc_thư_mục.dwg> [-o out.xlsx]   Bóc BOM phụ kiện + chiều dài ống -> Excel
-  info <file.dwg>                              In nhanh layer/block/ống của 1 bản vẽ
+  bom <file_hoặc_thư_mục.dwg> [-o out.xlsx]   Bóc BOM / takeoff (profile-aware)
+  info <file.dwg>                              Inventory: layer / block / text / pipes
 """
 from __future__ import annotations
 
