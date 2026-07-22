@@ -14,6 +14,7 @@ MEP/plumbing BOM là **profile sample**, không phải product identity.
 | #1 Soát khung tên + sinh mã KHBV | `title` | ✅ Đọc/soát |
 | #1 Ghi/sửa khung tên (sinh AutoLISP) | `titlefix` | ✅ Sinh .lsp; cần chạy thử trong AutoCAD 2027 |
 | #3 Chuẩn hoá layer (đề xuất mapping → Excel) | `layers` | ✅ Phân tích/đề xuất; ✍️ áp đổi tên: chờ ODA |
+| #5 Tích hợp Gemini AI (Phân tích, Hỏi đáp, Sinh AutoLISP) | `gemini` | ✅ Sẵn sàng (`analyze`, `ask`, `lisp`) |
 | #4 Batch PDF + sheet index | — | ⏳ Cần ODA |
 
 ## Kiến trúc
@@ -25,7 +26,8 @@ MEP/plumbing BOM là **profile sample**, không phải product identity.
         └──(fallback: dwgjson.py dwgread -O JSON khi CHƯA cài ODA)──► model.py
                                           Drawing { layers, inserts+attribs, texts, pipes }
         ├─► bom.py + excel.py      → BOM.xlsx
-        └─► titleblock.py          → soát mã KHBV, trường khung tên
+        ├─► titleblock.py          → soát mã KHBV, trường khung tên
+        └─► gemini.py              → Phân tích AI, Q&A bản vẽ, sinh AutoLISP
 ```
 
 `model.read_drawing()` tự chọn backend: **có ODA → ezdxf** (`read_drawing_dxf`),
@@ -43,6 +45,9 @@ pip3 install -r requirements.txt
 #   Cài vào /Applications; app tự dò binary (hoặc đặt ODA_FILE_CONVERTER=<path>).
 
 brew install libredwg          # tuỳ chọn: fallback khi chưa cài ODA
+
+# Cấu hình Gemini API Key (cho tính năng gemini):
+export GEMINI_API_KEY="AIzaSy..."
 ```
 
 ## Dùng
@@ -61,6 +66,16 @@ python3 cli.py layers "../As-built drawing" -o LayerMap.xlsx
 # Sinh AutoLISP sửa khung tên (sửa mã KHBV sai + điền trường chung)
 python3 cli.py titlefix "../As-built drawing" -o MEPFIX.lsp --set "DD/MM/YYYY=22/06/2026"
 # rồi trong AutoCAD 2027: APPLOAD MEPFIX.lsp -> mở từng bản vẽ -> gõ MEPFIX
+
+# --- TÍCH HỢP GEMINI AI ---
+# Phân tích bản vẽ với Gemini AI
+python3 cli.py gemini analyze "../As-built drawing/T1-DEMO-VE-THAT.dwg"
+
+# Hỏi đáp thông tin bản vẽ với Gemini AI
+python3 cli.py gemini ask "File này có những loại block nào chính?" "../As-built drawing/T1-DEMO-VE-THAT.dwg"
+
+# Sinh mã AutoLISP bằng Gemini AI theo yêu cầu
+python3 cli.py gemini lisp "Viết lệnh C:DRAW_CIRCLES vẽ 5 đường tròn đồng tâm tại (0,0)" -o draw_circles.lsp
 
 # Xem nhanh 1 bản vẽ
 python3 cli.py info "../As-built drawing/<file>.dwg"

@@ -67,7 +67,10 @@ async function main() {
     store.ensureConversation(convId, agentId, text);
     store.addMessage(convId, "user", text);
 
-    const binPath = which(agent.bin);
+    let binPath = which(agent.bin);
+    if (!binPath && agentId === "gemini") {
+      binPath = which("python3") || which("python");
+    }
     if (!binPath) return void (send({ kind: "error", message: `Chưa cài CLI '${agent.bin}'` }), res.end());
 
     const argv = agent.buildArgs(text, sessionId);

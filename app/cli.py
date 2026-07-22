@@ -7,6 +7,12 @@ Profile plumbing (BOM ống) là optional sample, không phải product identity
 Lệnh:
   bom <file_hoặc_thư_mục.dwg> [-o out.xlsx]   Bóc BOM / takeoff (profile-aware)
   info <file.dwg>                              Inventory: layer / block / text / pipes
+  title <file_hoặc_thư_mục.dwg>                Soát khung tên + mã KHBV
+  layers <file_hoặc_thư_mục.dwg>               Đề xuất chuẩn hoá layer -> Excel
+  titlefix <file_hoặc_thư_mục.dwg>             Sinh script AutoLISP sửa khung tên
+  gemini analyze <paths.dwg...>                Phân tích bản vẽ với Gemini AI
+  gemini ask <câu_hỏi> <paths.dwg...>          Hỏi Gemini AI về bản vẽ
+  gemini lisp <yêu_cầu> [-o script.lsp]        Sinh AutoLISP bằng Gemini AI
 """
 from __future__ import annotations
 
@@ -135,6 +141,85 @@ def cmd_titlefix(args) -> int:
     return 0
 
 
+from acadtool.gemini import (
+    analyze_drawings,
+    ask_drawings,
+    generate_lisp,
+)
+
+
+import json
+
+
+def cmd_gemini(args) -> int:
+    try:
+        is_json = getattr(args, "json", False)
+
+        if args.gemini_cmd == "analyze":
+            files = _collect(args.paths)
+            drawings = _read_all(files) if files else []
+            if not is_json:
+                print(f"\n🤖 Đang gửi thông tin {len(drawings)} bản vẽ cho Gemini AI phân tích...")
+            res = analyze_drawings(drawings, custom_prompt=args.prompt or "", api_key=args.key, model=args.model)
+            if is_json:
+                print(json.dumps({"type": "text", "data": res}, ensure_ascii=False))
+                print(json.dumps({"type": "end"}))
+            else:
+                print("\n" + "=" * 80)
+                print("KẾT QUẢ PHÂN TÍCH TỪ GEMINI AI:")
+                print("=" * 80)
+                print(res)
+                print("=" * 80)
+            return 0
+
+        elif args.gemini_cmd == "ask":
+            files = _collect(args.paths) if getattr(args, "paths", None) else []
+            drawings = _read_all(files) if files else []
+            if not is_json and files:
+                print(f"\n🤖 Đang gửi câu hỏi tới Gemini AI về {len(drawings)} bản vẽ...")
+            elif not is_json:
+                print(f"\n🤖 Đang gửi câu hỏi tới Gemini AI...")
+            res = ask_drawings(drawings, question=args.question, api_key=args.key, model=args.model)
+            if is_json:
+                print(json.dumps({"type": "text", "data": res}, ensure_ascii=False))
+                print(json.dumps({"type": "end"}))
+            else:
+                print("\n" + "=" * 80)
+                print("TRẢ LỜI TỪ GEMINI AI:")
+                print("=" * 80)
+                print(res)
+                print("=" * 80)
+            return 0
+
+        elif args.gemini_cmd == "lisp":
+            if not is_json:
+                print(f"\n🤖 Đang yêu cầu Gemini sinh mã AutoLISP...")
+            code = generate_lisp(prompt=args.prompt, api_key=args.key, model=args.model)
+            if is_json:
+                print(json.dumps({"type": "text", "data": code}, ensure_ascii=False))
+                print(json.dumps({"type": "end"}))
+            elif args.output:
+                output_path = Path(args.output)
+                output_path.write_text(code, encoding="utf-8")
+                print(f"→ Đã ghi mã AutoLISP vào: {output_path}")
+            else:
+                print("\n" + "=" * 80)
+                print("MÃ AUTOLISP SINH TỪ GEMINI AI:")
+                print("=" * 80)
+                print(code)
+                print("=" * 80)
+            return 0
+        else:
+            print("Vui lòng chọn lệnh gemini: analyze, ask, hoặc lisp", file=sys.stderr)
+            return 1
+    except Exception as e:
+        if getattr(args, "json", False):
+            print(json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False))
+        else:
+            print(f"\n❌ Lỗi Gemini AI: {e}", file=sys.stderr)
+        return 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="acadtool", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -166,9 +251,42 @@ def main(argv=None) -> int:
                     help="Trường áp chung mọi sheet, vd --set DD/MM/YYYY=22/06/2026")
     pf.set_defaults(func=cmd_titlefix)
 
+    # Gemini AI integration
+    pg = sub.add_parser("gemini", help="Tích hợp Gemini AI (phân tích, hỏi đáp, sinh AutoLISP)")
+    gsub = pg.add_subparsers(dest="gemini_cmd", required=True)
+
+    # gemini analyze
+    ga = gsub.add_parser("analyze", help="Đưa metadata bản vẽ cho Gemini AI phân tích & đề xuất")
+    ga.add_argument("paths", nargs="*", help="File .dwg hoặc thư mục (tùy chọn)")
+    ga.add_argument("-p", "--prompt", default="", help="Yêu cầu phân tích cụ thể")
+    ga.add_argument("--key", help="Gemini API Key (mặc định lấy từ GEMINI_API_KEY env)")
+    ga.add_argument("--model", help="Tên model Gemini (mặc định: gemini-2.5-flash)")
+    ga.add_argument("--json", action="store_true", help="Xuất dạng JSONL event stream cho agent daemon")
+    ga.set_defaults(func=cmd_gemini)
+
+    # gemini ask
+    gk = gsub.add_parser("ask", help="Hỏi Gemini AI về bản vẽ")
+    gk.add_argument("question", help="Câu hỏi về bản vẽ")
+    gk.add_argument("paths", nargs="*", help="File .dwg hoặc thư mục (tùy chọn)")
+    gk.add_argument("--key", help="Gemini API Key (mặc định lấy từ GEMINI_API_KEY env)")
+    gk.add_argument("--model", help="Tên model Gemini (mặc định: gemini-2.5-flash)")
+    gk.add_argument("--json", action="store_true", help="Xuất dạng JSONL event stream cho agent daemon")
+    gk.set_defaults(func=cmd_gemini)
+
+    # gemini lisp
+    gl = gsub.add_parser("lisp", help="Dùng Gemini AI sinh script AutoLISP theo yêu cầu")
+    gl.add_argument("prompt", help="Mô tả chức năng/lệnh AutoLISP cần viết")
+    gl.add_argument("-o", "--output", help="File .lsp xuất ra (nếu muốn lưu)")
+    gl.add_argument("--key", help="Gemini API Key (mặc định lấy từ GEMINI_API_KEY env)")
+    gl.add_argument("--model", help="Tên model Gemini (mặc định: gemini-2.5-flash)")
+    gl.add_argument("--json", action="store_true", help="Xuất dạng JSONL event stream cho agent daemon")
+    gl.set_defaults(func=cmd_gemini)
+
     args = p.parse_args(argv)
     return args.func(args)
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

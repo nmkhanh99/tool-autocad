@@ -198,11 +198,48 @@ const grok: AgentDef = {
   },
 };
 
-export const AGENTS: Record<string, AgentDef> = { claude, codex, grok };
+// ------------------------------------------------------------------ gemini
+const gemini: AgentDef = {
+  id: "gemini",
+  label: "Gemini (agy)",
+  bin: "agy",
+  buildArgs: (message, sid) => {
+    let msg = message;
+    if (!sid) msg = MEP_PROMPT + "\n\n---\nNgười dùng: " + message;
+    const args = ["--dangerously-skip-permissions", "-p", msg];
+    if (sid) args.push("-c");
+    return args;
+  },
+  parse: (o) => {
+    const out: AgentEvent[] = [];
+    if (typeof o === "string") {
+      out.push({ kind: "text", text: o });
+    } else if (o.type === "thought" || o.kind === "thinking") {
+      out.push({ kind: "thinking", text: o.data || o.text || "" });
+    } else if (o.type === "text" || o.kind === "text") {
+      out.push({ kind: "text", text: o.data || o.text || "" });
+    } else if (o.type === "tool_use" || o.type === "tool" || o.kind === "tool") {
+      out.push({ kind: "tool", name: o.name || "tool", detail: short(o.data || o.detail || "") });
+    } else if (o.type === "session" || o.kind === "session") {
+      out.push({ kind: "session", id: o.id || o.sessionId || "" });
+    } else if (o.type === "end" || o.kind === "done") {
+      out.push({ kind: "done", cost_usd: null });
+    }
+    return out;
+  },
+};
+
+export const AGENTS: Record<string, AgentDef> = { claude, codex, grok, gemini };
 
 export function detectAgents() {
   return Object.values(AGENTS).map((a) => {
-    const path = which(a.bin);
+    let path = which(a.bin);
+    if (!path && a.id === "gemini") {
+      // Fallback nếu bin agy không trực tiếp trên PATH tiêu chuẩn
+      path = which("agy") || which("python3") || which("python");
+    }
     return { id: a.id, label: a.label, available: !!path, path: path ?? "" };
   });
 }
+
+
