@@ -37,6 +37,11 @@ side effect, guardrail và ví dụ để agent biết lúc nào nên dùng.
 - Support Path/TRUSTEDPATHS staged được giữ trong phiên AutoCAD để `load`/`load_dialog`
   gọi muộn vẫn hoạt động; UI luôn cảnh báo side effect này trước khi load.
 
+`headless/standards_lib.lsp` là thư viện nội bộ của panel **Chuẩn hóa**. Daemon inline
+thư viện vào exact-target job để quét TSV và thực hiện các thao tác đã xác nhận:
+scale/rotate/color/layer, area của LWPOLYLINE kín/CIRCLE, tạo–cập nhật Dim Style,
+DIMSPACE và đồng bộ layer. File này không cần APPLOAD thủ công.
+
 ## Các lệnh
 
 | Lệnh | Tác dụng |

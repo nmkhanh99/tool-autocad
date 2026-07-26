@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FUNCTIONS, GROUPS, byId, type Fn } from "./functions";
 import DrawingInfoPanel from "./DrawingInfoPanel";
+import DrawingStandardsPanel from "./DrawingStandardsPanel";
 import LispLibraryPanel from "./LispLibraryPanel";
 import {
   readLispProposal,
@@ -160,6 +161,9 @@ export default function Page() {
   const [drawingInfoOpen, setDrawingInfoOpen] = useState(false);
   const [drawingInfoTarget, setDrawingInfoTarget] = useState("");
   const [drawingInfoRefreshToken, setDrawingInfoRefreshToken] = useState(0);
+  const [standardsOpen, setStandardsOpen] = useState(false);
+  const [standardsTarget, setStandardsTarget] = useState("");
+  const [standardsRefreshToken, setStandardsRefreshToken] = useState(0);
   const [lispLibraryOpen, setLispLibraryOpen] = useState(false);
   const [lispLibraryRefreshToken, setLispLibraryRefreshToken] = useState(0);
   const [lispProposalBusy, setLispProposalBusy] = useState<number | null>(null);
@@ -200,9 +204,12 @@ export default function Page() {
           loadDrawDocs();
           setDrawingInfoTarget(ev.activeDoc || "");
           setDrawingInfoRefreshToken((token) => token + 1);
+          setStandardsTarget(ev.activeDoc || "");
+          setStandardsRefreshToken((token) => token + 1);
         }
         if (ev.type === "drawingModified" || ev.type === "pluginLoaded") {
           setDrawingInfoRefreshToken((token) => token + 1);
+          setStandardsRefreshToken((token) => token + 1);
         }
         if (ev.type === "drawingModified" && autoBomRef.current) refreshBom();   // BOM tự cập nhật khi vẽ
       } catch { /* */ }
@@ -1018,6 +1025,12 @@ export default function Page() {
           }} title="Đọc toàn bộ thông tin của bản vẽ đang active trong AutoCAD">
             ▦ Hồ sơ bản vẽ
           </button>
+          <button className="pillbtn" onClick={() => {
+            setStandardsTarget(drawTarget);
+            setStandardsOpen(true);
+          }} title="Cấu hình, quét và điều chỉnh bản vẽ theo mẫu quy chuẩn">
+            ✓ Chuẩn hóa
+          </button>
           <button className="pillbtn" onClick={() => setLispLibraryOpen(true)}
             title="Quét, đọc, cấu hình AI và nạp LSP/MNL/FAS vào bản vẽ đang mở">
             ⌘ Thư viện AutoCAD
@@ -1259,6 +1272,15 @@ export default function Page() {
         initialTarget={drawingInfoTarget}
         refreshToken={drawingInfoRefreshToken}
         onClose={() => setDrawingInfoOpen(false)}
+        onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
+      />
+
+      <DrawingStandardsPanel
+        open={standardsOpen}
+        daemon={DAEMON}
+        initialTarget={standardsTarget || drawTarget}
+        refreshToken={standardsRefreshToken}
+        onClose={() => setStandardsOpen(false)}
         onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
       />
 

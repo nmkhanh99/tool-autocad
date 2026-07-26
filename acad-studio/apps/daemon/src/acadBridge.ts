@@ -342,7 +342,7 @@ async function withDrawingInfoLock<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-async function requestDrawingInfo(target: string, timeoutMs = 8000):
+export async function requestDrawingInfo(target: string, timeoutMs = 8000):
   Promise<DrawingInfoPluginSnapshot | null> {
   return withDrawingInfoLock(async () => {
     ensureBridgeDirs();

@@ -71,6 +71,10 @@ cd objectarx && bash build.sh
 ```
 GET  /api/acad/status
 GET  /api/acad/drawing-info?target=...  # snapshot read-only; bỏ target = bản vẽ active
+GET  /api/acad/standards/profiles       # mẫu unit/khung/DIM/layer/mapping
+POST /api/acad/standards/scan           # quét read-only, trả issue + handle gợi ý
+POST /api/acad/standards/apply          # áp dụng các issue user đã chọn
+POST /api/acad/standards/action         # scale/rotate/color/layer/area/DIMSPACE
 GET  /api/acad/lisp                    # catalog LSP/MNL/FAS/VLX/DCL/SCR
 GET  /api/acad/lisp/:id                # source/metadata + manifest AI
 PUT  /api/acad/lisp/:id/manifest       # user duyệt cấu hình agent đề xuất
@@ -84,6 +88,11 @@ POST /api/acad/raw/invoke { id, params?, target?, dryRun? }
 ```
 
 Payloads are pure LISP/script or generic ops — not hard-coded plumbing entity types in the control plane.
+
+Nút **Chuẩn hóa** cung cấp workflow `cấu hình → quét → chọn/bỏ gợi ý → xác nhận → áp dụng`.
+Profile được lưu versioned trong app-data và gồm đơn vị/khổ giấy, mapping khung–phòng–mặt
+phẳng cắt, Dim Style, khoảng cách hàng DIM và mẫu layer. Thao tác sửa luôn khóa đúng DWG;
+`apply` từ kết quả quét sẽ từ chối nếu profile hoặc `DBMOD` đã đổi.
 
 The **AutoCAD Library** panel scans the project, AutoCAD installation/user support folders,
 and user-added folders. Text formats (`.lsp`, `.mnl`, `.dcl`, `.scr`) are readable;

@@ -14,6 +14,7 @@ import cors from "cors";
 import express from "express";
 import { AGENTS, detectAgents, type AgentEvent } from "./agents.js";
 import { acadBridgeRouter, ensureBridgeDirs } from "./acadBridge.js";
+import { drawingStandardsRouter } from "./drawingStandards.js";
 import { lispLibraryRouter } from "./lispLibrary.js";
 import which from "./which.js";
 import { initDb, type Store } from "./db.js";
@@ -68,6 +69,7 @@ async function main() {
 
   ensureBridgeDirs();
   app.use("/api/acad", acadBridgeRouter());
+  app.use("/api/acad/standards", drawingStandardsRouter());
   app.use("/api/acad/lisp", lispLibraryRouter({ projectRoot: PROJECT_ROOT }));
   const { sessionRouter } = await import("./session.js");
   app.use("/api/acad", sessionRouter());

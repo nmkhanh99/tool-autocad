@@ -19,7 +19,11 @@
     "test:identity": "tsx scripts/test-product-identity.mjs",
     "test:draw-t1": "tsx scripts/test-draw-t1.mjs",
     "test:lisp-library": "tsx scripts/test-lisp-library.mjs",
-    "test:lisp-proposal": "tsx scripts/test-lisp-proposal.mjs"
+    "test:lisp-proposal": "tsx scripts/test-lisp-proposal.mjs",
+    "test:standards-profile": "tsx scripts/test-standards-profile.mjs",
+    "test:standards-engine": "tsx scripts/test-standards-engine.mjs",
+    "test:standards-router": "tsx scripts/test-drawing-standards.mjs",
+    "test:standards": "npm run test:standards-profile && npm run test:standards-engine && npm run test:standards-router"
   },
   "dependencies": {
     "cors": "^2.8.5",
