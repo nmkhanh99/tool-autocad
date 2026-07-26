@@ -25,6 +25,8 @@ export const LEGACY_JOB_LSP_NAME = "mep_job.lsp";
 
 export const RAW_JOB_NAME = "raw.job";
 export const RAW_DONE_NAME = "raw.done";
+export const DRAWING_INFO_REQUEST_NAME = "drawing-info.req";
+export const DRAWING_INFO_RESPONSE_NAME = "drawing-info.json";
 export const RESULTS_DIR_NAME = "results";
 
 /** Autoloader package name (outer .bundle). */
@@ -73,6 +75,14 @@ export function rawJobPath(bridgeDir: string): string {
 
 export function rawDonePath(bridgeDir: string): string {
   return join(bridgeDir, RAW_DONE_NAME);
+}
+
+export function drawingInfoRequestPath(bridgeDir: string): string {
+  return join(bridgeDir, DRAWING_INFO_REQUEST_NAME);
+}
+
+export function drawingInfoResponsePath(bridgeDir: string): string {
+  return join(bridgeDir, DRAWING_INFO_RESPONSE_NAME);
 }
 
 export function resultsDir(bridgeDir: string): string {

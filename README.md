@@ -70,6 +70,11 @@ cd objectarx && bash build.sh
 
 ```
 GET  /api/acad/status
+GET  /api/acad/drawing-info?target=...  # snapshot read-only; bỏ target = bản vẽ active
+GET  /api/acad/lisp                    # catalog LSP/MNL/FAS/VLX/DCL/SCR
+GET  /api/acad/lisp/:id                # source/metadata + manifest AI
+PUT  /api/acad/lisp/:id/manifest       # user duyệt cấu hình agent đề xuất
+POST /api/acad/lisp/:id/load           # nạp artifact đúng revision vào đúng DWG đang mở
 POST /api/acad/headless   { script, dwg?, timeoutMs? }
 POST /api/acad/batch      { script, dwgs[], timeoutMs? }
 POST /api/acad/job        { lisp, wait?, target? }
@@ -79,6 +84,21 @@ POST /api/acad/raw/invoke { id, params?, target?, dryRun? }
 ```
 
 Payloads are pure LISP/script or generic ops — not hard-coded plumbing entity types in the control plane.
+
+The **AutoCAD Library** panel scans the project, AutoCAD installation/user support folders,
+and user-added folders. Text formats (`.lsp`, `.mnl`, `.dcl`, `.scr`) are readable;
+compiled `.fas`/`.vlx` files expose metadata and hash only. DCL is a Lisp dependency, and
+VLX loading is Windows-only. Agents may propose a per-resource manifest, but only an explicit
+user review writes the approved configuration; approval never loads code by itself. Every
+discovered resource gets a deterministic unreviewed baseline (commands, functions, dependencies,
+dialogs, called CAD commands, system variables, Visual LISP APIs and file references). Agent
+review runs without tools in an isolated temporary workspace, and approval is bound to the exact
+resource hash/revision.
+
+Live jobs share one FIFO transport. AcadBridge snapshots `job.lsp` before asynchronous execution;
+library artifacts/dependencies are staged and re-hashed before load. Dependency preloading is
+opt-in with `preload: true`; otherwise the resource controls its own load order through the staged
+Support Path. The loopback daemon rejects browser origins outside the packaged/dev UI allowlist.
 
 ## Docs
 

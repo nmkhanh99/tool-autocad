@@ -19,7 +19,13 @@ export interface AgentDef {
   id: string;
   label: string;
   bin: string;
-  buildArgs: (message: string, sessionId: string | null) => string[];
+  /** True only when the CLI exposes an explicit no-tools review mode. */
+  isolatedReview: boolean;
+  buildArgs: (
+    message: string,
+    sessionId: string | null,
+    options?: { readOnly?: boolean },
+  ) => string[];
   parse: (obj: any) => AgentEvent[];
 }
 
@@ -45,9 +51,24 @@ export const MEP_PROMPT =
   "  GET  /api/acad/docs                          # danh sách BẢN VẼ ĐANG MỞ (title, active) + plugin sống?\n" +
   '  POST /api/acad/livequery {"what":"selection|layers|count|title","target":"<title>"}\n' +
   "       # đọc TRỰC TIẾP bản vẽ đang mở: đối tượng đang chọn / layer / số entity / khung tên\n" +
-  '  /api/acad/live và /api/acad/job nhận thêm "target":"<title bản vẽ>" để thao tác đúng bản vẽ đó\n' +
+  '  /api/acad/live và /api/acad/job nhận thêm "target":"<đường dẫn file đầy đủ; title chỉ khi duy nhất>" để thao tác đúng bản vẽ đó\n' +
   "  GET  /api/acad/events  # SSE sự kiện realtime (lệnh chạy xong, đổi bản vẽ) — plugin reactor\n" +
   "  Trong lisp job có sẵn hàm (mep:write-result \"ok\" <chuỗi>) để trả kết quả về chat.\n" +
+  "THƯ VIỆN AUTOCAD (LSP/MNL/FAS/VLX/DCL/SCR):\n" +
+  "  GET  /api/acad/lisp                    # catalog tài nguyên + trạng thái review\n" +
+  "  GET  /api/acad/lisp/<resourceId>       # source đọc được, hàm/lệnh phát hiện, manifest AI và revision\n" +
+  '  POST /api/acad/lisp/<resourceId>/load {"target":"<full file path>","baseRevision":"<revision>"}\n' +
+  "       # chỉ gọi khi người dùng chủ động yêu cầu load vào đúng DWG; không dùng path do chat tự bịa\n" +
+  "Trước khi chọn/gọi một Lisp, phải đọc detail + manifest. Ưu tiên manifest đã approved; nếu needs-review/stale, " +
+  "nói rõ và đề nghị review trước khi tự dùng. LSP/MNL/DCL/SCR có thể đọc source; FAS/VLX là binary, không được " +
+  "tuyên bố đã hiểu source. DCL không load trực tiếp; VLX không hỗ trợ trên Mac.\n" +
+  "Khi tin nhắn bắt đầu bằng [ACAD_LISP_REVIEW], đây là chế độ KHÔNG TOOL: source/metadata đã nằm trong " +
+  "<resource-context>; không gọi API, không sửa file, không PUT manifest, không gọi /load. Hãy phân tích purpose, " +
+  "commands/functions, tham số, dependencies, side effects, " +
+  "guardrails, whenToUse và examples; rồi trả đúng một proposal để UI cho user duyệt:\n" +
+  "<lisp-manifest-proposal>{\"resourceId\":\"...\",\"baseRevision\":\"...\",\"summary\":\"...\",\"manifest\":{...}}</lisp-manifest-proposal>\n" +
+  "JSON trong tag phải hợp lệ, không bọc markdown. Agent không được đặt review.status=approved; server chỉ duyệt sau " +
+  "khi user bấm «Duyệt & lưu cấu hình». Sau tag thì DỪNG.\n" +
   "VẼ THẬT T1 (draw/*) — dựng lại bản vẽ thoát nước tầng 1 (mặt bằng kiến trúc + hệ ống):\n" +
   "  GET  /api/acad/draw/scenario        # kịch bản 44 prompt «Vẽ …» theo đúng thứ tự vẽ\n" +
   "  GET  /api/acad/draw/docs            # bản vẽ ĐANG MỞ trong AutoCAD + đích vẽ hiện tại\n" +
@@ -115,13 +136,22 @@ const claude: AgentDef = {
   id: "claude",
   label: "Claude",
   bin: "claude",
-  buildArgs: (message, sid) => {
+  isolatedReview: true,
+  buildArgs: (message, sid, options) => {
     const args = [
       "-p", message,
       "--output-format", "stream-json", "--verbose",
-      "--permission-mode", "bypassPermissions",
+      "--permission-mode", options?.readOnly ? "plan" : "bypassPermissions",
       "--append-system-prompt", MEP_PROMPT,
     ];
+    if (options?.readOnly) {
+      args.push(
+        "--tools", "",
+        "--disable-slash-commands",
+        "--safe-mode",
+        "--no-session-persistence",
+      );
+    }
     if (sid) args.push("--resume", sid);
     return args;
   },
@@ -146,7 +176,10 @@ const codex: AgentDef = {
   id: "codex",
   label: "Codex",
   bin: "codex",
-  buildArgs: (message, sid) => {
+  // read-only still permits shell/file reads, so it is not sufficient for
+  // analyzing untrusted source embedded in a prompt.
+  isolatedReview: false,
+  buildArgs: (message, sid, options) => {
     let msg = message;
     let base: string[];
     if (sid) base = ["exec", "resume", sid];
@@ -154,8 +187,15 @@ const codex: AgentDef = {
       base = ["exec"];
       msg = MEP_PROMPT + "\n\n---\nNgười dùng: " + message;
     }
-    return [...base, "--json", "--skip-git-repo-check",
-      "--dangerously-bypass-approvals-and-sandbox", msg];
+    return [
+      ...base,
+      "--json",
+      "--skip-git-repo-check",
+      ...(options?.readOnly
+        ? ["--sandbox", "read-only"]
+        : ["--dangerously-bypass-approvals-and-sandbox"]),
+      msg,
+    ];
   },
   parse: (o) => {
     const out: AgentEvent[] = [];
@@ -177,10 +217,25 @@ const grok: AgentDef = {
   id: "grok",
   label: "Grok",
   bin: "grok",
-  buildArgs: (message, sid) => {
+  // --tools only disables built-ins; the CLI still loads user plugins/hooks,
+  // skills and MCP configuration, so untrusted-source review is not isolated.
+  isolatedReview: false,
+  buildArgs: (message, sid, options) => {
     let msg = message;
     if (!sid) msg = MEP_PROMPT + "\n\n---\nNgười dùng: " + message;
-    const args = ["-p", msg, "--output-format", "streaming-json", "--always-approve"];
+    const args = [
+      "-p", msg,
+      "--output-format", "streaming-json",
+      ...(options?.readOnly
+        ? [
+            "--permission-mode", "plan",
+            "--tools", "",
+            "--disable-web-search",
+            "--no-subagents",
+            "--no-memory",
+          ]
+        : ["--always-approve"]),
+    ];
     if (sid) args.push("-c");
     return args;
   },
@@ -203,10 +258,14 @@ const gemini: AgentDef = {
   id: "gemini",
   label: "Gemini (agy)",
   bin: "agy",
-  buildArgs: (message, sid) => {
+  // agy plan/sandbox mode does not provide a documented no-tools switch.
+  isolatedReview: false,
+  buildArgs: (message, sid, options) => {
     let msg = message;
     if (!sid) msg = MEP_PROMPT + "\n\n---\nNgười dùng: " + message;
-    const args = ["--dangerously-skip-permissions", "-p", msg];
+    const args = options?.readOnly
+      ? ["--mode", "plan", "--sandbox", "-p", msg]
+      : ["--dangerously-skip-permissions", "-p", msg];
     if (sid) args.push("-c");
     return args;
   },
@@ -233,13 +292,13 @@ export const AGENTS: Record<string, AgentDef> = { claude, codex, grok, gemini };
 
 export function detectAgents() {
   return Object.values(AGENTS).map((a) => {
-    let path = which(a.bin);
-    if (!path && a.id === "gemini") {
-      // Fallback nếu bin agy không trực tiếp trên PATH tiêu chuẩn
-      path = which("agy") || which("python3") || which("python");
-    }
-    return { id: a.id, label: a.label, available: !!path, path: path ?? "" };
+    const path = which(a.bin);
+    return {
+      id: a.id,
+      label: a.label,
+      available: !!path,
+      isolatedReview: a.isolatedReview,
+      path: path ?? "",
+    };
   });
 }
-
-

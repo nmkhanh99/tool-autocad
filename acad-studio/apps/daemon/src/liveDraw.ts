@@ -10,17 +10,7 @@
  * Hợp đồng kết quả: job được wrapJob() bọc sẵn hàm (acad:write-result status msg);
  * LISP ở chế độ live gọi hàm đó với chuỗi "k=v k=v", ta tách lại thành object.
  */
-import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import {
-  atomicWriteFile,
-  ensureBridgeLayout,
-  jobLspPath,
-  resolveBridgeDir,
-  resultsDir,
-} from "./bridgeContract.js";
-import { acadRunning, listOpenDocs, parseJobResultText, wrapJob } from "./acadBridge.js";
+import { acadRunning, dispatchLiveJob, listOpenDocs } from "./acadBridge.js";
 
 export type LiveResult = {
   ok: boolean;
@@ -55,41 +45,30 @@ export async function runLiveLisp(opts: {
   target?: string;
   timeoutMs?: number;
 }): Promise<LiveResult> {
-  const jobId = randomUUID().slice(0, 8);
   const timeoutMs = opts.timeoutMs ?? 60_000;
 
   if (!(await acadRunning())) {
     return {
-      ok: false, jobId, result: {}, message: "",
+      ok: false, jobId: "", result: {}, message: "",
       error: "AutoCAD chưa chạy — mở AutoCAD rồi thử lại (POST /api/acad/open).",
     };
   }
 
-  const dir = resolveBridgeDir();
-  ensureBridgeLayout(dir);
-  writeFileSync(join(dir, "job_target.txt"), opts.target ? String(opts.target) : "", "utf8");
-  // Ghi atomic: plugin watch FSEvents, tránh đọc file ghi dở.
-  atomicWriteFile(jobLspPath(dir), wrapJob(jobId, opts.lisp, resultsDir(dir)));
-
-  const resFile = join(resultsDir(dir), `${jobId}.txt`);
-  const t0 = Date.now();
-  while (Date.now() - t0 < timeoutMs) {
-    if (existsSync(resFile)) {
-      const parsed = parseJobResultText(readFileSync(resFile, "utf8"));
-      if (parsed) {
-        return {
-          ok: parsed.status === "ok",
-          jobId,
-          result: parseKv(parsed.message),
-          message: parsed.message,
-          error: parsed.status === "ok" ? undefined : parsed.message,
-        };
-      }
-    }
-    await new Promise((r) => setTimeout(r, 250));
+  const dispatched = await dispatchLiveJob(opts.lisp, opts.target, timeoutMs);
+  if (dispatched.result) {
+    return {
+      ok: dispatched.result.status === "ok",
+      jobId: dispatched.jobId,
+      result: parseKv(dispatched.result.message),
+      message: dispatched.result.message,
+      error:
+        dispatched.result.status === "ok"
+          ? undefined
+          : dispatched.result.message,
+    };
   }
   return {
-    ok: false, jobId, result: {}, message: "",
+    ok: false, jobId: dispatched.jobId, result: {}, message: "",
     error:
       `Quá ${timeoutMs} ms chưa thấy kết quả. Plugin AcadBridge có thể chưa nạp job — ` +
       `trong AutoCAD gõ ACAD-RUN (hoặc MEP-RUN) để chạy thủ công.`,

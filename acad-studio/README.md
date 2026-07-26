@@ -60,6 +60,24 @@ apps/desktop (Electron) bọc apps/web thành cửa sổ native.
 - `POST /api/acad/*` — **điều khiển AutoCAD for Mac** (headless/batch/live). Xem
   [`ACAD-CONTROL.md`](ACAD-CONTROL.md). Đã verify: đọc + **sửa bản vẽ thật** (KHBV,
   layer, entity) không cần mở GUI, và điều khiển được ngay từ khung chat.
+- `GET /api/acad/drawing-info?target=...` — snapshot ObjectARX **chỉ đọc** của đúng
+  bản vẽ đang mở; bỏ `target` để lấy document active. Nút **Hồ sơ bản vẽ** hiển thị
+  metadata, entity/layer/block/layout/xref/style/selection và dữ liệu thô.
+- `GET /api/acad/lisp` và `GET /api/acad/lisp/:id` — catalog + source/metadata của
+  `.lsp`, `.mnl`, `.fas`, `.vlx`, `.dcl`, `.scr`. Nút **Thư viện AutoCAD** cho phép
+  tìm kiếm, thêm thư mục, xem source/config, chọn đúng DWG và load có xác nhận.
+- `PUT /api/acad/lisp/:id/manifest` — chỉ được gọi khi user bấm duyệt proposal của
+  agent. Source/config đổi revision sẽ bị từ chối; duyệt config không tự load Lisp.
+- `POST /api/acad/lisp/:id/load` — stage + kiểm lại hash, giữ đúng dependency/Support
+  Path và gửi qua FIFO vào đúng document title/path; plugin không fallback sang DWG active khác.
+- Base manifest cho tài nguyên của repo: `../acad-lisp/library.manifest.json`. Root
+  tùy chỉnh và override đã duyệt nằm trong `ACAD_DATA_DIR`, không ghi đè source Lisp.
+- Resource ngoài base manifest nhận cấu hình tự suy ra ở trạng thái chưa duyệt. Lượt agent
+  review dùng source nhúng, không có tool, chạy ở thư mục tạm; UI bắt xem diff/manifest và
+  xác nhận riêng. Quyết định từ chối được lưu trong SQLite.
+
+Daemon chỉ chấp nhận browser Origin của UI Electron/cổng dev; CLI local không gửi `Origin`
+vẫn dùng được. Đây là ranh giới bắt buộc vì các endpoint live có thể chạy code trong AutoCAD.
 
 **Registry agent** (`apps/daemon/src/agents.ts`): mỗi agent có `buildArgs()` (câu lệnh
 headless) + `parse()` (chuẩn hoá JSONL) — mô phỏng `runtimes/defs/*` của Open Design.
@@ -87,6 +105,9 @@ Trong bản đóng gói:
 - Storage **sql.js (WASM)** → không phụ thuộc phiên bản Node/Electron.
 - **Thư mục dự án** mà agent thao tác: mặc định `~/Desktop/tool-autocad` (đổi bằng
   `ACAD_PROJECT_ROOT`). Dữ liệu lịch sử ở `~/Library/Application Support/Acad Studio/`.
+- Bộ `acad-lisp`, các Lisp trích xuất dưới `acad-studio/scripts/extract` và manifest
+  cơ sở được đóng gói trong app; thư viện vẫn quét thêm project, thư mục hỗ trợ
+  Autodesk và các root do user chọn.
 - App **chưa ký (unsigned)**: lần đầu mở có thể phải chuột phải → *Open* (Gatekeeper).
 
 ## Bước sau

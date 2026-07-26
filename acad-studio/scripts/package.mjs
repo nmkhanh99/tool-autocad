@@ -13,6 +13,10 @@ const WEB = join(ROOT, "apps/web");
 const DAEMON = join(ROOT, "apps/daemon");
 const DESK = join(ROOT, "apps/desktop");
 const BUILD = join(DESK, "build");
+const LISP = join(ROOT, "..", "acad-lisp");
+const EXTRACT = join(ROOT, "scripts", "extract");
+const DEMO = join(ROOT, "demo");
+const AUTOCAD_LIBRARY = join(BUILD, "autocad-library");
 const run = (cmd, args, cwd, env = {}) =>
   execFileSync(cmd, args, { cwd, stdio: "inherit", env: { ...process.env, ...env } });
 
@@ -36,9 +40,14 @@ run(findBin("esbuild"), [
   `--outfile=${join(BUILD, "daemon.cjs")}`,
 ], ROOT);
 
-console.log("\n[3/4] Copy wasm + web…");
+console.log("\n[3/4] Copy wasm + web + AutoLISP library…");
 cpSync(join(DAEMON, "node_modules/sql.js/dist/sql-wasm.wasm"), join(BUILD, "sql-wasm.wasm"));
 cpSync(join(WEB, "out"), join(BUILD, "web"), { recursive: true });
+mkdirSync(AUTOCAD_LIBRARY, { recursive: true });
+cpSync(LISP, join(AUTOCAD_LIBRARY, "acad-lisp"), { recursive: true });
+cpSync(join(LISP, "library.manifest.json"), join(AUTOCAD_LIBRARY, "library.manifest.json"));
+cpSync(EXTRACT, join(AUTOCAD_LIBRARY, "acad-studio", "scripts", "extract"), { recursive: true });
+cpSync(DEMO, join(AUTOCAD_LIBRARY, "acad-studio", "demo"), { recursive: true });
 
 console.log("\n[4/4] electron-builder…");
 run(findBin("electron-builder"), [], DESK);

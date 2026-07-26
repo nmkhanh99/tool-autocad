@@ -20,6 +20,17 @@ export interface Store {
   addMessage(convId: string, role: "user" | "assistant", content: string): void;
   listConversations(): any[];
   getMessages(convId: string): any[];
+  setLispProposalDecision(
+    resourceId: string,
+    baseRevision: string,
+    proposalHash: string,
+    decision: "rejected",
+  ): void;
+  getLispProposalDecision(
+    resourceId: string,
+    baseRevision: string,
+    proposalHash: string,
+  ): string | null;
 }
 
 export async function initDb(): Promise<Store> {
@@ -43,6 +54,16 @@ export async function initDb(): Promise<Store> {
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT, conv_id TEXT NOT NULL, role TEXT NOT NULL,
       content TEXT NOT NULL, created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS lisp_proposal_decisions (
+      resource_id TEXT NOT NULL, base_revision TEXT NOT NULL,
+      decision TEXT NOT NULL, updated_at INTEGER NOT NULL,
+      PRIMARY KEY (resource_id, base_revision)
+    );
+    CREATE TABLE IF NOT EXISTS lisp_proposal_decisions_v2 (
+      resource_id TEXT NOT NULL, base_revision TEXT NOT NULL, proposal_hash TEXT NOT NULL,
+      decision TEXT NOT NULL, updated_at INTEGER NOT NULL,
+      PRIMARY KEY (resource_id, base_revision, proposal_hash)
     );
   `);
 
@@ -76,6 +97,25 @@ export async function initDb(): Promise<Store> {
     },
     getMessages(convId) {
       return all("SELECT role, content, created_at FROM messages WHERE conv_id = ? ORDER BY id ASC", [convId]);
+    },
+    setLispProposalDecision(resourceId, baseRevision, proposalHash, decision) {
+      db.run(
+        `INSERT INTO lisp_proposal_decisions_v2
+           (resource_id, base_revision, proposal_hash, decision, updated_at)
+         VALUES (?,?,?,?,?)
+         ON CONFLICT(resource_id, base_revision, proposal_hash)
+         DO UPDATE SET decision = excluded.decision, updated_at = excluded.updated_at`,
+        [resourceId, baseRevision, proposalHash, decision, Date.now()],
+      );
+      save();
+    },
+    getLispProposalDecision(resourceId, baseRevision, proposalHash) {
+      const row = all(
+        `SELECT decision FROM lisp_proposal_decisions_v2
+         WHERE resource_id = ? AND base_revision = ? AND proposal_hash = ?`,
+        [resourceId, baseRevision, proposalHash],
+      )[0];
+      return row?.decision ? String(row.decision) : null;
     },
   };
 }

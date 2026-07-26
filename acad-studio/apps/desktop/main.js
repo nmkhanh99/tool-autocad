@@ -1,14 +1,61 @@
 // Electron shell.
 //  - Dev (không đóng gói): tools-dev đã chạy daemon + web (Next :3000) -> chỉ mở cửa sổ.
 //  - Đóng gói: tự spawn daemon.cjs (Node của Electron) phục vụ UI tĩnh + API ở :8788.
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
+const { generateKeyPairSync, randomUUID, sign } = require("node:crypto");
 const { join } = require("node:path");
 
 const PORT = 8788;
 const DEV_URL = process.env.ACAD_WEB_URL || process.env.MEP_WEB_URL || "http://localhost:3000";
 const PACKAGED_URL = `http://127.0.0.1:${PORT}`;
 let daemon = null;
+const reviewKeys = generateKeyPairSync("ed25519");
+const reviewPublicKey = reviewKeys.publicKey
+  .export({ type: "spki", format: "der" })
+  .toString("base64");
+
+function reviewProofText(payload) {
+  return [
+    "acad-review-v1",
+    payload.resourceId,
+    payload.baseRevision,
+    payload.proposalHash,
+    payload.analysisCoverage,
+    payload.acknowledgedIncomplete ? "1" : "0",
+    String(payload.issuedAt),
+    payload.nonce,
+  ].join("\n");
+}
+
+ipcMain.handle("acad:sign-review", (event, input) => {
+  const sender = String(event.senderFrame?.url || "");
+  if (!/^http:\/\/(?:127\.0\.0\.1|localhost):(?:8788|3000)\//.test(sender)) {
+    throw new Error("review_signer_origin_not_allowed");
+  }
+  const payload = {
+    resourceId: String(input?.resourceId || ""),
+    baseRevision: String(input?.baseRevision || ""),
+    proposalHash: String(input?.proposalHash || ""),
+    analysisCoverage: String(input?.analysisCoverage || ""),
+    acknowledgedIncomplete: input?.acknowledgedIncomplete === true,
+    issuedAt: Date.now(),
+    nonce: randomUUID(),
+  };
+  if (
+    !payload.resourceId ||
+    !payload.baseRevision ||
+    !/^[a-f0-9]{64}$/.test(payload.proposalHash) ||
+    !["full-source", "partial-source", "metadata-only"].includes(payload.analysisCoverage)
+  ) {
+    throw new Error("review_signer_payload_invalid");
+  }
+  return {
+    ...payload,
+    signature: sign(null, Buffer.from(reviewProofText(payload)), reviewKeys.privateKey)
+      .toString("base64"),
+  };
+});
 
 function startDaemon() {
   const buildDir = join(process.resourcesPath, "build");
@@ -22,16 +69,19 @@ function startDaemon() {
       MEP_WEB_DIR: join(buildDir, "web"),
       ACAD_SQLJS_WASM: join(buildDir, "sql-wasm.wasm"),
       MEP_SQLJS_WASM: join(buildDir, "sql-wasm.wasm"),
+      ACAD_BUNDLED_LISP_ROOT: join(buildDir, "autocad-library"),
+      ACAD_ASSET_ROOT: join(buildDir, "autocad-library"),
+      ACAD_REVIEW_PUBLIC_KEY: reviewPublicKey,
       ACAD_DATA_DIR: app.getPath("userData"),
       MEP_DATA_DIR: app.getPath("userData"),
       ACAD_PROJECT_ROOT:
         process.env.ACAD_PROJECT_ROOT ||
         process.env.MEP_PROJECT_ROOT ||
-        join(app.getPath("home"), "Desktop", "tool-autocad"),
+        app.getPath("userData"),
       MEP_PROJECT_ROOT:
         process.env.ACAD_PROJECT_ROOT ||
         process.env.MEP_PROJECT_ROOT ||
-        join(app.getPath("home"), "Desktop", "tool-autocad"),
+        app.getPath("userData"),
     },
     stdio: "ignore",
   });
@@ -50,7 +100,11 @@ function createWindow(url) {
   const win = new BrowserWindow({
     width: 1180, height: 820, minWidth: 820, minHeight: 560,
     title: "Acad Studio", backgroundColor: "#0f1216",
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: join(__dirname, "preload.js"),
+    },
   });
   win.loadURL(url);
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });

@@ -1,0 +1,1280 @@
+{
+  "schemaVersion": 1,
+  "pathBase": "project-root",
+  "resources": {
+    "acad-lisp/acaddoc.lsp": {
+      "id": "acad-lisp/acaddoc.lsp",
+      "title": "Auto-load bridge theo bản vẽ",
+      "format": "lsp",
+      "role": "bootstrap",
+      "sourceReadable": true,
+      "loadMode": "execute-on-load",
+      "purpose": "Nạp bộ lệnh bridge mỗi khi AutoCAD mở một drawing: ưu tiên core.lsp, fallback mep.lsp.",
+      "commands": [],
+      "publicFunctions": [],
+      "dependencies": [
+        {
+          "kind": "lisp",
+          "path": "acad-lisp/core.lsp",
+          "optional": false,
+          "resolution": "AutoCAD Support File Search Path"
+        },
+        {
+          "kind": "lisp",
+          "path": "acad-lisp/mep.lsp",
+          "optional": true,
+          "resolution": "Fallback qua AutoCAD Support File Search Path"
+        }
+      ],
+      "effects": {
+        "executesOnLoad": true,
+        "interactive": false,
+        "modifiesDrawing": false,
+        "modifiesSettings": true,
+        "writesFiles": false,
+        "executesGeneratedCode": false
+      },
+      "ai": {
+        "summary": "Bootstrap cho Startup Suite/acaddoc; không phải lệnh nghiệp vụ.",
+        "whenToUse": [
+          "Cấu hình bridge tự sẵn sàng trên mọi drawing mới mở."
+        ]
+      },
+      "guardrails": [
+        "Không load lặp lại như một thao tác nghiệp vụ.",
+        "Dependency được tìm theo Support Path, không theo thư mục của file này.",
+        "File được nạp gián tiếp có thể thay đổi TRUSTEDPATHS."
+      ],
+      "examples": [
+        "(load \"/absolute/path/acad-lisp/acaddoc.lsp\")"
+      ],
+      "review": {
+        "status": "needs-review",
+        "notes": [
+          "Xác nhận Support Path có core.lsp trước khi bật autoload."
+        ]
+      }
+    },
+    "acad-lisp/core.lsp": {
+      "id": "acad-lisp/core.lsp",
+      "title": "AutoCAD Toolkit core",
+      "format": "lsp",
+      "role": "command-package",
+      "sourceReadable": true,
+      "loadMode": "define-with-side-effects",
+      "purpose": "Cung cấp bridge job dùng chung và khởi tạo AutoCAD tối thiểu, không phụ thuộc profile nghiệp vụ.",
+      "commands": [
+        {
+          "name": "ACAD-RUN",
+          "purpose": "Tìm và thực thi job.lsp do app ghi vào Acad-Bridge; fallback job legacy.",
+          "risk": "high"
+        },
+        {
+          "name": "ACAD-INIT",
+          "purpose": "Đảm bảo layer 0 và thông báo profile nghiệp vụ chưa được nạp.",
+          "risk": "low"
+        }
+      ],
+      "publicFunctions": [
+        {
+          "name": "acad:bridgedir",
+          "params": [],
+          "purpose": "Trả về thư mục bridge primary hoặc legacy."
+        },
+        {
+          "name": "acad:job-path",
+          "params": [],
+          "purpose": "Trả về job.lsp hiện có hoặc đường dẫn job mặc định."
+        },
+        {
+          "name": "acad:trust",
+          "params": [],
+          "purpose": "Bổ sung thư mục bridge vào TRUSTEDPATHS."
+        }
+      ],
+      "dependencies": [
+        {
+          "kind": "runtime-file",
+          "path": "~/Acad-Bridge/job.lsp",
+          "optional": true,
+          "resolution": "Primary live job"
+        },
+        {
+          "kind": "runtime-file",
+          "path": "~/MEP-Bridge/mep_job.lsp",
+          "optional": true,
+          "resolution": "Legacy fallback"
+        }
+      ],
+      "effects": {
+        "executesOnLoad": true,
+        "interactive": false,
+        "modifiesDrawing": true,
+        "modifiesSettings": true,
+        "writesFiles": false,
+        "executesGeneratedCode": true
+      },
+      "ai": {
+        "summary": "Core bridge trung tính; ACAD-RUN là entrypoint chạy job đã được app chuẩn bị.",
+        "whenToUse": [
+          "Cần chạy một live job đã được user review trên đúng drawing đích.",
+          "Cần khởi tạo AutoCAD tối thiểu bằng ACAD-INIT."
+        ]
+      },
+      "guardrails": [
+        "Chỉ gọi ACAD-RUN sau khi user review nội dung job và app đã khóa đúng drawing đích.",
+        "ACAD-INIT chỉ là stub, không tạo layer nghiệp vụ.",
+        "acad:trust thay đổi TRUSTEDPATHS của AutoCAD."
+      ],
+      "examples": [
+        "(c:ACAD-INIT)",
+        "(c:ACAD-RUN)"
+      ],
+      "review": {
+        "status": "needs-review",
+        "notes": [
+          "ACAD-RUN có khả năng thực thi Lisp tùy ý từ bridge."
+        ]
+      }
+    },
+    "acad-lisp/headless/acad_lib.lsp": {
+      "id": "acad-lisp/headless/acad_lib.lsp",
+      "title": "Generic headless facade",
+      "format": "lsp",
+      "role": "library",
+      "sourceReadable": true,
+      "loadMode": "define-with-side-effects",
+      "purpose": "Nạp mep_lib.lsp và cung cấp alias acad:* trung tính cho control plane.",
+      "commands": [],
+      "publicFunctions": [
+        {
+          "name": "acad:layers",
+          "params": [
+            "csv"
+          ],
+          "purpose": "Xuất danh sách layer ra CSV."
+        },
+        {
+          "name": "acad:read-title",
+          "params": [
+            "out"
+          ],
+          "purpose": "Xuất attribute khung tên ra file text."
+        },
+        {
+          "name": "acad:set-title",
+          "params": [
+            "keyValues"
+          ],
+          "purpose": "Cập nhật ATTRIB theo danh sách cặp tag/value qua mep:set-title."
+        }
+      ],
+      "dependencies": [
+        {
+          "kind": "lisp",
+          "path": "acad-lisp/headless/mep_lib.lsp",
+          "optional": false,
+          "resolution": "Support Path, sau đó cùng thư mục qua *load-pathname*"
+        }
+      ],
+      "effects": {
+        "executesOnLoad": true,
+        "interactive": false,
+        "modifiesDrawing": true,
+        "modifiesSettings": false,
+        "writesFiles": true,
+        "executesGeneratedCode": false
+      },
+      "ai": {
+        "summary": "Facade generic cho một phần API đọc/ghi headless của mep_lib.",
+        "whenToUse": [
+          "Control plane cần tên API acad:* thay vì mep:*."
+        ]
+      },
+      "guardrails": [
+        "acad:set-title cập nhật mọi ATTRIB có tag trùng trên toàn drawing.",
+        "Load file này đồng thời load toàn bộ mep_lib.lsp."
+      ],
+      "examples": [
+        "(acad:layers \"/tmp/layers.csv\")",
+        "(acad:read-title \"/tmp/title.txt\")",
+        "(acad:set-title (list (cons \"KHBV\" \"ME-TN-T05\")))"
+      ],
+      "review": {
+        "status": "needs-review",
+        "notes": [
+          "Phân biệt rõ alias đọc/export và acad:set-title có sửa drawing."
+        ]
+      }
+    },
+    "acad-lisp/headless/draw_lib.lsp": {
+      "id": "acad-lisp/headless/draw_lib.lsp",
+      "title": "Thư viện vẽ AutoCAD",
+      "format": "lsp",
+      "role": "library",
+      "sourceReadable": true,
+      "loadMode": "define-only",
+      "purpose": "Cung cấp primitive vẽ, layer/style, kiến trúc, MEP, khung tên, layout và workflow preview/apply/reject cho live hoặc headless job.",
+      "commands": [],
+      "publicFunctions": [
+        {
+          "name": "dl:silent",
+          "params": [],
+          "purpose": "Tắt các prompt/system variable gây cản trở chạy headless."
+        },
+        {
+          "name": "dl:layer",
+          "params": [
+            "name",
+            "col",
+            "ltype"
+          ],
+          "purpose": "Tạo hoặc cập nhật layer idempotent."
+        },
+        {
+          "name": "dl:clayer",
+          "params": [
+            "name"
+          ],
+          "purpose": "Đảm bảo và đặt current layer."
+        },
+        {
+          "name": "dl:std-layers",
+          "params": [],
+          "purpose": "Tạo bộ layer MEP chuẩn."
+        },
+        {
+          "name": "dl:arch-layers",
+          "params": [],
+          "purpose": "Tạo bộ layer kiến trúc chuẩn."
+        },
+        {
+          "name": "dl:mlstyle",
+          "params": [
+            "name",
+            "desc"
+          ],
+          "purpose": "Tạo MLINE style ba nét cho ống."
+        },
+        {
+          "name": "dl:textstyle",
+          "params": [
+            "name",
+            "font",
+            "width"
+          ],
+          "purpose": "Tạo text style."
+        },
+        {
+          "name": "dl:dimstyle",
+          "params": [
+            "name",
+            "post",
+            "scale",
+            "txt",
+            "asz",
+            "clrt",
+            "txtsty"
+          ],
+          "purpose": "Tạo dimstyle từ DIM variables; khi tạo mới sẽ để lại các DIM* variables đã đổi."
+        },
+        {
+          "name": "dl:pipe",
+          "params": [
+            "layer",
+            "style",
+            "dn",
+            "pts"
+          ],
+          "purpose": "Vẽ tuyến ống MLINE với scale bằng DN và đặt CELTSCALE=200."
+        },
+        {
+          "name": "dl:lwpoly",
+          "params": [
+            "layer",
+            "pts",
+            "closed"
+          ],
+          "purpose": "Vẽ LWPOLYLINE."
+        },
+        {
+          "name": "dl:line",
+          "params": [
+            "layer",
+            "p1",
+            "p2"
+          ],
+          "purpose": "Vẽ LINE."
+        },
+        {
+          "name": "dl:circle",
+          "params": [
+            "layer",
+            "center",
+            "radius"
+          ],
+          "purpose": "Vẽ CIRCLE."
+        },
+        {
+          "name": "dl:text",
+          "params": [
+            "layer",
+            "style",
+            "pt",
+            "height",
+            "rotation",
+            "text"
+          ],
+          "purpose": "Vẽ TEXT một dòng."
+        },
+        {
+          "name": "dl:mtext",
+          "params": [
+            "layer",
+            "style",
+            "pt",
+            "height",
+            "width",
+            "text"
+          ],
+          "purpose": "Vẽ MTEXT."
+        },
+        {
+          "name": "dl:dim-linear",
+          "params": [
+            "layer",
+            "style",
+            "orient",
+            "p1",
+            "p2",
+            "ptxt"
+          ],
+          "purpose": "Vẽ DIMLINEAR ngang hoặc đứng."
+        },
+        {
+          "name": "dl:dim-aligned",
+          "params": [
+            "layer",
+            "style",
+            "p1",
+            "p2",
+            "ptxt"
+          ],
+          "purpose": "Vẽ DIMALIGNED."
+        },
+        {
+          "name": "dl:mleader",
+          "params": [
+            "layer",
+            "parrow",
+            "pland",
+            "text",
+            "height"
+          ],
+          "purpose": "Vẽ leader, mũi tên và text bằng entity thuần."
+        },
+        {
+          "name": "dl:hatch",
+          "params": [
+            "layer",
+            "pattern",
+            "scale",
+            "angle",
+            "entity"
+          ],
+          "purpose": "Hatch một boundary entity."
+        },
+        {
+          "name": "dl:insert",
+          "params": [
+            "layer",
+            "block",
+            "pt",
+            "scale",
+            "rotation",
+            "attributes"
+          ],
+          "purpose": "Chèn block và attributes bằng entmake."
+        },
+        {
+          "name": "dl:def-fitting",
+          "params": [
+            "kind",
+            "dn"
+          ],
+          "purpose": "Định nghĩa block phụ kiện theo loại và DN."
+        },
+        {
+          "name": "dl:fitting",
+          "params": [
+            "layer",
+            "kind",
+            "dn",
+            "pt",
+            "rotation",
+            "label"
+          ],
+          "purpose": "Định nghĩa nếu cần rồi chèn phụ kiện có attribute."
+        },
+        {
+          "name": "dl:grid",
+          "params": [
+            "layer",
+            "style",
+            "xs",
+            "ys",
+            "radius",
+            "extension"
+          ],
+          "purpose": "Vẽ lưới trục kiến trúc."
+        },
+        {
+          "name": "dl:wall",
+          "params": [
+            "layer",
+            "p1",
+            "p2",
+            "thickness"
+          ],
+          "purpose": "Vẽ tường hai nét quanh đường tim."
+        },
+        {
+          "name": "dl:room-box",
+          "params": [
+            "layer",
+            "x1",
+            "y1",
+            "x2",
+            "y2"
+          ],
+          "purpose": "Vẽ khung phòng chữ nhật."
+        },
+        {
+          "name": "dl:stair",
+          "params": [
+            "layer",
+            "x1",
+            "y1",
+            "x2",
+            "y2",
+            "steps",
+            "direction"
+          ],
+          "purpose": "Vẽ thang bộ và mũi tên."
+        },
+        {
+          "name": "dl:elevator",
+          "params": [
+            "layer",
+            "x1",
+            "y1",
+            "x2",
+            "y2"
+          ],
+          "purpose": "Vẽ ký hiệu thang máy."
+        },
+        {
+          "name": "dl:door",
+          "params": [
+            "layer",
+            "hinge",
+            "width",
+            "angle"
+          ],
+          "purpose": "Vẽ cửa một cánh."
+        },
+        {
+          "name": "dl:fixture",
+          "params": [
+            "layer",
+            "kind",
+            "pt",
+            "radius"
+          ],
+          "purpose": "Vẽ ký hiệu thiết bị vệ sinh."
+        },
+        {
+          "name": "dl:room-label",
+          "params": [
+            "layer",
+            "style",
+            "pt",
+            "height",
+            "name"
+          ],
+          "purpose": "Ghi nhãn phòng."
+        },
+        {
+          "name": "dl:titleblock",
+          "params": [
+            "layer",
+            "name",
+            "pt",
+            "scale",
+            "attributes"
+          ],
+          "purpose": "Định nghĩa và chèn khung tên."
+        },
+        {
+          "name": "dl:layout",
+          "params": [
+            "name"
+          ],
+          "purpose": "Tạo và chuyển sang layout."
+        },
+        {
+          "name": "dl:viewport",
+          "params": [
+            "p1",
+            "p2"
+          ],
+          "purpose": "Tạo viewport trong paper space."
+        },
+        {
+          "name": "dl:to-model",
+          "params": [],
+          "purpose": "Chuyển về Model."
+        },
+        {
+          "name": "dl:table",
+          "params": [
+            "layer",
+            "style",
+            "pt",
+            "columnWidths",
+            "rowHeight",
+            "rows"
+          ],
+          "purpose": "Vẽ bảng bằng LINE và TEXT."
+        },
+        {
+          "name": "dl:preview-begin",
+          "params": [
+            "opid"
+          ],
+          "purpose": "Đăng ký operation mới, tạo và chọn layer preview riêng; lần gọi trùng operation active sẽ khóa operation ở trạng thái conflict."
+        },
+        {
+          "name": "dl:preview-count",
+          "params": [
+            "opid"
+          ],
+          "purpose": "Lần gọi đầu sau khi vẽ seal ownership theo opid+handle; các lần sau chỉ đếm entity đã seal."
+        },
+        {
+          "name": "dl:preview-apply",
+          "params": [
+            "opid",
+            "destLayer"
+          ],
+          "purpose": "Chuyển entity của operation active sang layer đích sau khi user chấp nhận."
+        },
+        {
+          "name": "dl:preview-apply-map",
+          "params": [
+            "opid",
+            "pairs"
+          ],
+          "purpose": "Compatibility wrapper: chỉ apply vào destination của pair đầu; bỏ qua marker và các pair còn lại."
+        },
+        {
+          "name": "dl:preview-reject",
+          "params": [
+            "opid"
+          ],
+          "purpose": "Xóa entity trên layer của operation active khi user từ chối; không rollback thay đổi ngoài layer đó."
+        },
+        {
+          "name": "dl:count",
+          "params": [
+            "dxfType"
+          ],
+          "purpose": "Đếm entity theo DXF type."
+        },
+        {
+          "name": "dl:count-layer",
+          "params": [
+            "layer"
+          ],
+          "purpose": "Đếm entity trên layer."
+        },
+        {
+          "name": "dl:report",
+          "params": [
+            "path"
+          ],
+          "purpose": "Ghi báo cáo kiểm đếm."
+        },
+        {
+          "name": "dl:save",
+          "params": [
+            "path"
+          ],
+          "purpose": "SAVEAS drawing sang đường dẫn chỉ định."
+        },
+        {
+          "name": "dl:result",
+          "params": [
+            "path",
+            "keyValues"
+          ],
+          "purpose": "Ghi kết quả key=value cho daemon."
+        }
+      ],
+      "dependencies": [
+        {
+          "kind": "autocad-resource",
+          "path": "acadiso.lin",
+          "optional": true,
+          "resolution": "AutoCAD linetype search path"
+        },
+        {
+          "kind": "runtime",
+          "path": "AutoCAD core commands and DXF entity API",
+          "optional": false,
+          "resolution": "Current AutoCAD session"
+        }
+      ],
+      "effects": {
+        "executesOnLoad": false,
+        "interactive": false,
+        "modifiesDrawing": true,
+        "modifiesSettings": true,
+        "writesFiles": true,
+        "executesGeneratedCode": false
+      },
+      "ai": {
+        "summary": "API vẽ chính cho agent; số tọa độ theo drawing units, còn profile/ví dụ MEP giả định drawing mm.",
+        "whenToUse": [
+          "Sinh hoặc chỉnh sửa hình học AutoCAD bằng job đã review.",
+          "Tạo layer/style, MEP pipe, kiến trúc, annotation, khung tên hoặc layout.",
+          "Cần workflow preview/apply/reject."
+        ]
+      },
+      "guardrails": [
+        "Tọa độ là list (x y) hoặc (x y z) theo drawing units; chỉ truyền số đo mm sau khi xác nhận INSUNITS=4, nếu khác phải dừng hoặc quy đổi có duyệt.",
+        "Mỗi operation phải dùng opid mới. dl:preview-begin trả nil nếu opid/layer đã tồn tại; khi đó phải dừng, không tiếp tục vẽ.",
+        "Layer preview lưu state và mỗi entity được seal bằng XData ACADPREVIEW chứa opid+handle trong DWG để apply/reject headless ở process khác vẫn kiểm tra được.",
+        "Gọi lại dl:preview-begin khi layer opid đã tồn tại sẽ persist state CONFLICT; apply/reject đều bị khóa để không tác động lẫn entity của hai lần vẽ. Cần dùng opid mới và xử lý layer conflict thủ công sau review.",
+        "Sau khi vẽ xong phải gọi dl:preview-count đúng một lần trước khi user review để seal exact handles; tagging thiếu entity sẽ đổi operation sang CONFLICT.",
+        "dl:preview-apply/reject chỉ chấp nhận operation SEALED và chỉ sửa/xóa entity có opid cùng handle hiện tại; entity khác được chuyển/copy vào layer preview sau lúc seal không bị tác động.",
+        "Sau khi apply/reject xử lý hết entity owned, layer state đổi thành APPLIED hoặc REJECTED.",
+        "dl:preview-reject chỉ xóa entity owned còn đúng opid+handle trên layer preview và phục hồi CLAYER trước đó khi còn biết/tồn tại; không rollback layer đã tạo hoặc thay đổi setting/file/hình học ngoài layer preview.",
+        "dl:silent thay đổi nhiều system variable và không restore.",
+        "dl:pipe đặt CELTSCALE=200 và không restore giá trị trước đó.",
+        "Khi tạo style mới, dl:dimstyle thay đổi DIMSCALE, DIMTXT, DIMASZ, DIMEXE, DIMEXO, DIMGAP, DIMDEC, DIMLUNIT, DIMPOST và có thể DIMCLRT/DIMTXSTY; không restore giá trị cũ, chỉ đặt DIMPOST về chuỗi rỗng.",
+        "dl:save chạy SAVEAS và ghi file thật.",
+        "dl:layout luôn gọi tạo layout mới dù mô tả nói bỏ qua nếu đã có.",
+        "dl:preview-apply-map hiện chỉ dùng destination của pair đầu tiên.",
+        "Fitting kind hợp lệ: CHECH, Y, CON, CUT; fixture kind: xi, chau, tieu."
+      ],
+      "examples": [
+        "(dl:preview-begin \"job-uuid-unique-001\")",
+        "(dl:pipe (dl:preview-layer \"job-uuid-unique-001\") \"ACAD-PIPE\" 90.0 (list (list 0.0 0.0) (list 3000.0 0.0)))",
+        "(dl:preview-count \"job-uuid-unique-001\")",
+        "(dl:preview-apply \"job-uuid-unique-001\" \"P-ThoatRua\")",
+        "(dl:preview-reject \"job-uuid-unique-001\")"
+      ],
+      "review": {
+        "status": "needs-review",
+        "notes": [
+          "Xác minh riêng các API dựa trên command prompt với phiên bản AutoCAD đang chạy."
+        ]
+      }
+    },
+    "acad-lisp/headless/mep_lib.lsp": {
+      "id": "acad-lisp/headless/mep_lib.lsp",
+      "title": "MEP headless analysis library",
+      "format": "lsp",
+      "role": "library",
+      "sourceReadable": true,
+      "loadMode": "define-only",
+      "purpose": "Đọc cấu trúc drawing, xuất CSV/JSON, bóc BOM, xử lý khung tên và cung cấp một số thao tác MEP headless.",
+      "commands": [],
+      "publicFunctions": [
+        {
+          "name": "mep:entlen",
+          "params": [
+            "entity"
+          ],
+          "purpose": "Tính chiều dài LINE, LWPOLYLINE, MLINE, ARC hoặc CIRCLE; ARC chuẩn hóa chênh góc tương đương qua chu kỳ 2π."
+        },
+        {
+          "name": "mep:layers",
+          "params": [
+            "csv"
+          ],
+          "purpose": "Xuất bảng layer."
+        },
+        {
+          "name": "mep:pipe-bom",
+          "params": [
+            "csv"
+          ],
+          "purpose": "Tổng hợp chiều dài entity tuyến theo layer."
+        },
+        {
+          "name": "mep:fit-bom",
+          "params": [
+            "csv"
+          ],
+          "purpose": "Đếm INSERT theo block name."
+        },
+        {
+          "name": "mep:read-title",
+          "params": [
+            "textPath"
+          ],
+          "purpose": "Xuất toàn bộ ATTRIB của block có attributes."
+        },
+        {
+          "name": "mep:set-title",
+          "params": [
+            "keyValues"
+          ],
+          "purpose": "Cập nhật ATTRIB có tag khớp."
+        },
+        {
+          "name": "mep:pipe-bom-dn",
+          "params": [
+            "csv"
+          ],
+          "purpose": "Bóc chiều dài ống theo hệ thống và DN."
+        },
+        {
+          "name": "mep:title-rows",
+          "params": [
+            "csv"
+          ],
+          "purpose": "Xuất một dòng thông tin cho mỗi khung tên."
+        },
+        {
+          "name": "mep:std-layers",
+          "params": [],
+          "purpose": "Tạo bộ layer MEP chuẩn."
+        },
+        {
+          "name": "mep:tag-pipes",
+          "params": [],
+          "purpose": "Gắn nhãn hệ và DN cho các MLINE ống."
+        },
+        {
+          "name": "mep:number-pipes",
+          "params": [],
+          "purpose": "Đánh số ống, thêm XDATA MEP và TEXT."
+        },
+        {
+          "name": "mep:draw-pipe",
+          "params": [
+            "layer",
+            "dn",
+            "points"
+          ],
+          "purpose": "Vẽ một tuyến ống MLINE."
+        },
+        {
+          "name": "mep:dump-geom",
+          "params": [
+            "json"
+          ],
+          "purpose": "Xuất JSON handle/type/layer và geometry rút gọn cho LINE, LWPOLYLINE, MLINE, CIRCLE, TEXT, MTEXT, INSERT; ARC hiện bị bỏ qua."
+        },
+        {
+          "name": "mep:stats",
+          "params": [
+            "csv"
+          ],
+          "purpose": "Thống kê entity theo DXF type."
+        }
+      ],
+      "dependencies": [
+        {
+          "kind": "runtime",
+          "path": "AutoCAD core AutoLISP entity/table/selection/file APIs",
+          "optional": false,
+          "resolution": "Current AutoCAD session"
+        }
+      ],
+      "effects": {
+        "executesOnLoad": false,
+        "interactive": false,
+        "modifiesDrawing": true,
+        "modifiesSettings": true,
+        "writesFiles": true,
+        "executesGeneratedCode": false
+      },
+      "ai": {
+        "summary": "Thư viện phân tích MEP và export headless; chỉ một số API làm thay đổi drawing.",
+        "whenToUse": [
+          "Bóc layer, BOM, khung tên, geometry hoặc thống kê drawing.",
+          "Cập nhật khung tên, tag/đánh số/vẽ ống khi user đã duyệt."
+        ]
+      },
+      "guardrails": [
+        "mep:set-title cập nhật mọi ATTRIB có tag trùng trên toàn drawing.",
+        "Tag trong keyValues của mep:set-title/acad:set-title cần viết hoa để khớp cách lookup hiện tại.",
+        "mep:number-pipes thêm XDATA app MEP và entity TEXT.",
+        "mep:draw-pipe đổi OSMODE/current layer và không restore.",
+        "mep:dump-geom không xuất ARC dù selection có quét loại entity này.",
+        "mep:pipe-bom và mep:pipe-bom-dn coi drawing units là mm rồi chia 1000 để ra mét nhưng không kiểm tra INSUNITS; chỉ dùng trực tiếp khi INSUNITS=4.",
+        "Các hàm export cần output path đã được app xác thực và thư mục cha tồn tại."
+      ],
+      "examples": [
+        "(mep:layers \"/tmp/layers.csv\")",
+        "(mep:pipe-bom-dn \"/tmp/pipe-bom.csv\")",
+        "(mep:set-title (list (cons \"KHBV\" \"ME-TN-T05\")))",
+        "(mep:dump-geom \"/tmp/geometry.json\")"
+      ],
+      "review": {
+        "status": "needs-review",
+        "notes": [
+          "Phân biệt rõ API read/export và API sửa drawing trong UI."
+        ]
+      }
+    },
+    "acad-lisp/mep.lsp": {
+      "id": "acad-lisp/mep.lsp",
+      "title": "MEP CAD Companion",
+      "format": "lsp",
+      "role": "command-package",
+      "sourceReadable": true,
+      "loadMode": "define-with-side-effects",
+      "purpose": "Bộ lệnh tương tác cho cấp thoát nước: layer, ống MLINE, phụ kiện, khung tên, chuẩn hóa drawing, PDF và app bridge.",
+      "commands": [
+        {
+          "name": "MEP",
+          "purpose": "Mở bảng điều khiển DCL.",
+          "risk": "medium"
+        },
+        {
+          "name": "MEP-INIT",
+          "purpose": "Tạo/kiểm tra layer MEP chuẩn.",
+          "risk": "medium"
+        },
+        {
+          "name": "MEP-ONG",
+          "purpose": "Chọn hệ, DN và vẽ ống MLINE tương tác.",
+          "risk": "medium"
+        },
+        {
+          "name": "MEP-PK",
+          "purpose": "Chọn loại/vật liệu/DN rồi đặt chú thích phụ kiện.",
+          "risk": "medium"
+        },
+        {
+          "name": "MEP-KHBV",
+          "purpose": "Sinh và in mã bản vẽ ME-{CN|TN|TH}-Txx.",
+          "risk": "low"
+        },
+        {
+          "name": "MEP-HELP",
+          "purpose": "In danh sách lệnh trợ giúp.",
+          "risk": "low"
+        },
+        {
+          "name": "MEP-LAYERFIX",
+          "purpose": "Tạo layer chuẩn, PURGE và AUDIT drawing.",
+          "risk": "high"
+        },
+        {
+          "name": "MEP-PDF",
+          "purpose": "Xuất layout hiện hành thành PDF trong bridge.",
+          "risk": "high"
+        },
+        {
+          "name": "ACAD-RUN",
+          "purpose": "Thực thi live job do app sinh.",
+          "risk": "high"
+        },
+        {
+          "name": "MEP-RUN",
+          "purpose": "Alias legacy của ACAD-RUN.",
+          "risk": "high"
+        },
+        {
+          "name": "MR",
+          "purpose": "Alias ngắn của ACAD-RUN.",
+          "risk": "high"
+        }
+      ],
+      "publicFunctions": [
+        {
+          "name": "mep-pipe",
+          "params": [
+            "systemKeyword",
+            "dn"
+          ],
+          "purpose": "Vẽ ống tương tác theo hệ và DN."
+        },
+        {
+          "name": "mep-fit",
+          "params": [
+            "fittingKeyword",
+            "material",
+            "dn"
+          ],
+          "purpose": "Đặt chú thích BOM phụ kiện."
+        },
+        {
+          "name": "mep-sym",
+          "params": [
+            "fittingKeyword",
+            "material",
+            "dn"
+          ],
+          "purpose": "Vẽ symbol phụ kiện và chú thích BOM."
+        },
+        {
+          "name": "mep-title",
+          "params": [
+            "keyValues"
+          ],
+          "purpose": "Cập nhật ATTRIB có tag khớp."
+        },
+        {
+          "name": "mep-layerfix",
+          "params": [],
+          "purpose": "Tạo layer, PURGE và AUDIT."
+        },
+        {
+          "name": "mep-pdf",
+          "params": [],
+          "purpose": "Xuất layout hiện hành ra PDF."
+        }
+      ],
+      "dependencies": [
+        {
+          "kind": "generated-resource",
+          "path": "${TMPDIR}/mep_panel.dcl",
+          "optional": true,
+          "resolution": "mep:writedcl tạo khi chạy MEP"
+        },
+        {
+          "kind": "runtime-file",
+          "path": "~/Acad-Bridge/job.lsp",
+          "optional": true,
+          "resolution": "Primary live job"
+        },
+        {
+          "kind": "runtime",
+          "path": "AutoCAD commands MLINE, LAYER, PURGE, AUDIT, EXPORTPDF and DCL runtime",
+          "optional": false,
+          "resolution": "Current AutoCAD session"
+        }
+      ],
+      "effects": {
+        "executesOnLoad": true,
+        "interactive": true,
+        "modifiesDrawing": true,
+        "modifiesSettings": true,
+        "writesFiles": true,
+        "executesGeneratedCode": true
+      },
+      "ai": {
+        "summary": "Bộ lệnh plumbing tương tác và bridge legacy; dùng keyword chuẩn để agent chọn đúng hệ/phụ kiện.",
+        "whenToUse": [
+          "User cần thao tác MEP plumbing trực tiếp trong AutoCAD.",
+          "Cần điền khung tên, chuẩn hóa layer hoặc xuất PDF sau khi user duyệt."
+        ]
+      },
+      "guardrails": [
+        "System keyword hợp lệ: Xi, Rua, Hoi, Cap; DN phải là số dương.",
+        "MLINE scale=DN giả định drawing dùng mm nhưng source không kiểm tra INSUNITS; xác nhận INSUNITS=4 trước khi vẽ.",
+        "Fitting keyword hợp lệ: Cut, Chech, Te, Tedeu, Y, Ydeu, Con, Sip; material: Upvc hoặc Ppr.",
+        "MEP-LAYERFIX chạy PURGE và AUDIT; luôn yêu cầu xác nhận.",
+        "mep-title sửa mọi ATTRIB có tag khớp trên toàn drawing.",
+        "MEP-PDF ghi file thật từ layout hiện hành.",
+        "ACAD-RUN/MEP-RUN/MR chỉ chạy job đã review trên đúng drawing.",
+        "Load file thay đổi TRUSTEDPATHS và có đường dẫn trust phụ thuộc máy.",
+        "File ghi đè một số symbol trùng với core.lsp nếu được load sau."
+      ],
+      "examples": [
+        "(mep-pipe \"Rua\" 90)",
+        "(mep-fit \"Chech\" \"Upvc\" 90)",
+        "(mep-sym \"Y\" \"Ppr\" 110)",
+        "(mep-title (list (cons \"KHBV\" \"ME-TN-T05\")))"
+      ],
+      "review": {
+        "status": "needs-review",
+        "notes": [
+          "Xác nhận compatibility của DCL và EXPORTPDF trên AutoCAD/version đang chạy.",
+          "Rà soát xung đột symbol với core.lsp."
+        ]
+      }
+    },
+    "acad-lisp/profiles/plumbing.lsp": {
+      "id": "acad-lisp/profiles/plumbing.lsp",
+      "title": "Plumbing profile loader",
+      "format": "lsp",
+      "role": "profile",
+      "sourceReadable": true,
+      "loadMode": "execute-on-load",
+      "purpose": "Profile mỏng để nạp toàn bộ command package mep.lsp.",
+      "commands": [],
+      "publicFunctions": [],
+      "dependencies": [
+        {
+          "kind": "lisp",
+          "path": "acad-lisp/mep.lsp",
+          "optional": false,
+          "resolution": "AutoCAD Support File Search Path"
+        }
+      ],
+      "effects": {
+        "executesOnLoad": true,
+        "interactive": false,
+        "modifiesDrawing": false,
+        "modifiesSettings": true,
+        "writesFiles": false,
+        "executesGeneratedCode": false
+      },
+      "ai": {
+        "summary": "Entry profile cho plumbing; hành vi thật nằm trong mep.lsp.",
+        "whenToUse": [
+          "User bật bộ công cụ plumbing cho session AutoCAD."
+        ]
+      },
+      "guardrails": [
+        "Code tìm mep.lsp theo basename trên Support Path, không resolve trực tiếp ../mep.lsp.",
+        "Áp dụng toàn bộ guardrail của mep.lsp."
+      ],
+      "examples": [
+        "(load \"/absolute/path/acad-lisp/profiles/plumbing.lsp\")"
+      ],
+      "review": {
+        "status": "needs-review",
+        "notes": [
+          "Xác nhận mep.lsp có trong Support Path."
+        ]
+      }
+    },
+    "acad-studio/scripts/extract/dump-detail.lsp": {
+      "id": "acad-studio/scripts/extract/dump-detail.lsp",
+      "title": "Deep drawing detail extractor",
+      "format": "lsp",
+      "role": "extract-script",
+      "sourceReadable": true,
+      "loadMode": "execute-on-load",
+      "purpose": "Dump dimstyle, multileader, layout/viewport, block geometry, MLINE và INSERT để agent phân tích sâu drawing.",
+      "commands": [],
+      "publicFunctions": [],
+      "dependencies": [
+        {
+          "kind": "environment-variable",
+          "path": "ACAD_DUMP_OUT",
+          "optional": true,
+          "resolution": "Fallback /tmp/acad-dump"
+        }
+      ],
+      "outputs": [
+        "dimstyles.txt",
+        "mleaders.txt",
+        "layout-vp.txt",
+        "ents-by-space.txt",
+        "fitting-blocks.txt",
+        "mlstyle.txt",
+        "mlines.csv",
+        "inserts.csv"
+      ],
+      "effects": {
+        "executesOnLoad": true,
+        "interactive": false,
+        "modifiesDrawing": false,
+        "modifiesSettings": false,
+        "writesFiles": true,
+        "executesGeneratedCode": false
+      },
+      "ai": {
+        "summary": "Script read-only đối với drawing nhưng ghi nhiều artifact ngay khi load.",
+        "whenToUse": [
+          "Cần phân tích chi tiết style, layout, viewport, fitting block, MLINE hoặc INSERT."
+        ]
+      },
+      "guardrails": [
+        "Hiển thị cảnh báo CHẠY NGAY KHI LOAD.",
+        "Tạo và xác thực output directory trước khi load.",
+        "Danh sách space được hard-code: Model, 01, 02, 03, KL.",
+        "Không coi helper global dq/n1 là API công khai."
+      ],
+      "examples": [
+        "(setenv \"ACAD_DUMP_OUT\" \"/tmp/acad-dump\")",
+        "(load \"/absolute/path/acad-studio/scripts/extract/dump-detail.lsp\")"
+      ],
+      "review": {
+        "status": "needs-review",
+        "notes": [
+          "Review danh sách layout hard-code trước khi dùng với dự án khác."
+        ]
+      }
+    },
+    "acad-studio/scripts/extract/dump-dims.lsp": {
+      "id": "acad-studio/scripts/extract/dump-dims.lsp",
+      "title": "Dimension extractor",
+      "format": "lsp",
+      "role": "extract-script",
+      "sourceReadable": true,
+      "loadMode": "execute-on-load",
+      "purpose": "Dump DIMENSION, DIMSTYLE và MLEADERSTYLE để agent phân tích kích thước.",
+      "commands": [],
+      "publicFunctions": [],
+      "dependencies": [
+        {
+          "kind": "environment-variable",
+          "path": "ACAD_DUMP_OUT",
+          "optional": true,
+          "resolution": "Fallback /tmp/acad-dump"
+        }
+      ],
+      "outputs": [
+        "dims-detail.csv",
+        "dimstyles-key.csv",
+        "mleaderstyles.txt"
+      ],
+      "effects": {
+        "executesOnLoad": true,
+        "interactive": false,
+        "modifiesDrawing": false,
+        "modifiesSettings": false,
+        "writesFiles": true,
+        "executesGeneratedCode": false
+      },
+      "ai": {
+        "summary": "Extractor chuyên cho dimension/style; load là chạy dump ngay.",
+        "whenToUse": [
+          "Cần hiểu số đo, điểm định nghĩa, DIMPOST, scale, arrow hoặc text style."
+        ]
+      },
+      "guardrails": [
+        "Hiển thị cảnh báo CHẠY NGAY KHI LOAD.",
+        "Tạo và xác thực output directory trước khi load.",
+        "Không coi helper global dq/n1 là API công khai."
+      ],
+      "examples": [
+        "(setenv \"ACAD_DUMP_OUT\" \"/tmp/acad-dump\")",
+        "(load \"/absolute/path/acad-studio/scripts/extract/dump-dims.lsp\")"
+      ],
+      "review": {
+        "status": "needs-review",
+        "notes": [
+          "Xác minh DXF group codes với phiên bản DWG/AutoCAD mục tiêu."
+        ]
+      }
+    },
+    "acad-studio/scripts/extract/dump-tables.lsp": {
+      "id": "acad-studio/scripts/extract/dump-tables.lsp",
+      "title": "Drawing structure extractor",
+      "format": "lsp",
+      "role": "extract-script",
+      "sourceReadable": true,
+      "loadMode": "execute-on-load",
+      "purpose": "Dump header variables; chi tiết layer/style/dim hiện hành; tên một số table/layout; tóm tắt block; entity Model; ATTRIB và MLINE style. Paper-space chỉ được thử bằng filter *Paper_Space*, không duyệt từng layout.",
+      "commands": [],
+      "publicFunctions": [],
+      "dependencies": [
+        {
+          "kind": "environment-variable",
+          "path": "ACAD_DUMP_OUT",
+          "optional": true,
+          "resolution": "Fallback /tmp/acad-dump"
+        }
+      ],
+      "outputs": [
+        "header.txt",
+        "layers.csv",
+        "styles.csv",
+        "tables.txt",
+        "dimvars.txt",
+        "blocks.csv",
+        "layouts.txt",
+        "ents-model.csv",
+        "ents-paper.csv",
+        "attribs.csv",
+        "mlinestyles.txt"
+      ],
+      "effects": {
+        "executesOnLoad": true,
+        "interactive": false,
+        "modifiesDrawing": false,
+        "modifiesSettings": false,
+        "writesFiles": true,
+        "executesGeneratedCode": false
+      },
+      "ai": {
+        "summary": "Snapshot cấu trúc drawing diện rộng để phân tích ban đầu, nhưng không phải dump đầy đủ mọi table record hoặc mọi paper-space layout.",
+        "whenToUse": [
+          "Agent cần inventory diện rộng trước khi đề xuất thao tác hoặc manifest chuyên biệt, đồng thời chấp nhận giới hạn paper-space."
+        ]
+      },
+      "guardrails": [
+        "Hiển thị cảnh báo CHẠY NGAY KHI LOAD.",
+        "Tạo và xác thực output directory trước khi load.",
+        "Chỉ đọc drawing nhưng ghi 11 file output.",
+        "ents-model.csv quét layout Model; ents-paper.csv dùng filter *Paper_Space* và có thể không đại diện các layout có tên.",
+        "Không coi dq/n1/esc/pt2/dump-space là API nghiệp vụ."
+      ],
+      "examples": [
+        "(setenv \"ACAD_DUMP_OUT\" \"/tmp/acad-dump\")",
+        "(load \"/absolute/path/acad-studio/scripts/extract/dump-tables.lsp\")"
+      ],
+      "review": {
+        "status": "needs-review",
+        "notes": [
+          "Review cách chọn *Paper_Space* đối với drawing có nhiều layout."
+        ]
+      }
+    },
+    "acad-studio/scripts/extract/walk.lsp": {
+      "id": "acad-studio/scripts/extract/walk.lsp",
+      "title": "Recursive block geometry walker",
+      "format": "lsp",
+      "role": "extract-script",
+      "sourceReadable": true,
+      "loadMode": "execute-on-load",
+      "purpose": "Duyệt model space và nested block, biến đổi geometry sang tọa độ thế giới rồi xuất CSV mà không EXPLODE drawing.",
+      "commands": [],
+      "publicFunctions": [],
+      "dependencies": [
+        {
+          "kind": "environment-variable",
+          "path": "ACAD_WALK_OUT",
+          "optional": true,
+          "resolution": "Fallback /tmp/walk.csv"
+        }
+      ],
+      "outputs": [
+        "walk.csv"
+      ],
+      "effects": {
+        "executesOnLoad": true,
+        "interactive": false,
+        "modifiesDrawing": false,
+        "modifiesSettings": false,
+        "writesFiles": true,
+        "executesGeneratedCode": false
+      },
+      "ai": {
+        "summary": "Extractor geometry nested block sang world coordinates, tối đa sáu cấp.",
+        "whenToUse": [
+          "Cần phân tích hình học thật nằm trong block lồng nhau mà không sửa drawing."
+        ]
+      },
+      "guardrails": [
+        "Hiển thị cảnh báo CHẠY NGAY KHI LOAD.",
+        "Xác thực output path trước khi chạy.",
+        "Độ sâu recursion tối đa là 6.",
+        "Scale bán kính/chiều cao dựa trên X scale; cần review block non-uniform scale.",
+        "Không coi các helper dq/n2/xf/sc/compose/emit/do-ent/walk-block là API nghiệp vụ."
+      ],
+      "examples": [
+        "(setenv \"ACAD_WALK_OUT\" \"/tmp/walk.csv\")",
+        "(load \"/absolute/path/acad-studio/scripts/extract/walk.lsp\")"
+      ],
+      "review": {
+        "status": "needs-review",
+        "notes": [
+          "Kiểm tra kết quả với nested block có rotation và non-uniform scale."
+        ]
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 /**
  * Contract tests: ~/Acad-Bridge + job.lsp + atomic write + raw.job builder.
- * Drives shipped bridgeContract, acadBridge, rawJob — no CAD required.
+ * Drives shipped bridgeContract, acadBridge, drawing-info, rawJob — no CAD required.
  *
  * Run: cd acad-studio/apps/daemon && npx tsx scripts/test-bridge-contract.mjs
  */
@@ -12,6 +12,7 @@ import {
   rmSync,
   readdirSync,
   renameSync,
+  utimesSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,6 +48,8 @@ function assert(cond, msg) {
 // ── Defaults: Acad-Bridge / job.lsp / AcadBridge ──
 assert(contract.BRIDGE_DIR_NAME === "Acad-Bridge", "BRIDGE_DIR_NAME is Acad-Bridge");
 assert(contract.JOB_LSP_NAME === "job.lsp", "JOB_LSP_NAME is job.lsp");
+assert(contract.DRAWING_INFO_REQUEST_NAME === "drawing-info.req", "drawing-info request filename");
+assert(contract.DRAWING_INFO_RESPONSE_NAME === "drawing-info.json", "drawing-info response filename");
 assert(contract.PLUGIN_BUNDLE_NAME === "Acad-Bridge.bundle", "plugin bundle Acad-Bridge");
 assert(contract.PLUGIN_BINARY_NAME === "AcadBridge", "plugin binary AcadBridge");
 assert(contract.PRODUCT.plugin === "AcadBridge", "PRODUCT.plugin AcadBridge");
@@ -112,6 +115,64 @@ assert(onDisk === body, "atomic write content matches");
 // No leftover half-written permanent path (tmp cleaned by rename)
 const leftovers = readdirSync(bridgeDir).filter((f) => f.endsWith(".tmp"));
 assert(leftovers.length === 0, "no .tmp left after atomic rename");
+
+// ── Drawing-info request/response protocol ──
+const drawingReqPath = contract.drawingInfoRequestPath(bridgeDir);
+const drawingResPath = contract.drawingInfoResponsePath(bridgeDir);
+assert(drawingReqPath === join(bridgeDir, "drawing-info.req"), "drawing-info request path");
+assert(drawingResPath === join(bridgeDir, "drawing-info.json"), "drawing-info response path");
+
+const drawingReqBody = bridge.buildDrawingInfoRequest(
+  "req-123",
+  "/tmp/Bản vẽ đang mở.dwg",
+);
+assert(
+  drawingReqBody === "req-123\n/tmp/Bản vẽ đang mở.dwg",
+  "drawing-info body keeps exact target after requestId",
+);
+assert(
+  bridge.buildDrawingInfoRequest("req-empty") === "req-empty\n",
+  "drawing-info body represents empty target",
+);
+let invalidDrawingRequestRejected = false;
+try {
+  bridge.buildDrawingInfoRequest("bad\nrequest", "Drawing1.dwg");
+} catch {
+  invalidDrawingRequestRejected = true;
+}
+assert(invalidDrawingRequestRejected, "drawing-info rejects multiline requestId");
+
+const drawingStartedAt = Date.now() - 100;
+writeFileSync(
+  drawingResPath,
+  JSON.stringify({ requestId: "req-123", ok: true, document: { title: "Drawing1.dwg" } }),
+  "utf8",
+);
+const drawingParsed = bridge.readDrawingInfoResponse(
+  drawingResPath,
+  "req-123",
+  drawingStartedAt,
+);
+assert(drawingParsed?.requestId === "req-123" && drawingParsed.ok === true, "drawing-info parses fresh matching response");
+
+writeFileSync(drawingResPath, JSON.stringify({ requestId: "old-request", ok: true }), "utf8");
+assert(
+  bridge.readDrawingInfoResponse(drawingResPath, "req-123", drawingStartedAt) === null,
+  "drawing-info ignores response for stale requestId",
+);
+
+writeFileSync(drawingResPath, "{not-json", "utf8");
+assert(
+  bridge.readDrawingInfoResponse(drawingResPath, "req-123", drawingStartedAt) === null,
+  "drawing-info ignores malformed response",
+);
+
+writeFileSync(drawingResPath, JSON.stringify({ requestId: "req-123", ok: true }), "utf8");
+utimesSync(drawingResPath, new Date(0), new Date(0));
+assert(
+  bridge.readDrawingInfoResponse(drawingResPath, "req-123", Date.now()) === null,
+  "drawing-info ignores response older than request",
+);
 
 // Simulate LISP result poll
 writeFileSync(
@@ -194,9 +255,31 @@ assert(plugChk && plugChk.label.includes("AcadBridge"), "health plugin label Aca
 const bridgeSrc = readFileSync(join(__dirname, "../src/bridgeContract.ts"), "utf8");
 assert(bridgeSrc.includes('BRIDGE_DIR_NAME = "Acad-Bridge"'), "source BRIDGE_DIR_NAME");
 assert(bridgeSrc.includes('JOB_LSP_NAME = "job.lsp"'), "source JOB_LSP_NAME");
+assert(bridgeSrc.includes('DRAWING_INFO_REQUEST_NAME = "drawing-info.req"'), "source drawing-info request name");
+assert(bridgeSrc.includes('DRAWING_INFO_RESPONSE_NAME = "drawing-info.json"'), "source drawing-info response name");
+const acadBridgeSrc = readFileSync(join(__dirname, "../src/acadBridge.ts"), "utf8");
+assert(acadBridgeSrc.includes('r.get("/drawing-info"'), "drawing-info HTTP route wired");
+assert(acadBridgeSrc.includes("requestDrawingInfo(exactTarget)"), "drawing-info route sends exact target");
+assert(!acadBridgeSrc.includes("globSync("), "daemon avoids Node 22-only fs.globSync");
+for (const file of ["liveDraw.ts", "livePreview.ts", "session.ts"]) {
+  const source = readFileSync(join(__dirname, "../src", file), "utf8");
+  assert(source.includes("dispatchLiveJob"), `${file} uses shared live-job queue`);
+  assert(!source.includes('join(BRIDGE(), "job.lsp")'), `${file} does not write shared job.lsp directly`);
+}
 const arxCpp = readFileSync(join(__dirname, "../../../../objectarx/mepbridge.cpp"), "utf8");
 assert(arxCpp.includes("/Acad-Bridge"), "plugin default path Acad-Bridge");
 assert(arxCpp.includes('"/job.lsp"') || arxCpp.includes("/job.lsp"), "plugin watches job.lsp");
+assert(arxCpp.includes('"/drawing-info.req"'), "plugin watches drawing-info.req");
+assert(arxCpp.includes("findDocExact"), "drawing-info resolves exact document target");
+assert(arxCpp.includes("snapshotJobFile"), "plugin snapshots queued job bytes before async execution");
+assert(arxCpp.includes("/job-snapshots"), "plugin stores async job snapshots under bridge");
+const drawingInfoBlock = arxCpp.slice(
+  arxCpp.indexOf("// ============================ drawing-info: snapshot read-only"),
+  arxCpp.indexOf("// ============================ chay job"),
+);
+assert(drawingInfoBlock.length > 0, "drawing-info native snapshot block found");
+assert(!drawingInfoBlock.includes("kForWrite"), "drawing-info snapshot opens no database object for write");
+assert(drawingInfoBlock.includes("pluginVersion"), "drawing-info reports plugin version");
 assert(arxCpp.includes("AcadBridge"), "plugin product AcadBridge");
 assert(arxCpp.includes("ACADARX"), "plugin registers ACADARX");
 const pkg = readFileSync(join(__dirname, "../../../../objectarx/PackageContents.xml"), "utf8");

@@ -6,7 +6,7 @@
  */
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, globSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import express, { type Router } from "express";
@@ -44,6 +44,8 @@ import {
 import {
   PRODUCT,
   atomicWriteFile,
+  drawingInfoRequestPath,
+  drawingInfoResponsePath,
   ensureBridgeLayout,
   jobLspPath,
   resolveBridgeDir,
@@ -55,13 +57,17 @@ export function acadLib(): string {
   if (process.env.ACAD_LIB || process.env.MEP_ACAD_LIB) {
     return process.env.ACAD_LIB || process.env.MEP_ACAD_LIB!;
   }
-  const root =
+  const projectRoot =
     process.env.ACAD_PROJECT_ROOT ||
     process.env.MEP_PROJECT_ROOT ||
     join(homedir(), "Desktop", "tool-autocad");
+  const assetRoot =
+    process.env.ACAD_ASSET_ROOT ||
+    process.env.ACAD_BUNDLED_LISP_ROOT ||
+    projectRoot;
   // Prefer generic core lib; fall back to legacy mep_lib.lsp path.
-  const core = join(root, "acad-lisp/headless/acad_lib.lsp");
-  const legacy = join(root, "acad-lisp/headless/mep_lib.lsp");
+  const core = join(assetRoot, "acad-lisp/headless/acad_lib.lsp");
+  const legacy = join(assetRoot, "acad-lisp/headless/mep_lib.lsp");
   return existsSync(core) ? core : legacy;
 }
 
@@ -176,9 +182,17 @@ function getJobLsp(): string {
 
 export function findAcadApp(): string | null {
   // Chỉ nhận app chính "AutoCAD <năm>.app" (loại Plot Style Editor, Remove AutoCAD...).
-  const hits = globSync("/Applications/Autodesk/AutoCAD */AutoCAD *.app")
-    .filter((p) => /\/AutoCAD \d{4}\.app$/.test(p))
-    .sort();
+  const root = "/Applications/Autodesk";
+  let hits: string[] = [];
+  try {
+    hits = readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && /^AutoCAD \d{4}$/.test(entry.name))
+      .map((entry) => join(root, entry.name, `${entry.name}.app`))
+      .filter((path) => existsSync(path))
+      .sort();
+  } catch {
+    /* Autodesk directory missing */
+  }
   return hits.length ? hits[hits.length - 1] : null;
 }
 export function findCoreConsole(): string | null {
@@ -237,18 +251,6 @@ function atomicWrite(path: string, content: string): void {
   atomicWriteFile(path, content);
 }
 
-/**
- * Ghi 1 job LISP (đã bọc result) vào ~/Acad-Bridge/job.lsp —
- * plugin AcadBridge tự chạy, hoặc gõ ACAD-RUN / MEP-RUN (alias).
- * target: tên/đường dẫn bản vẽ đích đang mở trong AutoCAD.
- */
-export function writeLiveJob(lisp: string, target?: string): string {
-  ensureBridgeDirs();
-  writeFileSync(join(getBridgeDir(), "job_target.txt"), target ? String(target) : "", "utf8");
-  atomicWrite(getJobLsp(), wrapJob(randomUUID().slice(0, 8), lisp));
-  return getJobLsp();
-}
-
 /** Nội dung acad_lib/mep_lib để NHÚNG THẲNG vào job (không (load) lồng → không SECURELOAD lần 2). */
 export function inlineLib(): string {
   try { return readFileSync(acadLib(), "utf8") + "\n"; } catch { return ""; }
@@ -272,6 +274,137 @@ export async function listOpenDocs(timeoutMs = 3000):
     await new Promise((r) => setTimeout(r, 150));
   }
   return { alive: false, docs: [] };
+}
+
+export type DrawingInfoPluginSnapshot = {
+  requestId: string;
+  ok?: boolean;
+  status?: string;
+  code?: string;
+  error?: string;
+  [key: string]: unknown;
+};
+
+/** Protocol body: line 1 is requestId; the remaining text is the exact document target. */
+export function buildDrawingInfoRequest(requestId: string, target = ""): string {
+  if (!requestId || /[\r\n]/.test(requestId)) {
+    throw new Error("drawing-info requestId must be one non-empty line");
+  }
+  return `${requestId}\n${target}`;
+}
+
+/** Parse only the response belonging to this request; malformed/stale data is ignored. */
+export function parseDrawingInfoResponse(
+  raw: string,
+  expectedRequestId: string,
+): DrawingInfoPluginSnapshot | null {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const snapshot = value as Record<string, unknown>;
+    if (snapshot.requestId !== expectedRequestId) return null;
+    return snapshot as DrawingInfoPluginSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+export function isDrawingInfoResponseFresh(mtimeMs: number, requestStartedAt: number): boolean {
+  return Number.isFinite(mtimeMs) && mtimeMs >= requestStartedAt - 50;
+}
+
+/** Read a complete, fresh response for requestId. Exported for contract tests. */
+export function readDrawingInfoResponse(
+  path: string,
+  requestId: string,
+  requestStartedAt: number,
+): DrawingInfoPluginSnapshot | null {
+  try {
+    const st = statSync(path);
+    if (!isDrawingInfoResponseFresh(st.mtimeMs, requestStartedAt)) return null;
+    return parseDrawingInfoResponse(readFileSync(path, "utf8"), requestId);
+  } catch {
+    return null;
+  }
+}
+
+let drawingInfoQueue: Promise<void> = Promise.resolve();
+
+async function withDrawingInfoLock<T>(run: () => Promise<T>): Promise<T> {
+  const previous = drawingInfoQueue;
+  let release!: () => void;
+  drawingInfoQueue = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+  }
+}
+
+async function requestDrawingInfo(target: string, timeoutMs = 8000):
+  Promise<DrawingInfoPluginSnapshot | null> {
+  return withDrawingInfoLock(async () => {
+    ensureBridgeDirs();
+    const bridgeDir = getBridgeDir();
+    const requestId = randomUUID();
+    const requestStartedAt = Date.now();
+    atomicWrite(
+      drawingInfoRequestPath(bridgeDir),
+      buildDrawingInfoRequest(requestId, target),
+    );
+    const responsePath = drawingInfoResponsePath(bridgeDir);
+    while (Date.now() - requestStartedAt < timeoutMs) {
+      const snapshot = readDrawingInfoResponse(
+        responsePath,
+        requestId,
+        requestStartedAt,
+      );
+      if (snapshot) return snapshot;
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    return null;
+  });
+}
+
+function drawingFileInfo(path: string): {
+  exists: boolean;
+  sizeBytes: number | null;
+  createdAt: string | null;
+  modifiedAt: string | null;
+} {
+  if (!path) return { exists: false, sizeBytes: null, createdAt: null, modifiedAt: null };
+  try {
+    const st = statSync(path);
+    return {
+      exists: true,
+      sizeBytes: st.size,
+      createdAt: st.birthtime.toISOString(),
+      modifiedAt: st.mtime.toISOString(),
+    };
+  } catch {
+    return { exists: false, sizeBytes: null, createdAt: null, modifiedAt: null };
+  }
+}
+
+function drawingInfoRuntime(
+  running: boolean,
+  alive: boolean,
+  documents: { title: string; file: string; active: boolean }[],
+  filePath = "",
+) {
+  return {
+    running,
+    alive,
+    collectedAt: new Date().toISOString(),
+    documents,
+    application: {
+      appPath: findAcadApp(),
+      coreConsole: findCoreConsole(),
+      bridgeDir: getBridgeDir(),
+    },
+    file: drawingFileInfo(filePath),
+  };
 }
 
 /** Escape chuỗi cho AutoLISP. */
@@ -314,6 +447,32 @@ interface JobRecord {
 }
 let activeJob: JobRecord | null = null;
 const history: JobRecord[] = [];
+let liveJobQueue: Promise<void> = Promise.resolve();
+let liveJobPending = 0;
+
+async function acquireLiveJobLock(): Promise<() => void> {
+  liveJobPending++;
+  const previous = liveJobQueue;
+  let release!: () => void;
+  liveJobQueue = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    release();
+    liveJobPending--;
+  };
+}
+
+function rememberJob(job: JobRecord): void {
+  const prior = history.findIndex((entry) => entry.jobId === job.jobId);
+  if (prior >= 0) history.splice(prior, 1);
+  history.unshift({ ...job });
+  history.splice(20);
+}
 
 /** Parse result file written by wrapJob (status=… / message / ==end==). Exported for tests. */
 export function parseJobResultText(raw: string): { status: string; message: string } | null {
@@ -331,18 +490,60 @@ function readResult(jobId: string, resultsDir?: string): { status: string; messa
   return parseJobResultText(readFileSync(p, "utf8"));
 }
 
-async function pollResult(jobId: string, waitMs: number): Promise<JobRecord["state"]> {
+async function pollResult(job: JobRecord, waitMs: number): Promise<JobRecord["state"]> {
   const t0 = Date.now();
   while (Date.now() - t0 < waitMs) {
-    const r = readResult(jobId);
+    const r = readResult(job.jobId);
     if (r) {
-      activeJob!.result = r;
-      activeJob!.state = r.status === "ok" ? "done" : "error";
-      return activeJob!.state;
+      job.result = r;
+      job.state = r.status === "ok" ? "done" : "error";
+      return job.state;
     }
     await new Promise((s) => setTimeout(s, 400));
   }
   return "sent"; // chưa xong — client có thể GET /job/:id sau
+}
+
+/**
+ * Gửi một payload qua file bridge và chờ kết quả.
+ * Exported để các router chuyên biệt (ví dụ thư viện AutoLISP) không phải
+ * tự ghi job.lsp hoặc sao chép protocol.
+ */
+export async function dispatchLiveJob(
+  lisp: string,
+  target: string | undefined,
+  wait: number,
+) {
+  const release = await acquireLiveJobLock();
+  let backgroundOwnsRelease = false;
+  try {
+    const jobId = randomUUID().slice(0, 8);
+    ensureBridgeDirs();
+    writeFileSync(join(getBridgeDir(), "job_target.txt"), target ? String(target) : "", "utf8");
+    atomicWrite(getJobLsp(), wrapJob(jobId, lisp));
+    const job: JobRecord = { jobId, state: "sent", createdAt: Date.now() };
+    activeJob = job;
+    const state = await pollResult(job, wait);
+    rememberJob(job);
+    if (state === "sent") {
+      // The HTTP caller may stop waiting, but job.lsp is still a shared
+      // transport. Keep ownership in the background so another feature cannot
+      // overwrite a delayed AutoCAD load.
+      backgroundOwnsRelease = true;
+      void (async () => {
+        try {
+          const settled = await pollResult(job, 120_000);
+          if (settled === "sent") job.state = "timeout";
+          rememberJob(job);
+        } finally {
+          release();
+        }
+      })();
+    }
+    return { jobId, state, result: job.result ?? null };
+  } finally {
+    if (!backgroundOwnsRelease) release();
+  }
 }
 
 export function acadBridgeRouter(): Router {
@@ -361,18 +562,6 @@ export function acadBridgeRouter(): Router {
         getBridgeDir() + "/...",
     });
   });
-
-  // Gửi 1 job LISP vào AutoCAD đang mở và chờ kết quả (dùng chung cho /job + /livequery).
-  async function dispatchLiveJob(lisp: string, target: string | undefined, wait: number) {
-    const jobId = randomUUID().slice(0, 8);
-    ensureBridgeDirs();
-    writeFileSync(join(getBridgeDir(), "job_target.txt"), target ? String(target) : "", "utf8");
-    atomicWrite(getJobLsp(), wrapJob(jobId, lisp));
-    activeJob = { jobId, state: "sent", createdAt: Date.now() };
-    const state = await pollResult(jobId, wait);
-    history.unshift({ ...activeJob! }); history.splice(20);
-    return { jobId, state, result: activeJob!.result ?? null };
-  }
 
   // Sự kiện realtime từ AutoCAD (plugin ghi events.jsonl qua reactor) — SSE.
   r.get("/events", (req, res) => {
@@ -603,6 +792,88 @@ export function acadBridgeRouter(): Router {
     });
   });
 
+  // Snapshot read-only của đúng bản vẽ đang mở, qua protocol drawing-info.req/json.
+  r.get("/drawing-info", async (req, res) => {
+    const queryTarget = req.query.target;
+    const running = await acadRunning();
+    if (queryTarget !== undefined && typeof queryTarget !== "string") {
+      return res.status(400).json({
+        ok: false,
+        status: "invalid_target",
+        code: "invalid_target",
+        error: "target phải là một title hoặc file path",
+        ...drawingInfoRuntime(running, false, []),
+      });
+    }
+
+    if (!running) {
+      return res.status(503).json({
+        ok: false,
+        status: "not_running",
+        code: "not_running",
+        error: "AutoCAD chưa chạy",
+        ...drawingInfoRuntime(false, false, []),
+      });
+    }
+
+    const open = await listOpenDocs();
+    if (!open.alive) {
+      return res.status(503).json({
+        ok: false,
+        status: "plugin_unavailable",
+        code: "plugin_unavailable",
+        error: "Plugin AcadBridge không phản hồi",
+        ...drawingInfoRuntime(true, false, open.docs),
+      });
+    }
+
+    const requestedTarget = queryTarget ?? "";
+    const document = requestedTarget
+      ? open.docs.find((doc) => doc.title === requestedTarget || doc.file === requestedTarget)
+      : open.docs.find((doc) => doc.active);
+    const exactTarget = document?.file || document?.title || "";
+    if (!document || !exactTarget) {
+      const status = requestedTarget ? "not_found" : "active_document_not_found";
+      return res.status(404).json({
+        ok: false,
+        status,
+        code: "not_found",
+        error: requestedTarget
+          ? "Không thấy bản vẽ đang mở khớp chính xác target"
+          : "Không thấy bản vẽ active",
+        ...drawingInfoRuntime(true, true, open.docs),
+      });
+    }
+
+    const snapshot = await requestDrawingInfo(exactTarget);
+    if (!snapshot) {
+      return res.status(504).json({
+        ok: false,
+        status: "timeout",
+        code: "timeout",
+        error: "Plugin không trả drawing-info.json hợp lệ trong 8 giây",
+        ...drawingInfoRuntime(true, true, open.docs, document.file),
+      });
+    }
+
+    const pluginCode = typeof snapshot.code === "string" ? snapshot.code.toLowerCase() : "";
+    const ok = snapshot.ok !== false && pluginCode !== "busy" && pluginCode !== "not_found";
+    const status = typeof snapshot.status === "string" && snapshot.status
+      ? snapshot.status
+      : ok ? "ok" : pluginCode || "error";
+    const httpStatus = pluginCode === "busy"
+      ? 409
+      : pluginCode === "not_found"
+        ? 404
+        : ok ? 200 : 502;
+    return res.status(httpStatus).json({
+      ...snapshot,
+      ok,
+      status,
+      ...drawingInfoRuntime(true, true, open.docs, document.file),
+    });
+  });
+
   // Kiểm tra cấu hình AutoCAD/plugin — checklist + stability (CER vs root cause).
   r.get("/health", async (_req, res) => {
     const projectRoot = process.env.MEP_PROJECT_ROOT || join(homedir(), "Desktop", "tool-autocad");
@@ -796,36 +1067,55 @@ export function acadBridgeRouter(): Router {
   r.post("/job", async (req, res) => {
     const { lisp, wait = 15000 } = req.body ?? {};
     if (!lisp) return res.status(400).json({ error: "Thiếu 'lisp' (payload AutoLISP)" });
-    if (activeJob && activeJob.state === "sent" && Date.now() - activeJob.createdAt < 120000)
-      return res.status(409).json({ error: "Đang có job chạy dở", jobId: activeJob.jobId });
+    if (
+      liveJobPending > 0 ||
+      (activeJob && activeJob.state === "sent" && Date.now() - activeJob.createdAt < 120000)
+    )
+      return res.status(409).json({ error: "Đang có job chạy dở", jobId: activeJob?.jobId });
     if (!(await acadRunning()))
       return res.status(400).json({ error: "AutoCAD chưa chạy — POST /api/acad/open trước" });
 
-    const jobId = randomUUID().slice(0, 8);
-    ensureBridgeDirs();
-    writeFileSync(join(getBridgeDir(), "job_target.txt"), req.body?.target ? String(req.body.target) : "", "utf8");
-    atomicWrite(getJobLsp(), wrapJob(jobId, lisp));
-    activeJob = { jobId, state: "pending", createdAt: Date.now() };
-
-    const app = findAcadApp()!;
-    const loadForm = `(load "${getJobLsp().replace(/\\/g, "\\\\")}")`;
-    const trigger = req.body?.trigger || "run"; // "run" = native MEP-RUN (không Accessibility); "keystroke" = tự bơm
-
-    // Cách NATIVE (khuyên dùng): job đã ghi sẵn, người dùng gõ MEP-RUN trong AutoCAD.
-    // Không cần Accessibility, không kẹt bộ gõ tiếng Việt.
+    const trigger = req.body?.trigger || "run"; // "run" = plugin bridge; "keystroke" = tự bơm
     if (trigger === "run") {
-      activeJob!.state = "sent";
-      const state = await pollResult(jobId, wait);
-      history.unshift({ ...activeJob! }); history.splice(20);
-      return res.json({ jobId, state, result: activeJob!.result ?? null,
-        hint: state === "sent" ? "Job đã sẵn ở " + getJobLsp() + ". Trong AutoCAD gõ MEP-RUN (hoặc bấm nút MEP-RUN) để chạy." : undefined });
+      const out = await dispatchLiveJob(
+        String(lisp),
+        req.body?.target ? String(req.body.target) : undefined,
+        wait,
+      );
+      return res.json({
+        ...out,
+        hint:
+          out.state === "sent"
+            ? "Job đã sẵn ở " + getJobLsp() + ". Trong AutoCAD gõ MEP-RUN (hoặc bấm nút MEP-RUN) để chạy."
+            : undefined,
+      });
     }
 
-    // Cách KEYSTROKE (tự động, cần Accessibility): DÁN qua clipboard để bỏ qua bộ gõ tiếng Việt.
-    await new Promise<void>((resolve) => {
-      const pb = spawn("pbcopy"); pb.on("close", () => resolve()); pb.on("error", () => resolve()); pb.stdin.end(loadForm);
-    });
-    const scpt = `tell application "${app}" to activate
+    const release = await acquireLiveJobLock();
+    let backgroundOwnsRelease = false;
+    try {
+      const jobId = randomUUID().slice(0, 8);
+      ensureBridgeDirs();
+      writeFileSync(
+        join(getBridgeDir(), "job_target.txt"),
+        req.body?.target ? String(req.body.target) : "",
+        "utf8",
+      );
+      atomicWrite(getJobLsp(), wrapJob(jobId, lisp));
+      const job: JobRecord = { jobId, state: "pending", createdAt: Date.now() };
+      activeJob = job;
+
+      const app = findAcadApp()!;
+      const loadForm = `(load "${getJobLsp().replace(/\\/g, "\\\\")}")`;
+
+      // Cách KEYSTROKE (tự động, cần Accessibility): DÁN qua clipboard để bỏ qua bộ gõ tiếng Việt.
+      await new Promise<void>((resolve) => {
+        const pb = spawn("pbcopy");
+        pb.on("close", () => resolve());
+        pb.on("error", () => resolve());
+        pb.stdin.end(loadForm);
+      });
+      const scpt = `tell application "${app}" to activate
 delay 0.8
 tell application "System Events"
   key code 53
@@ -835,10 +1125,15 @@ tell application "System Events"
   delay 0.2
   key code 36
 end tell`;
-    execFile("osascript", ["-e", scpt], async (err, _o, stderr) => {
+      const keyError = await new Promise<{ err: Error | null; stderr: string }>((resolve) => {
+        execFile("osascript", ["-e", scpt], (err, _o, stderr) =>
+          resolve({ err, stderr: stderr || "" }));
+      });
+      const { err, stderr } = keyError;
       const msg = (stderr || String(err || "")).toLowerCase();
       if (err && /assistive|1002|-1728|1743|not allowed/.test(msg)) {
-        activeJob!.state = "error";
+        job.state = "error";
+        rememberJob(job);
         return res.status(403).json({
           jobId, state: "error",
           error: "Chưa có quyền Accessibility cho Acad Studio (System Settings › Privacy & Security › Accessibility). " +
@@ -846,12 +1141,26 @@ end tell`;
           manualLisp: loadForm,
         });
       }
-      activeJob!.state = "sent";
-      const state = await pollResult(jobId, wait);
-      history.unshift({ ...activeJob! }); history.splice(20);
-      res.json({ jobId, state, result: activeJob!.result ?? null,
+      job.state = "sent";
+      const state = await pollResult(job, wait);
+      rememberJob(job);
+      if (state === "sent") {
+        backgroundOwnsRelease = true;
+        void (async () => {
+          try {
+            const settled = await pollResult(job, 120_000);
+            if (settled === "sent") job.state = "timeout";
+            rememberJob(job);
+          } finally {
+            release();
+          }
+        })();
+      }
+      return res.json({ jobId, state, result: job.result ?? null,
         hint: state === "sent" ? "Nếu AutoCAD hiện SECURELOAD bấm 'Load'; hoặc gõ MEP-RUN." : undefined });
-    });
+    } finally {
+      if (!backgroundOwnsRelease) release();
+    }
   });
 
   r.get("/job/:id", (req, res) => {
@@ -865,8 +1174,11 @@ end tell`;
   // Hộp thoại chọn file/thư mục native (macOS) — trả path tuyệt đối.
   r.post("/pick", (req, res) => {
     const kind = (req.body ?? {}).kind;
+    const purpose = (req.body ?? {}).purpose;
     const script = kind === "folder"
-      ? 'POSIX path of (choose folder with prompt "Chọn thư mục bản vẽ")'
+      ? purpose === "lisp-library"
+        ? 'POSIX path of (choose folder with prompt "Chọn thư mục chứa LISP / DCL / FAS / VLX")'
+        : 'POSIX path of (choose folder with prompt "Chọn thư mục bản vẽ")'
       : 'POSIX path of (choose file with prompt "Chọn bản vẽ (.dwg)" of type {"dwg"})';
     execFile("osascript", ["-e", script], (err, stdout) => {
       if (err) return res.json({ cancelled: true });
@@ -942,7 +1254,17 @@ end tell`;
     const recipe = req.params.recipe;
     const { dwgs, dir, params = {}, save = "copy", outDir, timeoutMs = 120000 } = req.body ?? {};
     let files: string[] = Array.isArray(dwgs) ? dwgs : [];
-    if (dir) files = files.concat(globSync(join(dir, "*.dwg")));
+    if (dir) {
+      try {
+        files = files.concat(
+          readdirSync(String(dir), { withFileTypes: true })
+            .filter((entry) => entry.isFile() && /\.dwg$/i.test(entry.name))
+            .map((entry) => join(String(dir), entry.name)),
+        );
+      } catch {
+        /* validation below reports an empty input */
+      }
+    }
     files = [...new Set(files)].filter((f) => existsSync(f));
     if (!files.length && recipe === "drawpipes") files = [""]; // vẽ vào bản vẽ mới (trống)
     if (!files.length) return res.status(400).json({ error: "Cần 'dwgs' (mảng path) hoặc 'dir'" });

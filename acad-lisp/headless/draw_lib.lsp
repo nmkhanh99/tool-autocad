@@ -10,7 +10,8 @@
 ;;;    - Hàm vẽ trả về ename của entity vừa tạo (hoặc nil khi hỏng).
 ;;;    - Hàm "ensure" (layer/style/dimstyle/mlinestyle) idempotent: gọi lại
 ;;;      nhiều lần không tạo trùng.
-;;;    - Toạ độ = list (x y) hoặc (x y z), đơn vị mm (INSUNITS=4).
+;;;    - Toạ độ = list (x y) hoặc (x y z), theo drawing units hiện tại.
+;;;      Các profile/ví dụ MEP giả định INSUNITS=4 (mm); caller phải kiểm tra.
 ;;;
 ;;;  Nạp: (load "/abs/path/acad-lisp/headless/draw_lib.lsp")
 ;;; ============================================================================
@@ -603,54 +604,208 @@
 ;;; Hợp đồng wait-apply: vẽ lên layer preview riêng của op, KHÔNG đụng layer đích
 ;;; cho tới khi user chấp nhận.
 
+(if (not (boundp '*DL-PREVIEW-ACTIVE*))
+  (setq *DL-PREVIEW-ACTIVE* '()))
+(setq *DL-PREVIEW-XDATA-APP* "ACADPREVIEW")
+
 (defun dl:preview-layer (opid) (strcat "ACAD-PREVIEW-" opid))
 
-(defun dl:preview-begin (opid / lay)
-  "Tạo + set layer preview (màu 30 - cam) cho op này."
-  (setq lay (dl:preview-layer opid))
-  (dl:layer lay 30 nil)
-  (setvar "CLAYER" lay)
-  lay)
+(defun dl:preview-key (opid)
+  (if (and (= (type opid) 'STR) (> (strlen opid) 0)) (strcase opid) nil))
 
-(defun dl:preview-count (opid / ss)
-  (setq ss (ssget "_X" (list (cons 8 (dl:preview-layer opid)))))
-  (if ss (sslength ss) 0))
+(defun dl:preview-entry (opid / key)
+  (setq key (dl:preview-key opid))
+  (if key (assoc key *DL-PREVIEW-ACTIVE*) nil))
 
-(defun dl:preview-apply (opid destlayer / ss i n en el)
+(defun dl:preview-state (opid / en data record appdata stored)
+  "State trên layer: 1=ACTIVE, 2=CONFLICT, 3=APPLIED, 4=REJECTED, 5=SEALED."
+  (setq en (tblobjname "LAYER" (dl:preview-layer opid)))
+  (if (and en (tblsearch "APPID" *DL-PREVIEW-XDATA-APP*))
+    (progn
+      (setq data (entget en (list *DL-PREVIEW-XDATA-APP*))
+            record (assoc -3 data)
+            appdata (if record (cadr record) nil)
+            stored (if appdata (cdr (assoc 1000 (cdr appdata))) nil))
+      (if (and stored (= (strcase stored) (strcase opid)))
+        (cdr (assoc 1070 (cdr appdata)))
+        nil))
+    nil))
+
+(defun dl:preview-set-state (opid state / en data old xdata)
+  (setq en (tblobjname "LAYER" (dl:preview-layer opid)))
+  (if en
+    (progn
+      (if (not (tblsearch "APPID" *DL-PREVIEW-XDATA-APP*))
+        (regapp *DL-PREVIEW-XDATA-APP*))
+      (if (tblsearch "APPID" *DL-PREVIEW-XDATA-APP*)
+        (progn
+          (setq data (entget en (list *DL-PREVIEW-XDATA-APP*))
+                old (assoc -3 data)
+                xdata (list -3
+                  (list *DL-PREVIEW-XDATA-APP*
+                        (cons 1000 opid) (cons 1070 state))))
+          (entmod (if old (subst xdata old data) (append data (list xdata)))))
+        nil))
+    nil))
+
+(defun dl:preview-active-p (opid)
+  (equal (dl:preview-state opid) 1))
+
+(defun dl:preview-sealed-p (opid)
+  (equal (dl:preview-state opid) 5))
+
+(defun dl:preview-owned-p (en opid / data record appdata strings item handle)
+  (setq data (entget en (list *DL-PREVIEW-XDATA-APP*))
+        record (assoc -3 data)
+        appdata (if record (cadr record) nil)
+        strings '())
+  (if appdata
+    (foreach item (cdr appdata)
+      (if (= (car item) 1000) (setq strings (cons (cdr item) strings)))))
+  (setq strings (reverse strings)
+        handle (cdr (assoc 5 data)))
+  (and (= (length strings) 2)
+       (= (strcase (car strings)) (strcase opid))
+       (= (strcase (cadr strings)) (strcase handle))
+       (equal (cdr (assoc 1070 (cdr appdata))) 10)))
+
+(defun dl:preview-tag (en opid / data old handle xdata)
+  (setq data (entget en (list *DL-PREVIEW-XDATA-APP*))
+        old (assoc -3 data)
+        handle (cdr (assoc 5 data))
+        xdata (list -3
+          (list *DL-PREVIEW-XDATA-APP*
+                (cons 1000 opid) (cons 1000 handle) (cons 1070 10))))
+  (entmod (if old (subst xdata old data) (append data (list xdata)))))
+
+(defun dl:preview-conflict (opid / entry replacement)
+  (setq entry (dl:preview-entry opid))
+  (if entry
+    (progn
+      (setq replacement (list (car entry) (cadr entry) "CONFLICT"))
+      (setq *DL-PREVIEW-ACTIVE*
+        (subst replacement entry *DL-PREVIEW-ACTIVE*))))
+  (dl:preview-set-state opid 2)
+  nil)
+
+(defun dl:preview-close (opid / entry key old lay keep item)
+  (setq entry (dl:preview-entry opid)
+        key (dl:preview-key opid)
+        lay (dl:preview-layer opid))
+  (setq old (if entry (cadr entry) "0"))
+  (if (= (strcase (getvar "CLAYER")) (strcase lay))
+    (setvar "CLAYER" (if (tblsearch "LAYER" old) old "0")))
+  (if entry
+    (progn
+      (setq keep '())
+      (foreach item *DL-PREVIEW-ACTIVE*
+        (if (/= (car item) key) (setq keep (cons item keep))))
+      (setq *DL-PREVIEW-ACTIVE* (reverse keep))))
+  nil)
+
+(defun dl:preview-begin (opid / key lay old)
+  "Bắt đầu preview mới. opid phải mới; trả nil nếu layer/op đã tồn tại."
+  (setq key (dl:preview-key opid))
+  (cond
+    ((not key)
+     (princ "\n[ACAD] Preview opid phai la chuoi khong rong.")
+     nil)
+    ((tblsearch "LAYER" (dl:preview-layer opid))
+     (dl:preview-conflict opid)
+     (princ (strcat "\n[ACAD] Preview layer da ton tai, hay tao opid moi: " opid))
+     nil)
+    (T
+     (setq lay (dl:preview-layer opid) old (getvar "CLAYER"))
+     (dl:layer lay 30 nil)
+     (if (dl:preview-set-state opid 1)
+       (progn
+         (setvar "CLAYER" lay)
+         (setq *DL-PREVIEW-ACTIVE*
+           (cons (list key old "ACTIVE") *DL-PREVIEW-ACTIVE*))
+         lay)
+       (progn
+         (princ "\n[ACAD] Khong ghi duoc preview ownership; da huy begin.")
+         nil)))))
+
+(defun dl:preview-count (opid / ss i n total en)
+  "Lần gọi đầu sau khi vẽ sẽ seal đúng handle hiện có; lần sau chỉ đếm ownership."
+  (setq ss (ssget "_X" (list (cons 8 (dl:preview-layer opid))))
+        i 0 n 0 total (if ss (sslength ss) 0))
+  (cond
+    ((dl:preview-active-p opid)
+     (if ss
+       (while (< i total)
+         (setq en (ssname ss i))
+         (if (dl:preview-tag en opid) (setq n (1+ n)))
+         (setq i (1+ i))))
+     (if (= n total)
+       (dl:preview-set-state opid 5)
+       (dl:preview-conflict opid))
+     n)
+    ((dl:preview-sealed-p opid)
+     (if ss
+       (while (< i total)
+         (if (dl:preview-owned-p (ssname ss i) opid) (setq n (1+ n)))
+         (setq i (1+ i))))
+     n)
+    (T 0)))
+
+(defun dl:preview-apply (opid destlayer / ss i n total en el)
   "User CHẤP NHẬN: chuyển toàn bộ entity preview sang layer đích thật.
    destlayer = tên layer đích. Trả về số entity đã chuyển.
+   Chỉ exact handles đã seal bằng dl:preview-count mới được apply.
 
    DÙNG entmod, KHÔNG dùng (command \"_.CHPROP\" …): lệnh có dấu nhắc chạy
    trong session AutoCAD ĐANG MỞ (job nạp từ callback của plugin) sẽ hỏng
    giữa chừng — trả 'Function cancelled' và ĐỂ AUTOCAD KẸT ở dấu nhắc, làm
    mọi job sau đó treo. entmod là thao tác CSDL thuần, an toàn ở mọi ngữ cảnh."
-  (if (not (tblsearch "LAYER" destlayer)) (dl:layer destlayer 7 nil))
-  (setq ss (ssget "_X" (list (cons 8 (dl:preview-layer opid)))))
-  (setq n 0 i 0)
-  (if ss
-    (while (< i (sslength ss))
-      (setq en (ssname ss i) el (entget en))
-      (if (entmod (subst (cons 8 destlayer) (assoc 8 el) el)) (setq n (1+ n)))
-      (setq i (1+ i))))
-  n)
+  (if (not (dl:preview-sealed-p opid))
+    (progn
+      (princ "\n[ACAD] Preview chua seal hoac da conflict; khong apply.")
+      0)
+    (progn
+      (if (not (tblsearch "LAYER" destlayer)) (dl:layer destlayer 7 nil))
+      (setq ss (ssget "_X" (list (cons 8 (dl:preview-layer opid))))
+            n 0 i 0 total 0)
+      (if ss
+        (while (< i (sslength ss))
+          (setq en (ssname ss i) el (entget en))
+          (if (dl:preview-owned-p en opid)
+            (progn
+              (setq total (1+ total))
+              (if (entmod (subst (cons 8 destlayer) (assoc 8 el) el))
+                (setq n (1+ n)))))
+          (setq i (1+ i))))
+      (if (= n total)
+        (progn (dl:preview-set-state opid 3) (dl:preview-close opid)))
+      n)))
 
-(defun dl:preview-apply-map (opid pairs / ss n)
-  "Áp dụng khi 1 op vẽ lên nhiều layer đích.
-   pairs = list ((marker-layer . dest-layer) ...) — dùng khi entity đã mang
-   layer đích sẵn thì chỉ cần preview-apply với 1 dest chung."
-  (dl:preview-apply opid (cdar pairs)))
+(defun dl:preview-apply-map (opid pairs)
+  "Compatibility wrapper: chỉ dùng destination của pair đầu, bỏ qua marker
+   và các pair còn lại. Trả 0 nếu pairs rỗng."
+  (if pairs (dl:preview-apply opid (cdar pairs)) 0))
 
-(defun dl:preview-reject (opid / ss n i)
-  "User KHÔNG CHẤP NHẬN: xoá sạch entity preview, bản vẽ trở lại như cũ.
+(defun dl:preview-reject (opid / ss n i total)
+  "User KHÔNG CHẤP NHẬN: xoá exact handles đã seal của preview này.
+   Không rollback thay đổi ngoài layer preview.
    Dùng entdel thay (command \"_.ERASE\" …) — xem ghi chú ở dl:preview-apply."
-  (setq ss (ssget "_X" (list (cons 8 (dl:preview-layer opid)))))
-  (setq n 0 i 0)
-  (if ss
-    (while (< i (sslength ss))
-      (entdel (ssname ss i))
-      (setq n (1+ n) i (1+ i))))
-  (if (tblsearch "LAYER" (dl:preview-layer opid)) (setvar "CLAYER" "0"))
-  n)
+  (if (not (dl:preview-sealed-p opid))
+    (progn
+      (princ "\n[ACAD] Preview chua seal hoac da conflict; khong reject.")
+      0)
+    (progn
+      (setq ss (ssget "_X" (list (cons 8 (dl:preview-layer opid))))
+            n 0 i 0 total 0)
+      (if ss
+        (while (< i (sslength ss))
+          (if (dl:preview-owned-p (ssname ss i) opid)
+            (progn
+              (setq total (1+ total))
+              (if (entdel (ssname ss i)) (setq n (1+ n)))))
+          (setq i (1+ i))))
+      (if (= n total)
+        (progn (dl:preview-set-state opid 4) (dl:preview-close opid)))
+      n)))
 
 ;;; --------------------------------------------------------------- KIỂM ĐẾM
 

@@ -236,7 +236,7 @@ export function drawRouter(): Router {
       const step = buildDrawSteps().find((s) => s.id === stepId);
       if (!step) return res.status(400).json({ ok: false, error: `Không có bước '${stepId}'` });
 
-      const opId = randomUUID().slice(0, 8);
+      const opId = randomUUID().replaceAll("-", "").slice(0, 24);
       const out = await runForTarget(t, (mode) =>
         buildStageLisp(stepId, opId, {
           mode,

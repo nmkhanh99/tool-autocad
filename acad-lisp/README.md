@@ -16,6 +16,27 @@ Muốn thêm **nút trên thanh công cụ** (bấm 1 phát mở UI, hoặc nút
 3. Gõ **`MEP`** → hiện **bảng nút bấm**. (Gõ `MEP-HELP` để xem danh sách lệnh.)
 > Muốn tự nạp mỗi lần mở: thêm `mep.lsp` vào **Startup Suite** trong hộp thoại APPLOAD.
 
+## Catalog và cấu hình cho AI trong Acad Studio
+
+Nút **Thư viện AutoCAD** trong app quét họ Lisp (`.lsp`, `.mnl`, `.fas`, `.vlx`) cùng
+tài nguyên phụ trợ `.dcl`/`.scr`. Cấu hình cơ sở của các file trong repo nằm ở
+[`library.manifest.json`](library.manifest.json): mục đích, lệnh/hàm public, dependency,
+side effect, guardrail và ví dụ để agent biết lúc nào nên dùng.
+
+- `.lsp`, `.mnl`, `.dcl`, `.scr`: app có thể hiển thị source cho user/agent review.
+- `.fas`, `.vlx`: bản biên dịch, chỉ có metadata/hash; không suy diễn là đã đọc source.
+- `.dcl` được Lisp gọi bằng `load_dialog`, không phải app độc lập để `load`.
+- Agent chỉ tạo proposal; user phải bấm **Duyệt & lưu cấu hình**. Bước duyệt không tự
+  nạp code. Nút **Load vào AutoCAD** là một hành động xác nhận riêng và khóa đúng DWG.
+- Mọi file chưa có manifest thủ công vẫn nhận cấu hình khởi tạo từ source/metadata và luôn
+  ở trạng thái **Chưa duyệt**. Agent review chạy không có tool; quyết định duyệt/từ chối được
+  lưu để lịch sử chat không biến proposal cũ thành nút có thể bấm lại.
+- Dependency mặc định chỉ được stage và đưa vào Support Path. Chỉ đặt `"preload": true`
+  trong dependency đã review khi thật sự cần chạy dependency trước entry file; cách này tránh
+  load lặp hoặc đổi thứ tự side effect của chính resource.
+- Support Path/TRUSTEDPATHS staged được giữ trong phiên AutoCAD để `load`/`load_dialog`
+  gọi muộn vẫn hoạt động; UI luôn cảnh báo side effect này trước khi load.
+
 ## Các lệnh
 
 | Lệnh | Tác dụng |

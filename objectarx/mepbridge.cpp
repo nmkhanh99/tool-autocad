@@ -14,10 +14,13 @@
 
 #include <CoreServices/CoreServices.h>
 #include <dispatch/dispatch.h>
+#include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 #include <string>
 
 // Win-compat types (HWND/RECT) cho Mac truoc cac header ARX (aced.h can khi _ADESK_MAC_).
@@ -32,6 +35,9 @@
 #include <dbents.h>
 #include <dbmline.h>
 #include <dbsymtb.h>
+#include <dbdict.h>
+#include <dblayout.h>
+#include <summinfo.h>
 #include <dbtable.h>
 #include <AcCmColor.h>
 #include <map>
@@ -44,11 +50,14 @@ static struct timespec  gReqMtime     = {0, 0};
 std::string             gBridgeDir;               // /Users/<x>/Acad-Bridge (shared with mepraw.cpp)
 static std::string      gJobPath, gReqPath, gDocsPath, gTargetPath;
 static std::string      gBomReqPath, gBomPath, gTblReqPath, gNativePath, gNativeDonePath, gSelReqPath;
+static std::string      gDrawingInfoReqPath, gDrawingInfoPath;
 static struct timespec  gNativeMtime = {0, 0};
 static struct timespec  gSelReqMtime = {0, 0};
+static struct timespec  gDrawingInfoReqMtime = {0, 0};
 static std::string      gHiLayer;   // layer dang duoc highlight (de unhighlight khi doi)
 
 static const ACHAR* kGroup = L"ACAD_BRIDGE";
+static const char*  kPluginVersion = "1.2.0";
 
 // ============================ UTF-8 <-> wchar_t (UTF-32 tren Mac) ============================
 std::string toUtf8(const wchar_t* w) {
@@ -80,10 +89,27 @@ std::wstring toWide(const std::string& s) {
 }
 std::string jsonEsc(const std::string& s) {
     std::string o;
-    for (char c : s) {
-        if (c == '"' || c == '\\') { o += '\\'; o += c; }
-        else if (c == '\n' || c == '\r') { o += ' '; }
-        else o += c;
+    o.reserve(s.size() + 8);
+    static const char hex[] = "0123456789abcdef";
+    for (unsigned char c : s) {
+        switch (c) {
+        case '"':  o += "\\\""; break;
+        case '\\': o += "\\\\"; break;
+        case '\b': o += "\\b";  break;
+        case '\f': o += "\\f";  break;
+        case '\n': o += "\\n";  break;
+        case '\r': o += "\\r";  break;
+        case '\t': o += "\\t";  break;
+        default:
+            if (c < 0x20) {
+                o += "\\u00";
+                o += hex[(c >> 4) & 0x0f];
+                o += hex[c & 0x0f];
+            } else {
+                o += static_cast<char>(c);
+            }
+            break;
+        }
     }
     return o;
 }
@@ -125,6 +151,8 @@ static void initPaths() {
     gNativePath     = gBridgeDir + "/native.job";    // job C++ thuan (bang tab), khong LISP
     gNativeDonePath = gBridgeDir + "/native.done";   // plugin ghi so entity da tao
     gSelReqPath     = gBridgeDir + "/select.req";     // "<target>|<layer>" -> highlight + zoom
+    gDrawingInfoReqPath = gBridgeDir + "/drawing-info.req";
+    gDrawingInfoPath    = gBridgeDir + "/drawing-info.json";
 }
 
 // ============================ event stream cho app (events.jsonl, append) ============================
@@ -195,21 +223,948 @@ AcApDocument* findDocByName(const std::string& want) {
     }
     return hit ? hit : fallback;
 }
-static AcApDocument* resolveTarget() { return findDocByName(readAll(gTargetPath)); }
+static AcApDocument* findDocExact(const std::string& target);
+static AcApDocument* resolveTarget() {
+    const std::string target = readAll(gTargetPath);
+    if (target.empty()) {
+        AcApDocument* active = acDocManager ? acDocManager->mdiActiveDocument() : nullptr;
+        return active ? active : (acDocManager ? acDocManager->curDocument() : nullptr);
+    }
+    // A non-empty target is a safety boundary. Never fall back to whatever
+    // drawing became active after the daemon resolved the user's selection.
+    return findDocExact(target);
+}
+
+// ============================ drawing-info: snapshot read-only ============================
+// Protocol:
+//   drawing-info.req  line 1 = requestId, remaining text = exact title/full path.
+//                     Empty target resolves mdiActiveDocument() at processing time.
+//   drawing-info.json atomic response, always echoes requestId.
+//
+// The collector deliberately opens database objects kForRead only. Output is bounded so
+// a very large DWG cannot monopolize AutoCAD's main thread indefinitely.
+static const size_t kInfoMaxTableItems       = 500;
+static const size_t kInfoMaxMapKeys          = 500;
+static const size_t kInfoMaxDictionaryItems  = 200;
+static const size_t kInfoMaxSelectionObjects = 200;
+static const size_t kInfoMaxXrefs             = 200;
+static const size_t kInfoMaxEntitiesScanned   = 200000;
+static const size_t kInfoMaxCustomSummary     = 50;
+
+static std::string jsonString(const std::string& s) {
+    return "\"" + jsonEsc(s) + "\"";
+}
+
+static std::string jsonNumber(double v) {
+    if (!std::isfinite(v)) return "null";
+    char buf[64];
+    snprintf(buf, sizeof buf, "%.12g", v);
+    return buf;
+}
+
+static std::string jsonBool(bool v) {
+    return v ? "true" : "false";
+}
+
+static void addWarning(std::vector<std::string>& warnings, const std::string& warning) {
+    for (const auto& current : warnings)
+        if (current == warning) return;
+    warnings.push_back(warning);
+}
+
+static std::string stringArrayJson(const std::vector<std::string>& values) {
+    std::string out = "[";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i) out += ",";
+        out += jsonString(values[i]);
+    }
+    return out + "]";
+}
+
+static bool writeAtomicJson(const std::string& path, const std::string& json) {
+    const std::string tmp = path + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "wb");
+    if (!f) return false;
+    const bool ok = fwrite(json.data(), 1, json.size(), f) == json.size();
+    fclose(f);
+    if (!ok) {
+        unlink(tmp.c_str());
+        return false;
+    }
+    if (rename(tmp.c_str(), path.c_str()) != 0) {
+        unlink(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
+static AcApDocument* findDocExact(const std::string& target) {
+    if (!acDocManager) return nullptr;
+    if (target.empty()) return acDocManager->mdiActiveDocument();
+    AcApDocumentIterator* it = acDocManager->newAcApDocumentIterator();
+    AcApDocument* found = nullptr;
+    if (it) {
+        for (; !it->done(); it->step()) {
+            AcApDocument* doc = it->document();
+            if (!doc) continue;
+            if (toUtf8(doc->docTitle()) == target || toUtf8(doc->fileName()) == target) {
+                found = doc;
+                break;
+            }
+        }
+        delete it;
+    }
+    return found;
+}
+
+static std::string objectHandle(AcDbObject* obj) {
+    if (!obj) return "";
+    AcDbHandle handle;
+    obj->getAcDbHandle(handle);
+    ACHAR buf[32];
+    handle.getIntoAsciiBuffer(buf);
+    return toUtf8(buf);
+}
+
+static std::string objectType(AcDbObject* obj) {
+    if (!obj || !obj->isA()) return "UNKNOWN";
+    const ACHAR* dxf = obj->isA()->dxfName();
+    if (dxf && *dxf) return toUtf8(dxf);
+    const ACHAR* cls = obj->isA()->name();
+    return cls ? toUtf8(cls) : "UNKNOWN";
+}
+
+static std::string entityLayer(AcDbEntity* ent) {
+    if (!ent) return "";
+    ACHAR* layer = ent->layer();
+    std::string out = toUtf8(layer);
+    if (layer) acutDelString(layer);
+    return out;
+}
+
+static std::string symbolName(AcDbObjectId id) {
+    if (id.isNull()) return "";
+    AcDbSymbolTableRecord* record = nullptr;
+    if (acdbOpenObject(record, id, AcDb::kForRead) != Acad::eOk || !record) return "";
+    AcString name;
+    record->getName(name);
+    std::string out = toUtf8(name.kwszPtr());
+    record->close();
+    return out;
+}
+
+static std::string layoutNameFor(AcDbBlockTableRecord* btr) {
+    if (!btr) return "";
+    AcDbObjectId layoutId = btr->getLayoutId();
+    if (!layoutId.isNull()) {
+        AcDbLayout* layout = nullptr;
+        if (acdbOpenObject(layout, layoutId, AcDb::kForRead) == Acad::eOk && layout) {
+            AcString name;
+            layout->getName(name);
+            std::string out = toUtf8(name.kwszPtr());
+            layout->close();
+            if (!out.empty()) return out;
+        }
+    }
+    AcString name;
+    btr->getName(name);
+    return toUtf8(name.kwszPtr());
+}
+
+static void bumpBounded(std::map<std::string, long long>& values,
+                        const std::string& key, long long& overflow) {
+    auto found = values.find(key);
+    if (found != values.end()) {
+        found->second++;
+    } else if (values.size() < kInfoMaxMapKeys) {
+        values[key] = 1;
+    } else {
+        overflow++;
+    }
+}
+
+static std::string countMapJson(const std::map<std::string, long long>& values,
+                                long long overflow) {
+    std::string out = "{";
+    bool first = true;
+    for (const auto& item : values) {
+        if (!first) out += ",";
+        first = false;
+        out += jsonString(item.first) + ":" + std::to_string(item.second);
+    }
+    if (overflow > 0) {
+        if (!first) out += ",";
+        out += "\"__other__\":" + std::to_string(overflow);
+    }
+    return out + "}";
+}
+
+static std::string countRowsJson(const std::map<std::string, long long>& values,
+                                 const char* keyName, long long overflow) {
+    std::string out = "[";
+    bool first = true;
+    for (const auto& item : values) {
+        if (!first) out += ",";
+        first = false;
+        out += "{" + jsonString(keyName) + ":" + jsonString(item.first) +
+               ",\"count\":" + std::to_string(item.second) + "}";
+    }
+    if (overflow > 0) {
+        if (!first) out += ",";
+        out += "{" + jsonString(keyName) + ":\"__other__\",\"count\":" +
+               std::to_string(overflow) + "}";
+    }
+    return out + "]";
+}
+
+static bool sysVarJson(const ACHAR* name, std::string& value) {
+    resbuf rb = {};
+    if (acedGetVar(name, &rb) != RTNORM) {
+        value = "null";
+        return false;
+    }
+    switch (rb.restype) {
+    case RTSTR:
+        value = jsonString(toUtf8(rb.resval.rstring));
+        if (rb.resval.rstring) acutDelString(rb.resval.rstring);
+        return true;
+    case RTSHORT:
+        value = std::to_string((int)rb.resval.rint);
+        return true;
+    case RTLONG:
+        value = std::to_string((long)rb.resval.rlong);
+        return true;
+    case RTREAL:
+        value = jsonNumber(rb.resval.rreal);
+        return true;
+    default:
+        value = "null";
+        return false;
+    }
+}
+
+static std::string summaryInfoJson(AcDbDatabase* db, std::vector<std::string>& warnings) {
+    AcDbDatabaseSummaryInfo* info = nullptr;
+    if (!db || acdbGetSummaryInfo(db, info) != Acad::eOk || !info) {
+        addWarning(warnings, "summary_info_unavailable");
+        return "{}";
+    }
+    AcString title, subject, author, keywords, comments, lastSavedBy, revision, hyperlinkBase;
+    info->getTitle(title);
+    info->getSubject(subject);
+    info->getAuthor(author);
+    info->getKeywords(keywords);
+    info->getComments(comments);
+    info->getLastSavedBy(lastSavedBy);
+    info->getRevisionNumber(revision);
+    info->getHyperlinkBase(hyperlinkBase);
+    std::string out =
+        "{\"title\":" + jsonString(toUtf8(title.kwszPtr())) +
+        ",\"subject\":" + jsonString(toUtf8(subject.kwszPtr())) +
+        ",\"author\":" + jsonString(toUtf8(author.kwszPtr())) +
+        ",\"keywords\":" + jsonString(toUtf8(keywords.kwszPtr())) +
+        ",\"comments\":" + jsonString(toUtf8(comments.kwszPtr())) +
+        ",\"lastSavedBy\":" + jsonString(toUtf8(lastSavedBy.kwszPtr())) +
+        ",\"revision\":" + jsonString(toUtf8(revision.kwszPtr())) +
+        ",\"hyperlinkBase\":" + jsonString(toUtf8(hyperlinkBase.kwszPtr())) +
+        ",\"custom\":[";
+    const int customCount = info->numCustomInfo();
+    const int keep = customCount < (int)kInfoMaxCustomSummary
+        ? customCount : (int)kInfoMaxCustomSummary;
+    bool first = true;
+    for (int i = 0; i < keep; ++i) {
+        AcString key, value;
+        if (info->getCustomSummaryInfo(i, key, value) != Acad::eOk) continue;
+        if (!first) out += ",";
+        first = false;
+        out += "{\"key\":" + jsonString(toUtf8(key.kwszPtr())) +
+               ",\"value\":" + jsonString(toUtf8(value.kwszPtr())) + "}";
+    }
+    out += "],\"customCount\":" + std::to_string(customCount) + "}";
+    if (customCount > keep) addWarning(warnings, "summary_custom_truncated");
+    delete info;
+    return out;
+}
+
+static std::string symbolTableNamesJson(AcDbSymbolTable* table,
+                                        const char* warningCode,
+                                        std::vector<std::string>& warnings) {
+    if (!table) {
+        addWarning(warnings, warningCode);
+        return "[]";
+    }
+    std::string out = "[";
+    size_t count = 0;
+    bool first = true;
+    AcDbSymbolTableIterator* it = nullptr;
+    if (table->newIterator(it) == Acad::eOk && it) {
+        for (; !it->done(); it->step()) {
+            AcDbSymbolTableRecord* record = nullptr;
+            if (it->getRecord(record, AcDb::kForRead) != Acad::eOk || !record) continue;
+            AcString name;
+            record->getName(name);
+            if (count < kInfoMaxTableItems) {
+                if (!first) out += ",";
+                first = false;
+                out += jsonString(toUtf8(name.kwszPtr()));
+            }
+            count++;
+            record->close();
+        }
+        delete it;
+    } else {
+        addWarning(warnings, warningCode);
+    }
+    table->close();
+    if (count > kInfoMaxTableItems) addWarning(warnings, std::string(warningCode) + "_truncated");
+    return out + "]";
+}
+
+static std::string layerTableJson(AcDbDatabase* db, long long& total,
+                                  std::vector<std::string>& warnings) {
+    total = 0;
+    AcDbLayerTable* table = nullptr;
+    if (!db || db->getLayerTable(table, AcDb::kForRead) != Acad::eOk || !table) {
+        addWarning(warnings, "layers_unavailable");
+        return "[]";
+    }
+    std::string out = "[";
+    size_t count = 0;
+    bool first = true;
+    AcDbLayerTableIterator* it = nullptr;
+    if (table->newIterator(it) == Acad::eOk && it) {
+        for (; !it->done(); it->step()) {
+            AcDbLayerTableRecord* layer = nullptr;
+            if (it->getRecord(layer, AcDb::kForRead) != Acad::eOk || !layer) continue;
+            if (count < kInfoMaxTableItems) {
+                AcString name, description;
+                layer->getName(name);
+                layer->description(description);
+                AcCmColor color = layer->color();
+                AcCmTransparency transparency = layer->transparency();
+                if (!first) out += ",";
+                first = false;
+                out += "{\"name\":" + jsonString(toUtf8(name.kwszPtr())) +
+                       ",\"aci\":" + std::to_string((unsigned)color.colorIndex()) +
+                       ",\"color\":" + std::to_string((unsigned)color.colorIndex()) +
+                       ",\"rgb\":[" + std::to_string((unsigned)color.red()) + "," +
+                                         std::to_string((unsigned)color.green()) + "," +
+                                         std::to_string((unsigned)color.blue()) + "]" +
+                       ",\"linetype\":" + jsonString(symbolName(layer->linetypeObjectId())) +
+                       ",\"lineweight\":" + std::to_string((int)layer->lineWeight()) +
+                       ",\"transparency\":" + std::to_string((unsigned)transparency.alpha()) +
+                       ",\"off\":" + jsonBool(layer->isOff()) +
+                       ",\"frozen\":" + jsonBool(layer->isFrozen()) +
+                       ",\"locked\":" + jsonBool(layer->isLocked()) +
+                       ",\"hidden\":" + jsonBool(layer->isHidden()) +
+                       ",\"plottable\":" + jsonBool(layer->isPlottable()) +
+                       ",\"inUse\":" + jsonBool(layer->isInUse()) +
+                       ",\"description\":" + jsonString(toUtf8(description.kwszPtr())) + "}";
+            }
+            count++;
+            total++;
+            layer->close();
+        }
+        delete it;
+    } else {
+        addWarning(warnings, "layers_iterator_unavailable");
+    }
+    table->close();
+    if (count > kInfoMaxTableItems) addWarning(warnings, "layers_truncated");
+    return out + "]";
+}
+
+static std::string blockTableJson(AcDbDatabase* db, std::string& xrefs,
+                                  long long& total, long long& totalXrefs,
+                                  std::vector<std::string>& warnings) {
+    total = 0;
+    totalXrefs = 0;
+    AcDbBlockTable* table = nullptr;
+    if (!db || db->getBlockTable(table, AcDb::kForRead) != Acad::eOk || !table) {
+        addWarning(warnings, "blocks_unavailable");
+        xrefs = "[]";
+        return "[]";
+    }
+    std::string blocks = "[";
+    xrefs = "[";
+    size_t blockCount = 0, xrefCount = 0;
+    bool firstBlock = true, firstXref = true;
+    AcDbBlockTableIterator* it = nullptr;
+    if (table->newIterator(it) == Acad::eOk && it) {
+        for (; !it->done(); it->step()) {
+            AcDbBlockTableRecord* block = nullptr;
+            if (it->getRecord(block, AcDb::kForRead) != Acad::eOk || !block) continue;
+            AcString name;
+            block->getName(name);
+            const std::string blockName = toUtf8(name.kwszPtr());
+            const bool isXref = block->isFromExternalReference();
+            if (blockCount < kInfoMaxTableItems) {
+                if (!firstBlock) blocks += ",";
+                firstBlock = false;
+                blocks += "{\"name\":" + jsonString(blockName) +
+                          ",\"anonymous\":" + jsonBool(block->isAnonymous()) +
+                          ",\"isLayout\":" + jsonBool(block->isLayout()) +
+                          ",\"layout\":" + jsonBool(block->isLayout()) +
+                          ",\"hasAttributeDefinitions\":" + jsonBool(block->hasAttributeDefinitions()) +
+                          ",\"isXref\":" + jsonBool(isXref) +
+                          ",\"xref\":" + jsonBool(isXref) +
+                          ",\"overlay\":" + jsonBool(block->isFromOverlayReference()) + "}";
+            }
+            blockCount++;
+            total++;
+            if (isXref) {
+                if (xrefCount < kInfoMaxXrefs) {
+                    AcString path;
+                    block->pathName(path);
+                    if (!firstXref) xrefs += ",";
+                    firstXref = false;
+                    xrefs += "{\"name\":" + jsonString(blockName) +
+                             ",\"path\":" + jsonString(toUtf8(path.kwszPtr())) +
+                             ",\"overlay\":" + jsonBool(block->isFromOverlayReference()) +
+                             ",\"unloaded\":" + jsonBool(block->isUnloaded()) +
+                             ",\"status\":" + std::to_string((int)block->xrefStatus()) + "}";
+                }
+                xrefCount++;
+                totalXrefs++;
+            }
+            block->close();
+        }
+        delete it;
+    } else {
+        addWarning(warnings, "blocks_iterator_unavailable");
+    }
+    table->close();
+    if (blockCount > kInfoMaxTableItems) addWarning(warnings, "blocks_truncated");
+    if (xrefCount > kInfoMaxXrefs) addWarning(warnings, "xrefs_truncated");
+    blocks += "]";
+    xrefs += "]";
+    return blocks;
+}
+
+static std::string layoutTableJson(AcDbDatabase* db, long long& total,
+                                   std::vector<std::string>& warnings) {
+    total = 0;
+    AcDbDictionary* layouts = nullptr;
+    if (!db || db->getLayoutDictionary(layouts, AcDb::kForRead) != Acad::eOk || !layouts) {
+        addWarning(warnings, "layouts_unavailable");
+        return "[]";
+    }
+    std::string out = "[";
+    size_t count = 0;
+    bool first = true;
+    AcDbDictionaryIterator* it = layouts->newIterator();
+    if (it) {
+        for (; !it->done(); it->next()) {
+            AcDbLayout* layout = nullptr;
+            if (it->getObject(layout, AcDb::kForRead) != Acad::eOk || !layout) continue;
+            if (count < kInfoMaxTableItems) {
+                AcString name;
+                layout->getName(name);
+                const AcDbObjectId btrId = layout->getBlockTableRecordId();
+                AcDbBlockTableRecord* btr = nullptr;
+                bool model = false;
+                if (acdbOpenObject(btr, btrId, AcDb::kForRead) == Acad::eOk && btr) {
+                    AcString btrName;
+                    btr->getName(btrName);
+                    model = toUtf8(btrName.kwszPtr()) == toUtf8(ACDB_MODEL_SPACE);
+                    btr->close();
+                }
+                if (!first) out += ",";
+                first = false;
+                out += "{\"name\":" + jsonString(toUtf8(name.kwszPtr())) +
+                       ",\"tabOrder\":" + std::to_string(layout->getTabOrder()) +
+                       ",\"selected\":" + jsonBool(layout->getTabSelected()) +
+                       ",\"model\":" + jsonBool(model) +
+                       ",\"viewportCount\":" +
+                            std::to_string((long long)layout->getViewportArray().length()) + "}";
+            }
+            count++;
+            total++;
+            layout->close();
+        }
+        delete it;
+    } else {
+        addWarning(warnings, "layouts_iterator_unavailable");
+    }
+    layouts->close();
+    if (count > kInfoMaxTableItems) addWarning(warnings, "layouts_truncated");
+    return out + "]";
+}
+
+static std::string dictionariesJson(AcDbDatabase* db, std::vector<std::string>& warnings) {
+    AcDbDictionary* nod = nullptr;
+    if (!db || db->getNamedObjectsDictionary(nod, AcDb::kForRead) != Acad::eOk || !nod) {
+        addWarning(warnings, "dictionaries_unavailable");
+        return "[]";
+    }
+    std::vector<std::string> names;
+    size_t total = 0;
+    AcDbDictionaryIterator* it = nod->newIterator();
+    if (it) {
+        for (; !it->done(); it->next()) {
+            if (total < kInfoMaxDictionaryItems)
+                names.push_back(toUtf8(it->name()));
+            total++;
+        }
+        delete it;
+    } else {
+        addWarning(warnings, "dictionaries_iterator_unavailable");
+    }
+    nod->close();
+    if (total > kInfoMaxDictionaryItems) addWarning(warnings, "dictionaries_truncated");
+    return stringArrayJson(names);
+}
+
+struct DrawingEntityStats {
+    long long entities = 0;
+    long long modelEntities = 0;
+    long long paperEntities = 0;
+    long long blockReferences = 0;
+    long long selected = 0;
+    long long typeOverflow = 0;
+    long long layerOverflow = 0;
+    long long spaceOverflow = 0;
+    bool truncated = false;
+    bool haveExtents = false;
+    AcDbExtents extents;
+    std::map<std::string, long long> byType;
+    std::map<std::string, long long> byLayer;
+    std::map<std::string, long long> bySpace;
+};
+
+static void collectEntityStats(AcDbDatabase* db, DrawingEntityStats& stats,
+                               std::vector<std::string>& warnings) {
+    AcDbBlockTable* table = nullptr;
+    if (!db || db->getBlockTable(table, AcDb::kForRead) != Acad::eOk || !table) {
+        addWarning(warnings, "entity_scan_unavailable");
+        return;
+    }
+    AcDbBlockTableIterator* btIt = nullptr;
+    if (table->newIterator(btIt) == Acad::eOk && btIt) {
+        for (; !btIt->done() && !stats.truncated; btIt->step()) {
+            AcDbBlockTableRecord* space = nullptr;
+            if (btIt->getRecord(space, AcDb::kForRead) != Acad::eOk || !space) continue;
+            if (!space->isLayout()) {
+                space->close();
+                continue;
+            }
+            AcString btrName;
+            space->getName(btrName);
+            const bool model = toUtf8(btrName.kwszPtr()) == toUtf8(ACDB_MODEL_SPACE);
+            const std::string spaceName = layoutNameFor(space);
+            AcDbBlockTableRecordIterator* entIt = nullptr;
+            if (space->newIterator(entIt) == Acad::eOk && entIt) {
+                for (; !entIt->done(); entIt->step()) {
+                    if ((size_t)stats.entities >= kInfoMaxEntitiesScanned) {
+                        stats.truncated = true;
+                        break;
+                    }
+                    AcDbEntity* ent = nullptr;
+                    if (entIt->getEntity(ent, AcDb::kForRead) != Acad::eOk || !ent) continue;
+                    const std::string type = objectType(ent);
+                    const std::string layer = entityLayer(ent);
+                    stats.entities++;
+                    if (model) stats.modelEntities++; else stats.paperEntities++;
+                    if (AcDbBlockReference::cast(ent)) stats.blockReferences++;
+                    bumpBounded(stats.byType, type, stats.typeOverflow);
+                    bumpBounded(stats.byLayer, layer, stats.layerOverflow);
+                    bumpBounded(stats.bySpace, spaceName, stats.spaceOverflow);
+                    AcDbExtents ext;
+                    if (ent->getGeomExtents(ext) == Acad::eOk && ext.isValid()) {
+                        if (stats.haveExtents) stats.extents.addExt(ext);
+                        else {
+                            stats.extents = ext;
+                            stats.haveExtents = true;
+                        }
+                    }
+                    ent->close();
+                }
+                delete entIt;
+            }
+            space->close();
+        }
+        delete btIt;
+    } else {
+        addWarning(warnings, "entity_iterator_unavailable");
+    }
+    table->close();
+    if (stats.truncated) addWarning(warnings, "entity_scan_truncated");
+    if (stats.typeOverflow || stats.layerOverflow || stats.spaceOverflow)
+        addWarning(warnings, "entity_count_maps_truncated");
+}
+
+static std::string selectionJson(AcApDocument* doc, AcDbDatabase* db,
+                                 DrawingEntityStats& stats,
+                                 std::vector<std::string>& warnings) {
+    if (!acDocManager || doc != acDocManager->mdiActiveDocument() ||
+        doc != acDocManager->curDocument()) {
+        addWarning(warnings, "selection_unavailable_for_non_current_document");
+        return "{\"count\":0,\"byType\":{},\"objects\":[]}";
+    }
+    ads_name selection;
+    if (acedSSGet(L"_I", nullptr, nullptr, nullptr, selection) != RTNORM)
+        return "{\"count\":0,\"byType\":{},\"objects\":[]}";
+    Adesk::Int32 length = 0;
+    if (acedSSLength(selection, &length) != RTNORM || length < 0) {
+        acedSSFree(selection);
+        addWarning(warnings, "selection_length_unavailable");
+        return "{\"count\":0,\"byType\":{},\"objects\":[]}";
+    }
+    stats.selected = length;
+    std::map<std::string, long long> byType;
+    long long typeOverflow = 0;
+    std::string objects = "[";
+    bool first = true;
+    const Adesk::Int32 keep = length < (Adesk::Int32)kInfoMaxSelectionObjects
+        ? length : (Adesk::Int32)kInfoMaxSelectionObjects;
+    for (Adesk::Int32 i = 0; i < length; ++i) {
+        ads_name adsEnt;
+        if (acedSSName(selection, i, adsEnt) != RTNORM) continue;
+        AcDbObjectId id;
+        if (acdbGetObjectId(id, adsEnt) != Acad::eOk || id.isNull()) continue;
+        AcDbEntity* ent = nullptr;
+        if (acdbOpenObject(ent, id, AcDb::kForRead) != Acad::eOk || !ent) continue;
+        const std::string type = objectType(ent);
+        bumpBounded(byType, type, typeOverflow);
+        if (i < keep) {
+            if (!first) objects += ",";
+            first = false;
+            objects += "{\"handle\":" + jsonString(objectHandle(ent)) +
+                       ",\"type\":" + jsonString(type) +
+                       ",\"layer\":" + jsonString(entityLayer(ent)) + "}";
+        }
+        ent->close();
+    }
+    acedSSFree(selection);
+    if (length > keep) addWarning(warnings, "selection_objects_truncated");
+    if (typeOverflow) addWarning(warnings, "selection_type_map_truncated");
+    objects += "]";
+    return "{\"count\":" + std::to_string((long long)length) +
+           ",\"byType\":" + countMapJson(byType, typeOverflow) +
+           ",\"objects\":" + objects + "}";
+}
+
+static std::string drawingInfoErrorJson(const std::string& requestId,
+                                        const std::string& code,
+                                        const std::string& message) {
+    return "{\"ok\":false,\"requestId\":" + jsonString(requestId) +
+           ",\"collectedAt\":" + std::to_string((long long)time(nullptr)) +
+           ",\"source\":{\"channel\":\"objectarx\",\"protocol\":1,\"pluginVersion\":\"" +
+           std::string(kPluginVersion) + "\"},\"status\":" + jsonString(code) +
+           ",\"code\":" + jsonString(code) +
+           ",\"error\":" + jsonString(message) + "}";
+}
+
+static void writeDrawingInfo() {
+    const std::string raw = readAll(gDrawingInfoReqPath);
+    const size_t nl = raw.find('\n');
+    std::string requestId = nl == std::string::npos ? raw : raw.substr(0, nl);
+    std::string target = nl == std::string::npos ? "" : raw.substr(nl + 1);
+    if (!requestId.empty() && requestId.back() == '\r') requestId.pop_back();
+    while (!target.empty() && (target.back() == '\r' || target.back() == '\n'))
+        target.pop_back();
+    if (requestId.empty()) {
+        writeAtomicJson(gDrawingInfoPath,
+                        drawingInfoErrorJson(requestId, "invalid_request", "requestId is required"));
+        return;
+    }
+    if (!acDocManager) {
+        writeAtomicJson(gDrawingInfoPath,
+                        drawingInfoErrorJson(requestId, "bridge_unavailable", "document manager unavailable"));
+        return;
+    }
+    AcApDocument* doc = findDocExact(target);
+    if (!doc) {
+        writeAtomicJson(gDrawingInfoPath,
+                        drawingInfoErrorJson(requestId, "not_found",
+                                             target.empty() ? "no active document" : "exact target not open"));
+        return;
+    }
+    AcDbDatabase* db = doc->database();
+    if (!db) {
+        writeAtomicJson(gDrawingInfoPath,
+                        drawingInfoErrorJson(requestId, "database_unavailable", "document has no database"));
+        return;
+    }
+
+    const bool active = doc == acDocManager->mdiActiveDocument();
+    const bool quiescent = doc->isQuiescent();
+    const std::string title = toUtf8(doc->docTitle());
+    const std::string file = toUtf8(doc->fileName());
+    const bool readOnly = doc->isReadOnly();
+    const Acad::ErrorStatus lockStatus = acDocManager->lockDocument(doc, AcAp::kRead);
+    if (lockStatus != Acad::eOk) {
+        writeAtomicJson(gDrawingInfoPath,
+                        drawingInfoErrorJson(requestId, "busy",
+                                             "read lock failed: " + std::to_string((int)lockStatus)));
+        return;
+    }
+
+    std::vector<std::string> warnings;
+    if (!quiescent) addWarning(warnings, "document_not_quiescent");
+
+    std::string appAcadver, appProduct, appPlatform, appLocale;
+    bool appVarsOk = true;
+    appVarsOk = sysVarJson(L"ACADVER", appAcadver) && appVarsOk;
+    appVarsOk = sysVarJson(L"PRODUCT", appProduct) && appVarsOk;
+    appVarsOk = sysVarJson(L"PLATFORM", appPlatform) && appVarsOk;
+    appVarsOk = sysVarJson(L"LOCALE", appLocale) && appVarsOk;
+    if (!appVarsOk) addWarning(warnings, "application_system_variables_incomplete");
+
+    std::string dbmod = "null";
+    if (doc == acDocManager->curDocument()) {
+        if (!sysVarJson(L"DBMOD", dbmod)) addWarning(warnings, "dbmod_unavailable");
+    } else {
+        addWarning(warnings, "dbmod_unavailable_for_non_current_document");
+    }
+
+    DrawingEntityStats stats;
+    collectEntityStats(db, stats, warnings);
+    const std::string selection = selectionJson(doc, db, stats, warnings);
+
+    long long layerCount = 0, blockCount = 0, layoutCount = 0, xrefCount = 0;
+    const std::string layers = layerTableJson(db, layerCount, warnings);
+    AcDbSymbolTable* linetypeTable = nullptr;
+    if (db->getLinetypeTable(linetypeTable, AcDb::kForRead) != Acad::eOk) linetypeTable = nullptr;
+    const std::string linetypes =
+        symbolTableNamesJson(linetypeTable, "linetypes_unavailable", warnings);
+    AcDbSymbolTable* textStyleTable = nullptr;
+    if (db->getTextStyleTable(textStyleTable, AcDb::kForRead) != Acad::eOk) textStyleTable = nullptr;
+    const std::string textStyles =
+        symbolTableNamesJson(textStyleTable, "text_styles_unavailable", warnings);
+    AcDbSymbolTable* dimStyleTable = nullptr;
+    if (db->getDimStyleTable(dimStyleTable, AcDb::kForRead) != Acad::eOk) dimStyleTable = nullptr;
+    const std::string dimStyles =
+        symbolTableNamesJson(dimStyleTable, "dim_styles_unavailable", warnings);
+    AcDbSymbolTable* regAppTable = nullptr;
+    if (db->getRegAppTable(regAppTable, AcDb::kForRead) != Acad::eOk) regAppTable = nullptr;
+    const std::string registeredApps =
+        symbolTableNamesJson(regAppTable, "registered_apps_unavailable", warnings);
+    std::string xrefs;
+    const std::string blocks =
+        blockTableJson(db, xrefs, blockCount, xrefCount, warnings);
+    const std::string layouts = layoutTableJson(db, layoutCount, warnings);
+    const std::string dictionaries = dictionariesJson(db, warnings);
+    const std::string metadataSummary = summaryInfoJson(db, warnings);
+
+    std::string ctab;
+    AcDbBlockTableRecord* currentSpace = nullptr;
+    if (acdbOpenObject(currentSpace, db->currentSpaceId(), AcDb::kForRead) == Acad::eOk &&
+        currentSpace) {
+        ctab = layoutNameFor(currentSpace);
+        currentSpace->close();
+    }
+
+    std::string extents;
+    if (stats.haveExtents && stats.extents.isValid()) {
+        const AcGePoint3d min = stats.extents.minPoint();
+        const AcGePoint3d max = stats.extents.maxPoint();
+        extents = "{\"min\":[" + jsonNumber(min.x) + "," + jsonNumber(min.y) + "," +
+                  jsonNumber(min.z) + "],\"max\":[" + jsonNumber(max.x) + "," +
+                  jsonNumber(max.y) + "," + jsonNumber(max.z) + "],\"width\":" +
+                  jsonNumber(max.x - min.x) + ",\"height\":" + jsonNumber(max.y - min.y) +
+                  ",\"depth\":" + jsonNumber(max.z - min.z) + "}";
+    } else {
+        extents = "{\"min\":null,\"max\":null,\"width\":0,\"height\":0,\"depth\":0}";
+        addWarning(warnings, "drawing_extents_unavailable");
+    }
+
+    const std::string settings =
+        "{\"ACADVER\":" + appAcadver +
+        ",\"PRODUCT\":" + appProduct +
+        ",\"PLATFORM\":" + appPlatform +
+        ",\"LOCALE\":" + appLocale +
+        ",\"INSUNITS\":" + std::to_string((int)db->insunits()) +
+        ",\"LUNITS\":" + std::to_string((int)db->lunits()) +
+        ",\"LUPREC\":" + std::to_string((int)db->luprec()) +
+        ",\"AUNITS\":" + std::to_string((int)db->aunits()) +
+        ",\"AUPREC\":" + std::to_string((int)db->auprec()) +
+        ",\"MEASUREMENT\":" + std::to_string((int)db->measurement()) +
+        ",\"TILEMODE\":" + std::to_string(db->tilemode() ? 1 : 0) +
+        ",\"CTAB\":" + jsonString(ctab) +
+        ",\"CLAYER\":" + jsonString(symbolName(db->clayer())) +
+        ",\"TEXTSTYLE\":" + jsonString(symbolName(db->textstyle())) +
+        ",\"DIMSTYLE\":" + jsonString(symbolName(db->dimstyle())) +
+        ",\"LTSCALE\":" + jsonNumber(db->ltscale()) +
+        ",\"CELTSCALE\":" + jsonNumber(db->celtscale()) +
+        ",\"PSLTSCALE\":" + std::to_string(db->psltscale() ? 1 : 0) +
+        ",\"MSLTSCALE\":" + std::to_string(db->msltscale() ? 1 : 0) +
+        ",\"TEXTSIZE\":" + jsonNumber(db->textsize()) + "}";
+
+    const std::string counts =
+        "{\"approxObjects\":" + std::to_string((long long)db->approxNumObjects()) +
+        ",\"entities\":" + std::to_string(stats.entities) +
+        ",\"modelEntities\":" + std::to_string(stats.modelEntities) +
+        ",\"paperEntities\":" + std::to_string(stats.paperEntities) +
+        ",\"blockReferences\":" + std::to_string(stats.blockReferences) +
+        ",\"selected\":" + std::to_string(stats.selected) +
+        ",\"byType\":" + countMapJson(stats.byType, stats.typeOverflow) +
+        ",\"byLayer\":" + countMapJson(stats.byLayer, stats.layerOverflow) +
+        ",\"bySpace\":" + countMapJson(stats.bySpace, stats.spaceOverflow) + "}";
+
+    std::string summary =
+        "{\"totalEntities\":" + std::to_string(stats.entities) +
+        ",\"entityCount\":" + std::to_string(stats.entities) +
+        ",\"layerCount\":" + std::to_string(layerCount) +
+        ",\"blockCount\":" + std::to_string(blockCount) +
+        ",\"blockReferences\":" + std::to_string(stats.blockReferences) +
+        ",\"layoutCount\":" + std::to_string(layoutCount) +
+        ",\"xrefCount\":" + std::to_string(xrefCount) +
+        ",\"selectionCount\":" + std::to_string(stats.selected);
+    if (metadataSummary.size() >= 2 && metadataSummary.front() == '{' &&
+        metadataSummary.back() == '}') {
+        const std::string fields = metadataSummary.substr(1, metadataSummary.size() - 2);
+        if (!fields.empty()) summary += "," + fields;
+    }
+    summary += "}";
+
+    const std::string limits =
+        "{\"maxEntitiesScanned\":" + std::to_string(kInfoMaxEntitiesScanned) +
+        ",\"maxTableItems\":" + std::to_string(kInfoMaxTableItems) +
+        ",\"maxMapKeys\":" + std::to_string(kInfoMaxMapKeys) +
+        ",\"maxDictionaryItems\":" + std::to_string(kInfoMaxDictionaryItems) +
+        ",\"maxSelectionObjects\":" + std::to_string(kInfoMaxSelectionObjects) +
+        ",\"maxXrefs\":" + std::to_string(kInfoMaxXrefs) +
+        ",\"maxCustomSummary\":" + std::to_string(kInfoMaxCustomSummary) + "}";
+
+    const std::string document =
+        "{\"title\":" + jsonString(title) +
+        ",\"file\":" + jsonString(file) +
+        ",\"active\":" + jsonBool(active) +
+        ",\"named\":" + jsonBool(!file.empty()) +
+        ",\"readOnly\":" + jsonBool(readOnly) +
+        ",\"quiescent\":" + jsonBool(quiescent) +
+        ",\"dbmod\":" + dbmod + "}";
+
+    const std::string tables =
+        "{\"layers\":" + layers +
+        ",\"linetypes\":" + linetypes +
+        ",\"textStyles\":" + textStyles +
+        ",\"dimStyles\":" + dimStyles +
+        ",\"blocks\":" + blocks +
+        ",\"layouts\":" + layouts +
+        ",\"registeredApps\":" + registeredApps + "}";
+
+    const std::string variables =
+        "[{\"name\":\"ACADVER\",\"value\":" + appAcadver +
+        "},{\"name\":\"PRODUCT\",\"value\":" + appProduct +
+        "},{\"name\":\"PLATFORM\",\"value\":" + appPlatform +
+        "},{\"name\":\"LOCALE\",\"value\":" + appLocale +
+        "},{\"name\":\"INSUNITS\",\"value\":" + std::to_string((int)db->insunits()) +
+        "},{\"name\":\"LUNITS\",\"value\":" + std::to_string((int)db->lunits()) +
+        "},{\"name\":\"LUPREC\",\"value\":" + std::to_string((int)db->luprec()) +
+        "},{\"name\":\"AUNITS\",\"value\":" + std::to_string((int)db->aunits()) +
+        "},{\"name\":\"AUPREC\",\"value\":" + std::to_string((int)db->auprec()) +
+        "},{\"name\":\"MEASUREMENT\",\"value\":" + std::to_string((int)db->measurement()) +
+        "},{\"name\":\"TILEMODE\",\"value\":" + std::to_string(db->tilemode() ? 1 : 0) +
+        "},{\"name\":\"CTAB\",\"value\":" + jsonString(ctab) +
+        "},{\"name\":\"CLAYER\",\"value\":" + jsonString(symbolName(db->clayer())) +
+        "},{\"name\":\"TEXTSTYLE\",\"value\":" + jsonString(symbolName(db->textstyle())) +
+        "},{\"name\":\"DIMSTYLE\",\"value\":" + jsonString(symbolName(db->dimstyle())) +
+        "},{\"name\":\"LTSCALE\",\"value\":" + jsonNumber(db->ltscale()) +
+        "},{\"name\":\"CELTSCALE\",\"value\":" + jsonNumber(db->celtscale()) +
+        "},{\"name\":\"PSLTSCALE\",\"value\":" + std::to_string(db->psltscale() ? 1 : 0) +
+        "},{\"name\":\"MSLTSCALE\",\"value\":" + std::to_string(db->msltscale() ? 1 : 0) +
+        "},{\"name\":\"TEXTSIZE\",\"value\":" + jsonNumber(db->textsize()) + "}]";
+
+    const std::string drawing =
+        "{\"variables\":" + variables +
+        ",\"settings\":" + settings +
+        ",\"extents\":" + extents +
+        ",\"counts\":" + counts +
+        ",\"entitiesByType\":" +
+            countRowsJson(stats.byType, "type", stats.typeOverflow) +
+        ",\"entitiesByLayer\":" +
+            countRowsJson(stats.byLayer, "layer", stats.layerOverflow) +
+        ",\"entitiesBySpace\":" +
+            countRowsJson(stats.bySpace, "space", stats.spaceOverflow) +
+        ",\"layers\":" + layers +
+        ",\"blocks\":" + blocks +
+        ",\"layouts\":" + layouts +
+        ",\"styles\":{\"text\":" + textStyles +
+            ",\"dimension\":" + dimStyles +
+            ",\"linetypes\":" + linetypes + "}" +
+        ",\"registeredApps\":" + registeredApps +
+        ",\"xrefs\":" + xrefs +
+        ",\"dictionaries\":" + dictionaries +
+        ",\"selection\":" + selection + "}";
+
+    const std::string json =
+        "{\"ok\":true,\"requestId\":" + jsonString(requestId) +
+        ",\"collectedAt\":" + std::to_string((long long)time(nullptr)) +
+        ",\"source\":{\"channel\":\"objectarx\",\"protocol\":1,\"pluginVersion\":\"" +
+            std::string(kPluginVersion) + "\"}" +
+        ",\"document\":" + document +
+        ",\"summary\":" + summary +
+        ",\"settings\":" + settings +
+        ",\"extents\":" + extents +
+        ",\"counts\":" + counts +
+        ",\"tables\":" + tables +
+        ",\"xrefs\":" + xrefs +
+        ",\"dictionaries\":" + dictionaries +
+        ",\"selection\":" + selection +
+        ",\"drawing\":" + drawing +
+        ",\"limits\":" + limits +
+        ",\"warnings\":" + stringArrayJson(warnings) + "}";
+
+    acDocManager->unlockDocument(doc);
+    writeAtomicJson(gDrawingInfoPath, json);
+}
 
 // ============================ chay job ============================
+// AutoCAD executes sendStringToExecute asynchronously. Snapshot the watched
+// transport first so a later daemon write can never change the bytes of a job
+// that has already been queued for a document.
+static std::string snapshotJobFile(const std::string& source) {
+    const std::string snapshots = gBridgeDir + "/job-snapshots";
+    mkdir(snapshots.c_str(), 0700);
+    const time_t now = time(nullptr);
+
+    // Best-effort bounded cleanup; successful jobs also delete their own file.
+    DIR* dir = opendir(snapshots.c_str());
+    if (dir) {
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != nullptr) {
+            if (entry->d_name[0] == '.') continue;
+            const std::string path = snapshots + "/" + entry->d_name;
+            struct stat st;
+            if (stat(path.c_str(), &st) == 0 && now - st.st_mtime > 24 * 60 * 60)
+                unlink(path.c_str());
+        }
+        closedir(dir);
+    }
+
+    static unsigned long sequence = 0;
+    char name[96];
+    snprintf(name, sizeof name, "job-%ld-%d-%lu.lsp",
+             (long)now, (int)getpid(), ++sequence);
+    const std::string destination = snapshots + "/" + name;
+    const std::string bytes = readAll(source);
+    if (bytes.empty()) return source;
+    FILE* out = fopen(destination.c_str(), "wb");
+    if (!out) return source;
+    const bool complete = fwrite(bytes.data(), 1, bytes.size(), out) == bytes.size();
+    fclose(out);
+    if (!complete) {
+        unlink(destination.c_str());
+        return source;
+    }
+    return destination;
+}
+
 static void runJob() {
     if (acDocManager == nullptr) return;
     AcApDocument* pDoc = resolveTarget();
     if (pDoc == nullptr) { acutPrintf(L"\n[AcadBridge] Chua co ban ve mo -- bo qua job."); return; }
     // Tu trust ~/Acad-Bridge de (load) khong bi SECURELOAD hoi/chan, roi load job.
     std::wstring dirW = toWide(gBridgeDir);
-    std::wstring jobW = toWide(gJobPath);
+    const std::string snapshotPath = snapshotJobFile(gJobPath);
+    std::wstring jobW = toWide(snapshotPath);
     std::wstring cmd =
         L"(progn (setq mep:tp (getvar \"TRUSTEDPATHS\")) (if (null mep:tp) (setq mep:tp \"\")) "
         L"(if (and (null (vl-string-search \"Acad-Bridge\" mep:tp)) (null (vl-string-search \"MEP-Bridge\" mep:tp))) "
         L"(setvar \"TRUSTEDPATHS\" (strcat mep:tp \";" + dirW + L"/...\"))) "
-        L"(load \"" + jobW + L"\")) ";
+        L"(load \"" + jobW + L"\") (vl-file-delete \"" + jobW + L"\")) ";
     // Chu y thu tu tham so DUNG: (doc, str, bActivate, bWrapUpInactiveDoc, bEchoString)
     acDocManager->sendStringToExecute(pDoc, cmd.c_str(), true, false, false);
     writeDocs(); // tien the cap nhat trang thai
@@ -230,6 +1185,11 @@ void mepRawRegisterCommands();
 static void fsCallback(ConstFSEventStreamRef, void*, size_t, void*,
                        const FSEventStreamEventFlags*, const FSEventStreamEventId*) {
     struct stat st;
+    if (stat(gDrawingInfoReqPath.c_str(), &st) == 0 &&
+        tsChanged(st.st_mtimespec, gDrawingInfoReqMtime)) {
+        gDrawingInfoReqMtime = st.st_mtimespec;
+        writeDrawingInfo();
+    }
     if (stat(gReqPath.c_str(), &st) == 0 && tsChanged(st.st_mtimespec, gReqMtime)) {
         gReqMtime = st.st_mtimespec;
         writeDocs();                         // app hoi danh sach ban ve (heartbeat)
@@ -291,6 +1251,8 @@ static void startWatch() {
     if (stat(gTblReqPath.c_str(), &st) == 0) gTblReqMtime = st.st_mtimespec;
     if (stat(gNativePath.c_str(), &st) == 0) gNativeMtime = st.st_mtimespec;   // khong chay job native cu
     if (stat(gSelReqPath.c_str(), &st) == 0) gSelReqMtime = st.st_mtimespec;
+    if (stat(gDrawingInfoReqPath.c_str(), &st) == 0)
+        gDrawingInfoReqMtime = st.st_mtimespec;   // khong xu ly lai request cu
     mepRawOnStartWatch();
 
     CFStringRef dir = CFStringCreateWithCString(nullptr, gBridgeDir.c_str(), kCFStringEncodingUTF8);
@@ -1095,8 +2057,8 @@ acrxEntryPoint(AcRx::AppMsgCode msg, void* pkt) {
         startWatch();
         startReactors();
         writeDocs();   // heartbeat dau tien
-        emitEvent("pluginLoaded", "AcadBridge v9-raw");
-        acutPrintf(L"\n[AcadBridge v9] Da nap. Raw ObjectARX menu + ~/Acad-Bridge/raw.job."
+        emitEvent("pluginLoaded", std::string("AcadBridge ") + kPluginVersion);
+        acutPrintf(L"\n[AcadBridge 1.2.0] Da nap. Drawing-info read-only + Raw ObjectARX menu."
                    L" Lenh: MEPARX / MEPRAW / MEPDOCS / MEPWATCH / MEPUNWATCH.");
         break;
     case AcRx::kUnloadAppMsg:

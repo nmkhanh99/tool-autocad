@@ -12,10 +12,22 @@
  * Stairs/elevators/doors live nested inside B_MBT* — never model-level free inserts.
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+function projectRoot(): string {
+  const configured = process.env.ACAD_PROJECT_ROOT || process.env.MEP_PROJECT_ROOT;
+  if (configured) return configured;
+  return resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+}
+
+function assetRoot(): string {
+  return (
+    process.env.ACAD_ASSET_ROOT ||
+    process.env.ACAD_BUNDLED_LISP_ROOT ||
+    projectRoot()
+  );
+}
 
 /** Model-level plan / architecture blocks (not fittings). */
 export const PLAN_BLOCK_NAMES = [
@@ -70,22 +82,22 @@ function parseCsv(text: string): Record<string, string>[] {
 }
 
 export function defaultDeepEntitiesPath(): string {
-  return join(HERE, "../../../demo/sample-t1-deep/deep-entities.csv");
+  return join(assetRoot(), "acad-studio/demo/sample-t1-deep/deep-entities.csv");
 }
 
 export function defaultLibraryOutPath(): string {
-  return join(HERE, "../../../demo/plan-block-library.json");
+  return join(projectRoot(), "acad-studio/demo/plan-block-library.json");
 }
 
 export function defaultSampleDwg(): string {
   return join(
-    HERE,
-    "../../../../As-built drawing/ABD_He thong thoat nuoc tang 1_Tran tang 1_V.00.dwg",
+    assetRoot(),
+    "As-built drawing/ABD_He thong thoat nuoc tang 1_Tran tang 1_V.00.dwg",
   );
 }
 
 export function defaultBlockDwgsDir(): string {
-  return join(HERE, "../../../demo/plan-blocks");
+  return join(assetRoot(), "acad-studio/demo/plan-blocks");
 }
 
 /**

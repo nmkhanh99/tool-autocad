@@ -17,7 +17,9 @@
     "test:ui-preview": "tsx scripts/test-ui-preview.mjs",
     "test:stability": "tsx scripts/test-acad-stability.mjs",
     "test:identity": "tsx scripts/test-product-identity.mjs",
-    "test:draw-t1": "tsx scripts/test-draw-t1.mjs"
+    "test:draw-t1": "tsx scripts/test-draw-t1.mjs",
+    "test:lisp-library": "tsx scripts/test-lisp-library.mjs",
+    "test:lisp-proposal": "tsx scripts/test-lisp-proposal.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",

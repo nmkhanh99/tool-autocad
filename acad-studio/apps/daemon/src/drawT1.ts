@@ -14,26 +14,30 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-
 export function projectRoot(): string {
+  const configured = process.env.ACAD_PROJECT_ROOT || process.env.MEP_PROJECT_ROOT;
+  if (configured) return configured;
+  return resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+}
+
+export function assetRoot(): string {
   return (
-    process.env.ACAD_PROJECT_ROOT ||
-    process.env.MEP_PROJECT_ROOT ||
-    resolve(HERE, "../../../..")
+    process.env.ACAD_ASSET_ROOT ||
+    process.env.ACAD_BUNDLED_LISP_ROOT ||
+    projectRoot()
   );
 }
 
 export function drawLibPath(): string {
-  return join(projectRoot(), "acad-lisp/headless/draw_lib.lsp");
+  return join(assetRoot(), "acad-lisp/headless/draw_lib.lsp");
 }
 
 export function recipePath(): string {
-  return join(projectRoot(), "acad-studio/demo/t1-draw-recipe.json");
+  return join(assetRoot(), "acad-studio/demo/t1-draw-recipe.json");
 }
 
 export function planSpecPath(): string {
-  return join(projectRoot(), "acad-studio/demo/t1-plan-spec.json");
+  return join(assetRoot(), "acad-studio/demo/t1-plan-spec.json");
 }
 
 // ────────────────────────────────────────────── mặt bằng kiến trúc (nền)

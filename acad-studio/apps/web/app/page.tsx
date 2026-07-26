@@ -1,11 +1,34 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { FUNCTIONS, GROUPS, byId, type Fn } from "./functions";
+import DrawingInfoPanel from "./DrawingInfoPanel";
+import LispLibraryPanel from "./LispLibraryPanel";
+import {
+  readLispProposal,
+  proposalFingerprint,
+  sameLispManifest,
+  shownAssistantText,
+  type LispManifestProposal,
+} from "./lispProposal";
 
 const DAEMON = process.env.NEXT_PUBLIC_DAEMON_URL || "http://127.0.0.1:8788";
 const TOP_KEYS = new Set(["dir", "dwgs", "outDir", "save", "timeoutMs"]);
 
-type Agent = { id: string; label: string; available: boolean };
+declare global {
+  interface Window {
+    acadStudio?: {
+      signReview(input: {
+        resourceId: string;
+        baseRevision: string;
+        proposalHash: string;
+        analysisCoverage: string;
+        acknowledgedIncomplete: boolean;
+      }): Promise<Record<string, unknown>>;
+    };
+  }
+}
+
+type Agent = { id: string; label: string; available: boolean; isolatedReview?: boolean };
 type Conv = { id: string; agent: string; title: string; created_at: number };
 type Tool = { name: string; detail: string };
 type Geom = { h: string; t: string; l: string; p?: number[][]; xy?: number[]; c?: number[]; r?: number; dn?: number; tx?: string };
@@ -24,6 +47,7 @@ type Preview = {
   before?: Geom[]; after?: Geom[];
 };
 type Msg = {
+  id?: string;
   role: "user" | "assistant" | "function" | "preview";
   text: string;
   thinking?: string;
@@ -35,10 +59,83 @@ type Msg = {
   fnResult?: any;
   pv?: Preview;              // message xem trước thay đổi
   form?: QForm;              // form chọn tiêu chí do agent phát
+  lispProposal?: LispManifestProposal; // manifest agent đề xuất, user duyệt mới lưu
 };
 type QOption = { label: string; value: string };
 type QQuestion = { id: string; label: string; type: "radio" | "select" | "checkbox" | "text" | "number"; options?: (string | QOption)[] };
 type QForm = { id: string; title: string; questions: QQuestion[]; submitted?: boolean };
+
+let messageSequence = 0;
+function newMessageId(): string {
+  messageSequence += 1;
+  return `msg-${Date.now().toString(36)}-${messageSequence.toString(36)}`;
+}
+
+function hydrateMessage(role: Msg["role"], text: string): Msg {
+  return {
+    id: newMessageId(),
+    role,
+    text,
+    lispProposal: role === "assistant" ? readLispProposal(text) : undefined,
+  };
+}
+
+async function reconcileLispProposals(messages: Msg[]): Promise<Msg[]> {
+  return Promise.all(messages.map(async (message) => {
+    const proposal = message.lispProposal;
+    if (!proposal) return message;
+    try {
+      const proposalHash = await proposalFingerprint(proposal);
+      const [response, decisionResponse] = await Promise.all([
+        fetch(
+          `${DAEMON}/api/acad/lisp/${encodeURIComponent(proposal.resourceId)}`,
+          { cache: "no-store" },
+        ),
+        fetch(
+          `${DAEMON}/api/lisp-proposal-decision?resourceId=${encodeURIComponent(proposal.resourceId)}` +
+            `&baseRevision=${encodeURIComponent(proposal.baseRevision)}` +
+            `&proposalHash=${encodeURIComponent(proposalHash)}`,
+          { cache: "no-store" },
+        ),
+      ]);
+      const body = await response.json().catch(() => ({}));
+      const decisionBody = await decisionResponse.json().catch(() => ({}));
+      const resource = body?.resource;
+      if (!response.ok || !resource) return message;
+      if (
+        resource.reviewStatus === "approved" &&
+        sameLispManifest(resource.manifest, proposal.manifest)
+      ) {
+        return {
+          ...message,
+          lispProposal: { ...proposal, state: "approved" as const, error: undefined },
+        };
+      }
+      if (
+        typeof resource.manifestRevision === "string" &&
+        resource.manifestRevision !== proposal.baseRevision
+      ) {
+        return {
+          ...message,
+          lispProposal: {
+            ...proposal,
+            state: "superseded" as const,
+            error: undefined,
+          },
+        };
+      }
+      if (decisionResponse.ok && decisionBody?.decision === "rejected") {
+        return {
+          ...message,
+          lispProposal: { ...proposal, state: "rejected" as const, error: undefined },
+        };
+      }
+    } catch {
+      // History is still useful while the daemon/catalog is temporarily offline.
+    }
+    return message;
+  }));
+}
 
 export default function Page() {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -60,10 +157,23 @@ export default function Page() {
   const [docList, setDocList] = useState<{ title: string; file: string; active: boolean }[] | null>(null);
   const [docsAlive, setDocsAlive] = useState<boolean | null>(null);
   const [acadLive, setAcadLive] = useState<{ activeDoc: string; last: string } | null>(null);
+  const [drawingInfoOpen, setDrawingInfoOpen] = useState(false);
+  const [drawingInfoTarget, setDrawingInfoTarget] = useState("");
+  const [drawingInfoRefreshToken, setDrawingInfoRefreshToken] = useState(0);
+  const [lispLibraryOpen, setLispLibraryOpen] = useState(false);
+  const [lispLibraryRefreshToken, setLispLibraryRefreshToken] = useState(0);
+  const [lispProposalBusy, setLispProposalBusy] = useState<number | null>(null);
   /** Bản vẽ đang mở trong AutoCAD + đích vẽ đang chọn ("" = file .work mặc định). */
   const [drawDocs, setDrawDocs] = useState<{ title: string; file: string; active: boolean }[]>([]);
   const [drawTarget, setDrawTarget] = useState("");
   const sessionRef = useRef<string | null>(null);
+  const viewEpochRef = useRef(0);
+  const lispReviewExpectationRef = useRef<{
+    resourceId: string;
+    baseRevision: string;
+    analysisCoverage: "full-source" | "partial-source" | "metadata-only";
+  } | null>(null);
+  const conversationLoadRef = useRef(0);
   const chatRef = useRef<HTMLDivElement>(null);
   const [autoBom, setAutoBom] = useState(false);
   const autoBomRef = useRef(false);
@@ -85,7 +195,15 @@ export default function Page() {
       try {
         const ev = JSON.parse(e.data);
         setAcadLive({ activeDoc: ev.activeDoc || "", last: `${ev.type}${ev.detail ? ": " + ev.detail : ""}` });
-        if (String(ev.type).startsWith("doc")) loadDocs();   // danh sách bản vẽ tự cập nhật
+        if (String(ev.type).startsWith("doc")) {
+          loadDocs();
+          loadDrawDocs();
+          setDrawingInfoTarget(ev.activeDoc || "");
+          setDrawingInfoRefreshToken((token) => token + 1);
+        }
+        if (ev.type === "drawingModified" || ev.type === "pluginLoaded") {
+          setDrawingInfoRefreshToken((token) => token + 1);
+        }
         if (ev.type === "drawingModified" && autoBomRef.current) refreshBom();   // BOM tự cập nhật khi vẽ
       } catch { /* */ }
     };
@@ -195,12 +313,27 @@ export default function Page() {
   async function loadConvs() {
     try { setConvs((await (await fetch(`${DAEMON}/api/conversations`)).json()).conversations); } catch { /* */ }
   }
-  function newChat() { setMessages([]); setActiveConv(null); sessionRef.current = null; }
+  function newChat() {
+    conversationLoadRef.current += 1;
+    viewEpochRef.current += 1;
+    setMessages([]);
+    setActiveConv(null);
+    sessionRef.current = null;
+  }
 
   function patchLast(fn: (m: Msg) => void) {
     setMessages((prev) => {
       const n = [...prev]; const last = { ...n[n.length - 1] }; fn(last); n[n.length - 1] = last; return n;
     });
+  }
+
+  function patchMessage(id: string, fn: (message: Msg) => void) {
+    setMessages((previous) => previous.map((message) => {
+      if (message.id !== id) return message;
+      const updated = { ...message };
+      fn(updated);
+      return updated;
+    }));
   }
 
   // ─── Chạy 1 chức năng (nút bấm hoặc gợi ý) ───
@@ -609,24 +742,174 @@ export default function Page() {
     }
   }
 
+  async function decideLispProposal(msgIdx: number, accept: boolean) {
+    const proposal = messagesRef.current[msgIdx]?.lispProposal;
+    if (!proposal || proposal.state === "applying" || proposal.state === "approved") return;
+    if (!accept) {
+      setLispProposalBusy(msgIdx);
+      try {
+        const proposalHash = await proposalFingerprint(proposal);
+        const response = await fetch(`${DAEMON}/api/lisp-proposal-decision`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            resourceId: proposal.resourceId,
+            baseRevision: proposal.baseRevision,
+            proposalHash,
+            decision: "rejected",
+          }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.ok === false) {
+          throw new Error(result.error || "Không lưu được quyết định từ chối.");
+        }
+        setMessages((prev) => prev.map((message, index) =>
+          index === msgIdx && message.lispProposal
+            ? { ...message, lispProposal: { ...message.lispProposal, state: "rejected", error: undefined } }
+            : message));
+      } catch (error) {
+        setMessages((prev) => prev.map((message, index) =>
+          index === msgIdx && message.lispProposal
+            ? { ...message, lispProposal: { ...message.lispProposal, state: "error", error: String(error) } }
+            : message));
+      } finally {
+        setLispProposalBusy(null);
+      }
+      return;
+    }
+
+    setLispProposalBusy(msgIdx);
+    setMessages((prev) => prev.map((message, index) =>
+      index === msgIdx && message.lispProposal
+        ? { ...message, lispProposal: { ...message.lispProposal, state: "applying", error: undefined } }
+        : message));
+    try {
+      const analysisCoverage = proposal.analysisCoverage || "unknown";
+      if (analysisCoverage === "unknown") {
+        throw new Error("Proposal cũ chưa ghi nhận phạm vi source; hãy yêu cầu agent phân tích lại.");
+      }
+      const proposalHash = await proposalFingerprint(proposal);
+      if (!window.acadStudio?.signReview) {
+        throw new Error("Duyệt cấu hình bảo mật chỉ khả dụng trong app Acad Studio desktop.");
+      }
+      const userProof = await window.acadStudio.signReview({
+        resourceId: proposal.resourceId,
+        baseRevision: proposal.baseRevision,
+        proposalHash,
+        analysisCoverage,
+        acknowledgedIncomplete: analysisCoverage !== "full-source",
+      });
+      const challengeResponse = await fetch(
+        `${DAEMON}/api/acad/lisp/${encodeURIComponent(proposal.resourceId)}/approval-challenge`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            baseRevision: proposal.baseRevision,
+            proposalHash,
+            analysisCoverage,
+            acknowledgedIncomplete: analysisCoverage !== "full-source",
+            userProof,
+          }),
+        },
+      );
+      const challenge = await challengeResponse.json().catch(() => ({}));
+      if (!challengeResponse.ok || !challenge.approvalToken) {
+        throw new Error(challenge.error || "Không tạo được xác nhận review.");
+      }
+      const response = await fetch(
+        `${DAEMON}/api/acad/lisp/${encodeURIComponent(proposal.resourceId)}/manifest`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            baseRevision: proposal.baseRevision,
+            approved: true,
+            manifest: proposal.manifest,
+            proposalHash,
+            approvalToken: challenge.approvalToken,
+          }),
+        },
+      );
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.ok === false) {
+        const rawError = String(result.error || "");
+        if (rawError.startsWith("dependency_review_required:")) {
+          const [, , ...reference] = rawError.split(":");
+          throw new Error(
+            `Cần phân tích và duyệt dependency ${reference.join(":")} trước khi duyệt resource này.`,
+          );
+        }
+        throw new Error(rawError || (response.status === 409
+          ? "File hoặc cấu hình đã đổi. Hãy yêu cầu agent phân tích lại."
+          : `Không lưu được cấu hình (${response.status}).`));
+      }
+      setMessages((prev) => prev.map((message, index) =>
+        index === msgIdx && message.lispProposal
+          ? { ...message, lispProposal: { ...message.lispProposal, state: "approved", error: undefined } }
+          : message));
+      setLispLibraryRefreshToken((token) => token + 1);
+    } catch (error) {
+      setMessages((prev) => prev.map((message, index) =>
+        index === msgIdx && message.lispProposal
+          ? { ...message, lispProposal: { ...message.lispProposal, state: "error", error: String(error) } }
+          : message));
+    } finally {
+      setLispProposalBusy(null);
+    }
+  }
+
   // ─── Chat ───
-  async function send(text: string) {
+  async function send(
+    text: string,
+    opts?: {
+      skipScenario?: boolean;
+      freshSession?: boolean;
+      displayText?: string;
+      lispReview?: {
+        resourceId: string;
+        baseRevision: string;
+        analysisCoverage: "full-source" | "partial-source" | "metadata-only";
+      };
+      agentOverride?: string;
+    },
+  ) {
     text = text.trim(); if (!text || busy) return;
+    const streamViewEpoch = viewEpochRef.current;
+    const userMessageId = newMessageId();
+    const assistantMessageId = newMessageId();
     setBusy(true);
     setInput("");
+    lispReviewExpectationRef.current = opts?.lispReview || null;
     // Prefer shipped full-sheet demo script when user chats y hệt kịch bản
-    try {
-      const handled = await tryRunScenarioFromChat(text);
-      if (handled) {
-        setBusy(false);
-        return;
-      }
-    } catch { /* fall through to agent */ }
-    setMessages((p) => [...p, { role: "user", text }, { role: "assistant", text: "" }]);
+    if (!opts?.skipScenario) {
+      try {
+        const handled = await tryRunScenarioFromChat(text);
+        if (handled) {
+          setBusy(false);
+          return;
+        }
+      } catch { /* fall through to agent */ }
+    }
+    setMessages((p) => [
+      ...p,
+      { id: userMessageId, role: "user", text: opts?.displayText || text },
+      { id: assistantMessageId, role: "assistant", text: "" },
+    ]);
+    const isolatedReview = opts?.freshSession === true;
     try {
       const resp = await fetch(`${DAEMON}/api/chat`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent, message: text, sessionId: sessionRef.current, conversationId: activeConv }),
+        body: JSON.stringify({
+          agent: opts?.agentOverride || agent,
+          message: text,
+          displayMessage: opts?.displayText,
+          reviewResourceId: opts?.lispReview?.resourceId,
+          reviewBaseRevision: opts?.lispReview?.baseRevision,
+          reviewCoverage: opts?.lispReview?.analysisCoverage,
+          sessionId: opts?.freshSession ? null : sessionRef.current,
+          conversationId: activeConv,
+        }),
       });
       const reader = resp.body!.getReader(); const dec = new TextDecoder(); let buf = "";
       while (true) {
@@ -634,17 +917,36 @@ export default function Page() {
         buf += dec.decode(value, { stream: true });
         let i; while ((i = buf.indexOf("\n\n")) >= 0) {
           const block = buf.slice(0, i); buf = buf.slice(i + 2);
-          if (block.startsWith("data:")) { try { handle(JSON.parse(block.slice(5).trim())); } catch { /* */ } }
+          if (block.startsWith("data:")) {
+            try {
+              handle(JSON.parse(block.slice(5).trim()), {
+                ignoreSession: isolatedReview,
+                messageId: assistantMessageId,
+                viewEpoch: streamViewEpoch,
+              });
+            } catch { /* */ }
+          }
         }
       }
-    } catch (e) { patchLast((m) => { m.error = "Lỗi kết nối daemon: " + e; }); }
+    } catch (e) {
+      patchMessage(assistantMessageId, (message) => {
+        message.error = "Lỗi kết nối daemon: " + e;
+      });
+    }
+    lispReviewExpectationRef.current = null;
     setBusy(false); loadConvs();
   }
-  function handle(ev: any) {
+  function handle(
+    ev: any,
+    opts: { ignoreSession?: boolean; messageId: string; viewEpoch: number },
+  ) {
+    const patchStreamMessage = (fn: (message: Msg) => void) =>
+      patchMessage(opts.messageId, fn);
+    const stillViewingStream = viewEpochRef.current === opts.viewEpoch;
     switch (ev.kind) {
-      case "conversation": setActiveConv(ev.id); break;
-      case "session": sessionRef.current = ev.id; break;
-      case "text": patchLast((m) => {
+      case "conversation": if (stillViewingStream) setActiveConv(ev.id); break;
+      case "session": if (stillViewingStream && !opts.ignoreSession) sessionRef.current = ev.id; break;
+      case "text": patchStreamMessage((m) => {
         m.text += ev.text;
         const mm = m.text.match(/MEP_SUGGEST:\s*(\[[^\]]*\])/);
         if (mm) { try { m.suggest = JSON.parse(mm[1]).map((x: any) => x.id || x); m.text = m.text.replace(mm[0], "").trim(); } catch { /* */ } }
@@ -657,11 +959,29 @@ export default function Page() {
             m.form = { id, title, questions: body.questions || [] };
           } catch { /* form chưa hoàn chỉnh */ }
         }
+        if (!m.lispProposal) {
+          const parsed = readLispProposal(m.text);
+          const expected = lispReviewExpectationRef.current;
+          if (
+            parsed &&
+            expected &&
+            parsed.resourceId === expected.resourceId &&
+            parsed.baseRevision === expected.baseRevision
+          ) {
+            m.lispProposal = {
+              ...parsed,
+              analysisCoverage: expected.analysisCoverage,
+            };
+          } else if (parsed) {
+            m.error =
+              "Agent trả proposal sai resource/revision hoặc không thuộc một lượt review do user khởi tạo.";
+          }
+        }
       }); break;
-      case "thinking": patchLast((m) => { m.thinking = (m.thinking || "") + ev.text; }); break;
-      case "tool": patchLast((m) => { m.tools = [...(m.tools || []), { name: ev.name, detail: ev.detail }]; }); break;
-      case "error": patchLast((m) => { m.error = ev.message; }); break;
-      case "done": patchLast((m) => { m.cost = ev.cost_usd; }); break;
+      case "thinking": patchStreamMessage((m) => { m.thinking = (m.thinking || "") + ev.text; }); break;
+      case "tool": patchStreamMessage((m) => { m.tools = [...(m.tools || []), { name: ev.name, detail: ev.detail }]; }); break;
+      case "error": patchStreamMessage((m) => { m.error = ev.message; }); break;
+      case "done": patchStreamMessage((m) => { m.cost = ev.cost_usd; }); break;
     }
   }
 
@@ -675,9 +995,15 @@ export default function Page() {
           {convs.map((c) => (
             <div key={c.id} className={"conv" + (c.id === activeConv ? " active" : "")} title={c.title}
               onClick={async () => {
+                const request = ++conversationLoadRef.current;
+                viewEpochRef.current += 1;
                 const { messages } = await (await fetch(`${DAEMON}/api/conversations/${c.id}/messages`)).json();
-                setMessages(messages.map((m: any) => ({ role: m.role, text: m.content })));
+                if (conversationLoadRef.current !== request) return;
+                const hydrated = messages.map((m: any) => hydrateMessage(m.role, m.content));
+                setMessages(hydrated);
                 setActiveConv(c.id); setAgent(c.agent); sessionRef.current = null;
+                const reconciled = await reconcileLispProposals(hydrated);
+                if (conversationLoadRef.current === request) setMessages(reconciled);
               }}>{c.title || "(không tiêu đề)"}</div>
           ))}
         </div>
@@ -686,6 +1012,16 @@ export default function Page() {
       <main className="main">
         <div className="topbar">
           <button className="pillbtn" onClick={() => setPanel(!panel)}>🧰 Chức năng</button>
+          <button className="pillbtn" onClick={() => {
+            setDrawingInfoTarget("");
+            setDrawingInfoOpen(true);
+          }} title="Đọc toàn bộ thông tin của bản vẽ đang active trong AutoCAD">
+            ▦ Hồ sơ bản vẽ
+          </button>
+          <button className="pillbtn" onClick={() => setLispLibraryOpen(true)}
+            title="Quét, đọc, cấu hình AI và nạp LSP/MNL/FAS vào bản vẽ đang mở">
+            ⌘ Thư viện AutoCAD
+          </button>
           <button className="pillbtn" onClick={openHealth} title="Kiểm tra plugin/heartbeat, CER vs crash, build & sửa">
             ⚙ Kiểm tra / Sửa AutoCAD
           </button>
@@ -719,12 +1055,20 @@ export default function Page() {
           <div className="wrap">
             {messages.length === 0 && (
               <div className="empty"><h2>Acad Studio — AutoCAD Toolkit</h2>
+                <button className="drawing-empty-open" onClick={() => {
+                  setDrawingInfoTarget("");
+                  setDrawingInfoOpen(true);
+                }}>▦ Xem hồ sơ bản vẽ đang active</button>
                 <p>Chọn <b>bản vẽ đích</b> ở góc phải trên (bản vẽ đang mở trong AutoCAD),
                 rồi gõ «Vẽ …» — ví dụ <b>«Vẽ lưới trục định vị A-B-C-D và 1-2-3-4-5-6»</b>,
                 <b>«Vẽ cầu thang bộ»</b>, <b>«Vẽ ống thoát xí DN140»</b>.</p>
                 <p>Mỗi bước hiện <b>preview</b> — bấm <b>Chấp nhận</b> mới ghi vào layer đích.</p></div>
             )}
-            {messages.map((m, i) => <MessageView key={i} m={m} idx={i} onRun={openFn} onDecide={decide} decideBusy={decideBusy === i} onSend={send} setMessages={setMessages} onHighlight={highlight} onOpenAcad={() => openAutoCAD()} />)}
+            {messages.map((m, i) => <MessageView key={m.id || `${activeConv || "new"}-${i}-${m.role}`} m={m} idx={i} onRun={openFn}
+              onDecide={decide} decideBusy={decideBusy === i}
+              onLispDecision={decideLispProposal} lispBusy={lispProposalBusy === i}
+              onSend={(text) => send(text)} setMessages={setMessages}
+              onHighlight={highlight} onOpenAcad={() => openAutoCAD()} />)}
           </div>
         </div>
 
@@ -909,6 +1253,45 @@ export default function Page() {
         </div>
       )}
 
+      <DrawingInfoPanel
+        open={drawingInfoOpen}
+        daemon={DAEMON}
+        initialTarget={drawingInfoTarget}
+        refreshToken={drawingInfoRefreshToken}
+        onClose={() => setDrawingInfoOpen(false)}
+        onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
+      />
+
+      <LispLibraryPanel
+        open={lispLibraryOpen}
+        daemon={DAEMON}
+        initialTarget={drawTarget}
+        refreshToken={lispLibraryRefreshToken}
+        onClose={() => setLispLibraryOpen(false)}
+        onAskAgent={(prompt, displayText, expected) => {
+          if (busy) return false;
+          const selected = agents.find((item) =>
+            item.id === agent && item.available && item.isolatedReview);
+          const reviewer = selected || agents.find((item) =>
+            item.available && item.isolatedReview);
+          if (!reviewer) {
+            window.alert("Chưa có agent no-tools an toàn. Hãy cài Claude CLI để review source.");
+            return false;
+          }
+          if (reviewer.id !== agent) setAgent(reviewer.id);
+          setLispLibraryOpen(false);
+          void send(prompt, {
+            skipScenario: true,
+            freshSession: true,
+            displayText,
+            lispReview: expected,
+            agentOverride: reviewer.id,
+          });
+          return true;
+        }}
+        onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
+      />
+
       {form && (
         <div className="modal" onClick={() => setForm(null)}>
           <div className="modalbox" onClick={(e) => e.stopPropagation()}>
@@ -969,15 +1352,19 @@ export default function Page() {
   );
 }
 
-function MessageView({ m, idx, onRun, onDecide, decideBusy, onSend, setMessages, onHighlight, onOpenAcad }: {
+function MessageView({
+  m, idx, onRun, onDecide, decideBusy, onLispDecision, lispBusy,
+  onSend, setMessages, onHighlight, onOpenAcad,
+}: {
   m: Msg; idx: number; onRun: (f: Fn) => void; onDecide: (i: number, ok: boolean) => void; decideBusy?: boolean;
+  onLispDecision: (i: number, ok: boolean) => void; lispBusy?: boolean;
   onSend: (t: string) => void; setMessages: (fn: (p: Msg[]) => Msg[]) => void;
   onHighlight: (layer: string) => void;
   onOpenAcad?: () => void;
 }) {
   if (m.role === "preview") return <PreviewView m={m} idx={idx} onDecide={onDecide} decideBusy={!!decideBusy} />;
   if (m.role === "function") return <FunctionResult m={m} onHighlight={onHighlight} onOpenAcad={onOpenAcad} />;
-  const shown = m.text.split("<question-form")[0].trim();
+  const shown = shownAssistantText(m.text);
   return (
     <div className={"msg " + m.role}>
       <div className="avatar">{m.role === "user" ? "🧑" : "🤖"}</div>
@@ -991,10 +1378,245 @@ function MessageView({ m, idx, onRun, onDecide, decideBusy, onSend, setMessages,
           <div className="suggest">{m.suggest.map((id) => { const f = byId(id); return f
             ? <button key={id} className="sgbtn" onClick={() => onRun(f)}>{f.icon} {f.label}</button> : null; })}</div>
         )}
+        {m.lispProposal && (
+          <LispProposalCard
+            proposal={m.lispProposal}
+            busy={!!lispBusy}
+            onApprove={() => onLispDecision(idx, true)}
+            onReject={() => onLispDecision(idx, false)}
+          />
+        )}
         {m.error && <div className="err">{m.error}</div>}
         {m.cost != null && <div className="meta">≈ ${m.cost.toFixed(4)}</div>}
       </div>
     </div>
+  );
+}
+
+function LispProposalCard({
+  proposal,
+  busy,
+  onApprove,
+  onReject,
+}: {
+  proposal: LispManifestProposal;
+  busy: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const state = proposal.state || "pending";
+  const [inspected, setInspected] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const [coverageConfirmed, setCoverageConfirmed] = useState(false);
+  const [catalogResource, setCatalogResource] = useState<any>(null);
+  const [catalogError, setCatalogError] = useState("");
+  const manifest = proposal.manifest;
+  const analysisCoverage = proposal.analysisCoverage || "unknown";
+  const incompleteAnalysis = analysisCoverage !== "full-source";
+  const rows = (value: unknown): string[] => {
+    if (!Array.isArray(value)) return typeof value === "string" && value ? [value] : [];
+    return value.map((entry) => {
+      if (typeof entry === "string") return entry;
+      if (!entry || typeof entry !== "object") return String(entry ?? "");
+      const item = entry as Record<string, any>;
+      const name = String(item.name || item.command || item.path || item.id || "");
+      const params = Array.isArray(item.params)
+        ? item.params.map((param: any) =>
+            typeof param === "string" ? param : String(param?.name || param?.id || "")).filter(Boolean)
+        : [];
+      const purpose = String(item.purpose || item.description || item.summary || "");
+      const risk = item.risk ? `risk: ${item.risk}` : "";
+      const execution = [
+        item.kind ? `kind=${item.kind}` : "",
+        item.optional === true ? "optional" : item.optional === false ? "required" : "",
+        item.preload === true ? "PRELOAD (chạy trước resource chính)" : "",
+        item.resolution ? `resolution=${item.resolution}` : "",
+      ].filter(Boolean).join(", ");
+      return [
+        name + (params.length ? `(${params.join(", ")})` : ""),
+        execution,
+        purpose,
+        risk,
+      ].filter(Boolean).join(" — ");
+    }).filter(Boolean);
+  };
+  const ai = manifest.ai && typeof manifest.ai === "object" && !Array.isArray(manifest.ai)
+    ? manifest.ai as Record<string, unknown>
+    : {};
+  const purpose = String(ai.summary || manifest.purpose || manifest.summary || "Chưa nêu mục đích.");
+  const commands = rows(manifest.commands);
+  const functions = rows(manifest.publicFunctions);
+  const dependencies = rows(manifest.dependencies);
+  const guardrails = rows(manifest.guardrails);
+  const effects = manifest.effects && typeof manifest.effects === "object" && !Array.isArray(manifest.effects)
+    ? Object.entries(manifest.effects as Record<string, unknown>)
+      .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+    : [];
+  const preloads = Array.isArray(manifest.dependencies)
+    ? manifest.dependencies
+      .filter((entry) => entry && typeof entry === "object" && (entry as any).preload === true)
+      .map((entry) => String((entry as any).path || (entry as any).id || "(không có path/id)"))
+    : [];
+  const currentManifest =
+    catalogResource?.manifest || catalogResource?.baseManifest || {};
+  const changedKeys = [...new Set([
+    ...Object.keys(currentManifest || {}),
+    ...Object.keys(manifest),
+  ])]
+    .filter((key) => key !== "review")
+    .filter((key) => JSON.stringify(currentManifest?.[key]) !== JSON.stringify(manifest[key]))
+    .sort();
+  const revisionOk =
+    !!catalogResource &&
+    catalogResource.manifestRevision === proposal.baseRevision;
+  const actionable = state !== "approved" && state !== "rejected" && state !== "superseded";
+
+  useEffect(() => {
+    if (!actionable) return;
+    let cancelled = false;
+    setCatalogError("");
+    void fetch(`${DAEMON}/api/acad/lisp/${encodeURIComponent(proposal.resourceId)}`, {
+      cache: "no-store",
+    }).then(async (response) => {
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body?.resource) throw new Error(body?.error || `HTTP ${response.status}`);
+      if (!cancelled) setCatalogResource(body.resource);
+    }).catch((error) => {
+      if (!cancelled) setCatalogError(String(error));
+    });
+    return () => { cancelled = true; };
+  }, [proposal.resourceId, proposal.baseRevision, state, actionable]);
+
+  return (
+    <section className={"lisp-proposal-card " + state}>
+      <div className="lisp-proposal-title">
+        <span>⌘ Cấu hình AI cần review</span>
+        <code>{proposal.resourceId}</code>
+      </div>
+      <div className="lisp-proposal-resource">
+        <strong>{catalogResource?.name || proposal.resourceName || proposal.resourceId}</strong>
+        <span>{catalogResource?.pathLabel || proposal.pathLabel || "Đường dẫn trong catalog"}</span>
+      </div>
+      {proposal.summary && <p>{proposal.summary}</p>}
+      <div className="lisp-proposal-facts">
+        <span>{commands.length} lệnh</span>
+        <span>{functions.length} hàm public</span>
+        <span>{dependencies.length} dependency</span>
+        <span>Revision {proposal.baseRevision.slice(0, 18)}…</span>
+      </div>
+      <div className={
+        "lisp-proposal-result " +
+        (analysisCoverage === "full-source" ? "ok" : "")
+      }>
+        {analysisCoverage === "full-source"
+          ? "Agent đã nhận toàn bộ source của resource này."
+          : analysisCoverage === "partial-source"
+            ? "Cảnh báo: agent chỉ nhận một phần source do giới hạn kích thước. User phải tự đọc phần còn lại trước khi duyệt."
+            : analysisCoverage === "metadata-only"
+              ? "Cảnh báo: agent chỉ có metadata/hash, không đọc được source biên dịch hoặc source quá lớn."
+              : "Proposal cũ không có bằng chứng phạm vi phân tích; cần phân tích lại để duyệt."}
+      </div>
+      <div className="lisp-proposal-review-grid">
+        <section><b>Mục đích</b><p>{purpose}</p></section>
+        <section><b>Lệnh + tham số</b>{commands.length
+          ? <ul>{commands.map((row) => <li key={row}>{row}</li>)}</ul>
+          : <p>Không có command public.</p>}</section>
+        <section><b>Hàm public</b>{functions.length
+          ? <ul>{functions.map((row) => <li key={row}>{row}</li>)}</ul>
+          : <p>Không khai báo.</p>}</section>
+        <section><b>Dependency</b>{dependencies.length
+          ? <ul>{dependencies.map((row) => <li key={row}>{row}</li>)}</ul>
+          : <p>Không khai báo.</p>}</section>
+        <section><b>Dependency được thực thi trước</b>{preloads.length
+          ? <ul>{preloads.map((row) => <li key={row}>{row}</li>)}</ul>
+          : <p>Không có preload.</p>}</section>
+        <section><b>Side effect</b>{effects.length
+          ? <ul>{effects.map((row) => <li key={row}>{row}</li>)}</ul>
+          : <p>Không đánh dấu.</p>}</section>
+        <section><b>Guardrail</b>{guardrails.length
+          ? <ul>{guardrails.map((row) => <li key={row}>{row}</li>)}</ul>
+          : <p>Không khai báo.</p>}</section>
+      </div>
+      <div className="lisp-proposal-diff">
+        <b>Thay đổi so với cấu hình hiện tại</b>
+        {catalogResource
+          ? changedKeys.length
+            ? <div>{changedKeys.map((key) => <code key={key}>{key}</code>)}</div>
+            : <span>Không đổi trường nội dung nào.</span>
+          : <span>Đang đối chiếu catalog…</span>}
+      </div>
+      {catalogResource && changedKeys.length > 0 && (
+        <details>
+          <summary>So sánh giá trị hiện tại → đề xuất</summary>
+          <pre>{JSON.stringify(Object.fromEntries(changedKeys.map((key) => [
+            key,
+            { current: currentManifest?.[key] ?? null, proposed: manifest[key] ?? null },
+          ])), null, 2)}</pre>
+        </details>
+      )}
+      <details onToggle={(event) => {
+        if (event.currentTarget.open) setInspected(true);
+      }}>
+        <summary>Xem toàn bộ manifest agent đề xuất</summary>
+        <pre>{JSON.stringify(proposal.manifest, null, 2)}</pre>
+      </details>
+      {proposal.error && <div className="err">{proposal.error}</div>}
+      {catalogError && <div className="err">Không đối chiếu được catalog: {catalogError}</div>}
+      {catalogResource && !revisionOk && actionable && (
+        <div className="lisp-proposal-result">
+          Source/cấu hình đã đổi sau khi agent phân tích. Hãy yêu cầu phân tích lại.
+        </div>
+      )}
+      {state === "approved" ? (
+        <div className="lisp-proposal-result ok">✓ User đã duyệt và lưu cấu hình. Không tự động load vào AutoCAD.</div>
+      ) : state === "rejected" ? (
+        <div className="lisp-proposal-result">Đã từ chối — source và cấu hình không bị thay đổi.</div>
+      ) : state === "superseded" ? (
+        <div className="lisp-proposal-result">Proposal này đã cũ vì source hoặc cấu hình hiện tại đã thay đổi.</div>
+      ) : (
+        <>
+          <label className="lisp-proposal-confirm">
+            <input
+              type="checkbox"
+              checked={confirmed}
+              disabled={!inspected || !revisionOk}
+              onChange={(event) => setConfirmed(event.target.checked)}
+            />
+            Tôi đã mở manifest, kiểm tra lệnh, dependency, side effect và guardrail.
+          </label>
+          {incompleteAnalysis && analysisCoverage !== "unknown" && (
+            <label className="lisp-proposal-confirm">
+              <input
+                type="checkbox"
+                checked={coverageConfirmed}
+                disabled={!inspected || !revisionOk}
+                onChange={(event) => setCoverageConfirmed(event.target.checked)}
+              />
+              Tôi hiểu agent chưa đọc toàn bộ source; tôi đã tự kiểm tra phần còn lại hoặc tài liệu tin cậy.
+            </label>
+          )}
+          <div className="lisp-proposal-actions">
+            <button disabled={busy || state === "applying"} onClick={onReject}>Không chấp nhận</button>
+            <button
+              className="primary"
+              disabled={
+                busy ||
+                state === "applying" ||
+                !inspected ||
+                !confirmed ||
+                !revisionOk ||
+                analysisCoverage === "unknown" ||
+                (incompleteAnalysis && !coverageConfirmed)
+              }
+              onClick={onApprove}
+              title={!inspected ? "Mở «Xem toàn bộ manifest» trước khi duyệt" : undefined}
+            >
+              {busy || state === "applying" ? "Đang lưu…" : state === "error" ? "Thử lưu lại" : "Duyệt & lưu cấu hình"}
+            </button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 

@@ -261,7 +261,7 @@ export async function stageLivePreview(opts: {
     await rejectLivePreview(o.opId, opts.waitMs ?? 12000).catch(() => null);
   }
 
-  const opId = randomUUID().slice(0, 8);
+  const opId = randomUUID().replaceAll("-", "").slice(0, 24);
   const token = newJobToken();
   const body = buildLivePreviewJob({ opId, token, target, pipes });
   const done = await runNativeJob(body, { token, mode: "PREVIEW", opId }, opts.waitMs ?? 12000);
@@ -352,28 +352,19 @@ async function runLispPlanJob(
 ): Promise<{ ok: boolean; jobId?: string; message?: string; error?: string }> {
   // Dynamic import avoids circular dep (acadBridge imports livePreview)
   const bridge = await import("./acadBridge.js");
-  const resultsDir = join(BRIDGE(), "results");
-  const myId = randomUUID().slice(0, 8);
-  const wrap = bridge.wrapJob(myId, lisp);
-  writeFileSync(join(BRIDGE(), "job_target.txt"), target || "", "utf8");
-  atomicWrite(join(BRIDGE(), "job.lsp"), wrap);
-  const resFile = join(resultsDir, `${myId}.txt`);
-  const t0 = Date.now();
-  while (Date.now() - t0 < waitMs) {
-    try {
-      const txt = readFileSync(resFile, "utf8");
-      if (txt.includes("==end==") || txt.includes("status=")) {
-        const ok = /status=ok/i.test(txt);
-        return { ok, jobId: myId, message: txt, error: ok ? undefined : txt };
-      }
-    } catch {
-      /* wait */
-    }
-    await new Promise((r) => setTimeout(r, 200));
+  const dispatched = await bridge.dispatchLiveJob(lisp, target || undefined, waitMs);
+  if (dispatched.result) {
+    const ok = dispatched.result.status === "ok";
+    return {
+      ok,
+      jobId: dispatched.jobId,
+      message: dispatched.result.message,
+      error: ok ? undefined : dispatched.result.message,
+    };
   }
   return {
     ok: false,
-    jobId: myId,
+    jobId: dispatched.jobId,
     error: "LISP plan job timeout — plugin may not be loading job.lsp",
   };
 }
@@ -401,7 +392,7 @@ export async function stagePlanBlockPreview(opts: {
   for (const o of prior) {
     await rejectLivePreview(o.opId, opts.waitMs ?? 12000).catch(() => null);
   }
-  const opId = randomUUID().slice(0, 8);
+  const opId = randomUUID().replaceAll("-", "").slice(0, 24);
   const instances = opts.instances || [];
 
   // ── Primary: named block DEFINE + INSERT on preview layer ──

@@ -53,8 +53,8 @@ cat > "$PKG/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>$MOD_NAME</string>
   <key>CFBundleIdentifier</key><string>io.smartcorex.$MOD_NAME</string>
   <key>CFBundleName</key><string>$MOD_NAME</string>
-  <key>CFBundleShortVersionString</key><string>1.1.0</string>
-  <key>CFBundleVersion</key><string>3</string>
+  <key>CFBundleShortVersionString</key><string>1.2.0</string>
+  <key>CFBundleVersion</key><string>4</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
 </dict>
 </plist>

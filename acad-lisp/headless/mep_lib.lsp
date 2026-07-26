@@ -38,13 +38,20 @@
   (while (< i (1- n)) (setq tot (+ tot (distance (nth i pts) (nth (1+ i) pts))) i (1+ i)))
   tot)
 
+(defun mep:arc-sweep (start end / sweep period)
+  (setq sweep (- end start) period (* 2.0 pi))
+  (while (< sweep 0.0) (setq sweep (+ sweep period)))
+  (while (> sweep period) (setq sweep (- sweep period)))
+  sweep)
+
 (defun mep:entlen (en / el ty)
   (setq el (entget en) ty (cdr (assoc 0 el)))
   (cond
     ((= ty "LINE") (distance (cdr (assoc 10 el)) (cdr (assoc 11 el))))
     ((= ty "LWPOLYLINE") (mep:lwlen el))
     ((= ty "MLINE") (mep:mlen el))
-    ((= ty "ARC") (* (cdr (assoc 40 el)) (abs (- (cdr (assoc 51 el)) (cdr (assoc 50 el))))))
+    ((= ty "ARC") (* (cdr (assoc 40 el))
+                       (mep:arc-sweep (cdr (assoc 50 el)) (cdr (assoc 51 el)))))
     ((= ty "CIRCLE") (* 2.0 pi (cdr (assoc 40 el))))
     (T 0.0)))
 

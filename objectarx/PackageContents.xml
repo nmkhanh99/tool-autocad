@@ -3,7 +3,7 @@
      The outer Acad-Bridge.bundle IS the ObjectARX module (exports acrxEntryPoint).
      Do NOT nest another .bundle — ApplicationAddins loads the top-level .bundle
      as Runtime Extension and requires acrxEntryPoint there. -->
-<ApplicationPackage SchemaVersion="1.0" AppVersion="1.1.0"
+<ApplicationPackage SchemaVersion="1.0" AppVersion="1.2.0"
     ProductType="Application"
     Name="Acad-Bridge"
     Description="AutoCAD Toolkit bridge - file watch + ObjectARX raw for AutoCAD Mac"

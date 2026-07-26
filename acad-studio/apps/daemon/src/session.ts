@@ -17,7 +17,13 @@ import {
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import express, { type Router } from "express";
-import { findCoreConsole, inlineLib, mepLib, runHeadless, writeLiveJob } from "./acadBridge.js";
+import {
+  dispatchLiveJob,
+  findCoreConsole,
+  inlineLib,
+  mepLib,
+  runHeadless,
+} from "./acadBridge.js";
 
 /** Session root — overridable for tests via ACAD_SESSIONS_DIR / MEP_SESSIONS_DIR. */
 export function sessionsRoot(): string {
@@ -443,17 +449,20 @@ export function sessionRouter(): Router {
   });
 
   // Optional LIVE channel — explicit second action, not the sandbox accept path.
-  r.post("/live", (req, res) => {
+  r.post("/live", async (req, res) => {
     const { recipe, params, target } = req.body ?? {};
     const op = opLisp(recipe, params);
     if (!op) return res.status(400).json({ error: `recipe không hỗ trợ live: ${recipe}` });
     const lisp = `${inlineLib()}(setvar "FILEDIA" 0)(setvar "CMDDIA" 0)\n${op}\n(command "_.ZOOM" "_E")(princ)`;
-    const jobPath = writeLiveJob(lisp, target);
+    const dispatched = await dispatchLiveJob(lisp, target, 15_000);
     res.json({
-      ok: true,
-      jobPath,
+      ok: dispatched.state !== "error",
+      ...dispatched,
       target: target || "(bản vẽ đang active)",
-      hint: "✓ Đã gửi — AutoCAD tự vẽ ngay vào " + (target || "bản vẽ đang active") + ".",
+      hint:
+        dispatched.state === "sent"
+          ? "Đã gửi nhưng AutoCAD chưa trả kết quả; bridge đang giữ thứ tự job."
+          : "✓ AutoCAD đã xử lý trên " + (target || "bản vẽ đang active") + ".",
     });
   });
 
