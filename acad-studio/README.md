@@ -63,6 +63,9 @@ apps/desktop (Electron) bọc apps/web thành cửa sổ native.
 - `GET /api/acad/drawing-info?target=...` — snapshot ObjectARX **chỉ đọc** của đúng
   bản vẽ đang mở; bỏ `target` để lấy document active. Nút **Hồ sơ bản vẽ** hiển thị
   metadata, entity/layer/block/layout/xref/style/selection và dữ liệu thô.
+- `GET/POST /api/acad/blocks/*` — panel **Thư viện block** quản lý catalog, nguồn
+  DWG/ảnh/XTP và các luồng scan/create/insert/sync metadata; duplicate chỉ được báo cáo,
+  không tự replace. Xem kiến trúc và giới hạn MVP tại [`BLOCK-LIBRARY.md`](BLOCK-LIBRARY.md).
 - `GET /api/acad/standards/profiles`, `POST /scan`, `POST /apply`, `POST /action` —
   panel **Chuẩn hóa** quản lý mẫu A3/unit/DIM/layer/mapping; quét read-only, cho tick/bỏ
   DIM lệch rồi mới chạy DIMSPACE hoặc các thao tác scale/rotate/color/layer/area.

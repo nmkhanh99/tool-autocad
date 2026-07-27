@@ -23,7 +23,8 @@
     "test:standards-profile": "tsx scripts/test-standards-profile.mjs",
     "test:standards-engine": "tsx scripts/test-standards-engine.mjs",
     "test:standards-router": "tsx scripts/test-drawing-standards.mjs",
-    "test:standards": "npm run test:standards-profile && npm run test:standards-engine && npm run test:standards-router"
+    "test:standards": "npm run test:standards-profile && npm run test:standards-engine && npm run test:standards-router",
+    "test:block-library": "tsx scripts/test-block-library.mjs && tsx scripts/test-block-library-cad.mjs && tsx scripts/test-block-library-router.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",

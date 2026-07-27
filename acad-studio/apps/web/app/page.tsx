@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { FUNCTIONS, GROUPS, byId, type Fn } from "./functions";
 import DrawingInfoPanel from "./DrawingInfoPanel";
 import DrawingStandardsPanel from "./DrawingStandardsPanel";
+import BlockLibraryPanel from "./BlockLibraryPanel";
 import LispLibraryPanel from "./LispLibraryPanel";
 import {
   readLispProposal,
@@ -164,6 +165,7 @@ export default function Page() {
   const [standardsOpen, setStandardsOpen] = useState(false);
   const [standardsTarget, setStandardsTarget] = useState("");
   const [standardsRefreshToken, setStandardsRefreshToken] = useState(0);
+  const [blockLibraryOpen, setBlockLibraryOpen] = useState(false);
   const [lispLibraryOpen, setLispLibraryOpen] = useState(false);
   const [lispLibraryRefreshToken, setLispLibraryRefreshToken] = useState(0);
   const [lispProposalBusy, setLispProposalBusy] = useState<number | null>(null);
@@ -1031,6 +1033,10 @@ export default function Page() {
           }} title="Cấu hình, quét và điều chỉnh bản vẽ theo mẫu quy chuẩn">
             ✓ Chuẩn hóa
           </button>
+          <button className="pillbtn" onClick={() => setBlockLibraryOpen(true)}
+            title="Quản lý, tạo, chèn và đồng bộ block với AutoCAD">
+            ◫ Thư viện block
+          </button>
           <button className="pillbtn" onClick={() => setLispLibraryOpen(true)}
             title="Quét, đọc, cấu hình AI và nạp LSP/MNL/FAS vào bản vẽ đang mở">
             ⌘ Thư viện AutoCAD
@@ -1281,6 +1287,14 @@ export default function Page() {
         initialTarget={standardsTarget || drawTarget}
         refreshToken={standardsRefreshToken}
         onClose={() => setStandardsOpen(false)}
+        onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
+      />
+
+      <BlockLibraryPanel
+        open={blockLibraryOpen}
+        daemon={DAEMON}
+        initialTarget={drawTarget}
+        onClose={() => setBlockLibraryOpen(false)}
         onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
       />
 

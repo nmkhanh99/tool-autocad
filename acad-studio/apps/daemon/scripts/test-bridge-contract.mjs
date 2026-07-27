@@ -271,6 +271,10 @@ assert(arxCpp.includes("/Acad-Bridge"), "plugin default path Acad-Bridge");
 assert(arxCpp.includes('"/job.lsp"') || arxCpp.includes("/job.lsp"), "plugin watches job.lsp");
 assert(arxCpp.includes('"/drawing-info.req"'), "plugin watches drawing-info.req");
 assert(arxCpp.includes("findDocExact"), "drawing-info resolves exact document target");
+assert(
+  /static int execNativeJob[\s\S]*?AcApDocument\* pDoc = findDocExact\(target\);/.test(arxCpp),
+  "native mutations resolve the exact document target",
+);
 assert(arxCpp.includes("snapshotJobFile"), "plugin snapshots queued job bytes before async execution");
 assert(arxCpp.includes("/job-snapshots"), "plugin stores async job snapshots under bridge");
 const drawingInfoBlock = arxCpp.slice(

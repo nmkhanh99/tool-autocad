@@ -36,6 +36,12 @@
 #include <dbmline.h>
 #include <dbsymtb.h>
 #include <dbdict.h>
+#include <dbxrecrd.h>
+#include <dbdynblk.h>
+#include <dbAnnotativeObjectPE.h>
+#include <dbObjectContextInterface.h>
+#include <dbObjectContextManager.h>
+#include <dbObjectContextCollection.h>
 #include <dblayout.h>
 #include <summinfo.h>
 #include <dbtable.h>
@@ -57,7 +63,7 @@ static struct timespec  gDrawingInfoReqMtime = {0, 0};
 static std::string      gHiLayer;   // layer dang duoc highlight (de unhighlight khi doi)
 
 static const ACHAR* kGroup = L"ACAD_BRIDGE";
-static const char*  kPluginVersion = "1.2.0";
+static const char*  kPluginVersion = "1.3.0";
 
 // ============================ UTF-8 <-> wchar_t (UTF-32 tren Mac) ============================
 std::string toUtf8(const wchar_t* w) {
@@ -326,6 +332,43 @@ static std::string objectHandle(AcDbObject* obj) {
     return toUtf8(buf);
 }
 
+static const ACHAR* kAcadlibXrecordKey = L"ACADLIB";
+
+static bool readBlockAcadlibMetadata(AcDbBlockTableRecord* block, std::string& metadata) {
+    metadata.clear();
+    if (!block) return false;
+    const AcDbObjectId dictionaryId = block->extensionDictionary();
+    if (dictionaryId.isNull()) return true;
+
+    AcDbDictionary* dictionary = nullptr;
+    if (acdbOpenObject(dictionary, dictionaryId, AcDb::kForRead) != Acad::eOk || !dictionary)
+        return false;
+    if (!dictionary->has(kAcadlibXrecordKey)) {
+        dictionary->close();
+        return true;
+    }
+
+    AcDbXrecord* xrecord = nullptr;
+    const Acad::ErrorStatus openStatus =
+        dictionary->getAt(kAcadlibXrecordKey, xrecord, AcDb::kForRead);
+    dictionary->close();
+    if (openStatus != Acad::eOk || !xrecord) return false;
+
+    resbuf* chain = nullptr;
+    const Acad::ErrorStatus readStatus = xrecord->rbChain(&chain);
+    xrecord->close();
+    if (readStatus != Acad::eOk) {
+        if (chain) acutRelRb(chain);
+        return false;
+    }
+    for (resbuf* item = chain; item; item = item->rbnext) {
+        if (item->restype == 1 && item->resval.rstring)
+            metadata += toUtf8(item->resval.rstring);
+    }
+    if (chain) acutRelRb(chain);
+    return true;
+}
+
 static std::string objectType(AcDbObject* obj) {
     if (!obj || !obj->isA()) return "UNKNOWN";
     const ACHAR* dxf = obj->isA()->dxfName();
@@ -574,6 +617,67 @@ static std::string layerTableJson(AcDbDatabase* db, long long& total,
     return out + "]";
 }
 
+static std::string blockAnnotationScalesJson(AcDbDatabase* db,
+                                             AcDbBlockTableRecord* block) {
+    if (!db || !block) return "[]";
+    AcDbObjectContextManager* manager = db->objectContextManager();
+    AcDbObjectContextCollection* collection = manager
+        ? manager->contextCollection(ACDB_ANNOTATIONSCALES_COLLECTION)
+        : nullptr;
+    AcDbObjectContextInterface* contextInterface =
+        ACRX_PE_PTR(block, AcDbObjectContextInterface);
+    if (!collection || !contextInterface ||
+        !contextInterface->supportsCollection(block, ACDB_ANNOTATIONSCALES_COLLECTION))
+        return "[]";
+
+    AcDbObjectContextCollectionIterator* iterator = collection->newIterator();
+    if (!iterator || iterator->start() != Acad::eOk) {
+        delete iterator;
+        return "[]";
+    }
+    std::string out = "[";
+    bool first = true;
+    for (; !iterator->done(); iterator->next()) {
+        AcDbObjectContext* context = nullptr;
+        if (iterator->getContext(context) != Acad::eOk || !context) continue;
+        if (contextInterface->hasContext(block, *context)) {
+            AcString name;
+            if (context->getName(name) == Acad::eOk) {
+                if (!first) out += ",";
+                first = false;
+                out += jsonString(toUtf8(name.kwszPtr()));
+            }
+        }
+        delete context;
+    }
+    delete iterator;
+    return out + "]";
+}
+
+static long long blockReferenceCount(AcDbBlockTableRecord* block) {
+    if (!block) return 0;
+    AcDbObjectIdArray referenceIds;
+    if (block->getBlockReferenceIds(referenceIds) != Acad::eOk)
+        referenceIds.removeAll();
+    long long total = (long long)referenceIds.length();
+    if (!AcDbDynBlockTableRecord::isDynamicBlock(block)) return total;
+
+    AcDbDynBlockTableRecord dynamicRecord(block->objectId());
+    AcDbObjectIdArray anonymousIds;
+    if (dynamicRecord.getAnonymousBlockIds(anonymousIds) != Acad::eOk) return total;
+    for (int index = 0; index < anonymousIds.length(); ++index) {
+        AcDbBlockTableRecord* anonymous = nullptr;
+        if (acdbOpenObject(anonymous, anonymousIds[index], AcDb::kForRead) != Acad::eOk ||
+            !anonymous)
+            continue;
+        AcDbObjectIdArray anonymousReferences;
+        if (anonymous->getBlockReferenceIds(anonymousReferences) == Acad::eOk)
+            total += (long long)anonymousReferences.length();
+        anonymous->close();
+    }
+    return total;
+}
+
 static std::string blockTableJson(AcDbDatabase* db, std::string& xrefs,
                                   long long& total, long long& totalXrefs,
                                   std::vector<std::string>& warnings) {
@@ -599,9 +703,75 @@ static std::string blockTableJson(AcDbDatabase* db, std::string& xrefs,
             const std::string blockName = toUtf8(name.kwszPtr());
             const bool isXref = block->isFromExternalReference();
             if (blockCount < kInfoMaxTableItems) {
+                AcString comments;
+                block->comments(comments);
+                const std::string description = toUtf8(comments.kwszPtr());
+                const AcGePoint3d origin = block->origin();
+                const long long referenceCount = blockReferenceCount(block);
+                AcDbAnnotativeObjectPE* annotativePe =
+                    ACRX_PE_PTR(block, AcDbAnnotativeObjectPE);
+                const bool annotative = annotativePe && annotativePe->annotative(block);
+                const std::string annotationScales =
+                    blockAnnotationScalesJson(db, block);
+                std::string acadlibMetadata;
+                if (!readBlockAcadlibMetadata(block, acadlibMetadata))
+                    addWarning(warnings, "block_acadlib_metadata_unavailable");
+
+                std::string attributeDefinitions = "[";
+                bool firstAttribute = true;
+                AcDbBlockTableRecordIterator* entityIterator = nullptr;
+                if (block->newIterator(entityIterator) == Acad::eOk && entityIterator) {
+                    for (; !entityIterator->done(); entityIterator->step()) {
+                        AcDbEntity* entity = nullptr;
+                        if (entityIterator->getEntity(entity, AcDb::kForRead) != Acad::eOk || !entity)
+                            continue;
+                        AcDbAttributeDefinition* attribute = AcDbAttributeDefinition::cast(entity);
+                        if (attribute) {
+                            AcString tag, prompt, defaultText;
+                            attribute->tag(tag);
+                            attribute->prompt(prompt);
+                            attribute->textString(defaultText);
+                            if (!firstAttribute) attributeDefinitions += ",";
+                            firstAttribute = false;
+                            attributeDefinitions +=
+                                "{\"tag\":" + jsonString(toUtf8(tag.kwszPtr())) +
+                                ",\"prompt\":" + jsonString(toUtf8(prompt.kwszPtr())) +
+                                ",\"defaultValue\":" + jsonString(toUtf8(defaultText.kwszPtr())) +
+                                ",\"invisible\":" + jsonBool(attribute->isInvisible()) +
+                                ",\"constant\":" + jsonBool(attribute->isConstant()) +
+                                ",\"preset\":" + jsonBool(attribute->isPreset()) +
+                                ",\"verify\":" + jsonBool(attribute->isVerifiable()) +
+                                ",\"lockPosition\":" + jsonBool(attribute->lockPositionInBlock()) + "}";
+                        }
+                        entity->close();
+                    }
+                    delete entityIterator;
+                }
+                attributeDefinitions += "]";
+
                 if (!firstBlock) blocks += ",";
                 firstBlock = false;
                 blocks += "{\"name\":" + jsonString(blockName) +
+                          ",\"handle\":" + jsonString(objectHandle(block)) +
+                          ",\"comments\":" + jsonString(description) +
+                          ",\"description\":" + jsonString(description) +
+                          ",\"acadlibMetadata\":" + jsonString(acadlibMetadata) +
+                          ",\"origin\":[" + jsonNumber(origin.x) + "," +
+                                                jsonNumber(origin.y) + "," +
+                                                jsonNumber(origin.z) + "]" +
+                          ",\"referenceCount\":" +
+                              std::to_string(referenceCount) +
+                          ",\"dynamic\":" +
+                              jsonBool(AcDbDynBlockTableRecord::isDynamicBlock(block)) +
+                          ",\"insertUnits\":" +
+                              std::to_string((int)block->blockInsertUnits()) +
+                          ",\"explodable\":" + jsonBool(block->explodable()) +
+                          ",\"blockScaling\":" +
+                              std::to_string((int)block->blockScaling()) +
+                          ",\"hasPreviewIcon\":" + jsonBool(block->hasPreviewIcon()) +
+                          ",\"annotative\":" + jsonBool(annotative) +
+                          ",\"annotationScales\":" + annotationScales +
+                          ",\"attributeDefinitions\":" + attributeDefinitions +
                           ",\"anonymous\":" + jsonBool(block->isAnonymous()) +
                           ",\"isLayout\":" + jsonBool(block->isLayout()) +
                           ",\"layout\":" + jsonBool(block->isLayout()) +
@@ -1435,6 +1605,7 @@ static void writeBom(AcApDocument* pDoc) {
 //   PIPE   \t <layer> \t <dn> \t <hệ> \t x1,y1 x2,y2 …  (polyline + XDATA)
 //   TEXT   \t <layer> \t <x> \t <y> \t <cao> \t <chuỗi>
 //   CIRCLE \t <layer> \t <x> \t <y> \t <bán kính>
+//   BLOCKMETA \t <blockName> \t <commentsHexUtf8> \t <metaHexUtf8>
 // PREVIEW: vẽ lên layer MEP-PREVIEW (nhìn thấy trên CAD), XDATA preview=1 + op=<id> + dest=<layer>
 // APPLY:  đổi layer entity preview cùng opId sang dest (commit accepted)
 // REJECT: xoá entity preview cùng opId
@@ -1445,6 +1616,93 @@ static std::vector<std::string> splitCh(const std::string& s, char d) {
     std::vector<std::string> out; std::string cur;
     for (char c : s) { if (c == d) { out.push_back(cur); cur.clear(); } else cur += c; }
     out.push_back(cur); return out;
+}
+static bool decodeHexUtf8(const std::string& hex, std::string& decoded) {
+    decoded.clear();
+    if ((hex.size() & 1) != 0) return false;
+    decoded.reserve(hex.size() / 2);
+    auto nibble = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    for (size_t i = 0; i < hex.size(); i += 2) {
+        const int hi = nibble(hex[i]);
+        const int lo = nibble(hex[i + 1]);
+        if (hi < 0 || lo < 0) {
+            decoded.clear();
+            return false;
+        }
+        decoded += static_cast<char>((hi << 4) | lo);
+    }
+    return true;
+}
+static bool writeBlockAcadlibMetadata(AcDbBlockTableRecord* block,
+                                      const std::string& metadata,
+                                      std::string& error) {
+    error.clear();
+    if (!block) {
+        error = "null block record";
+        return false;
+    }
+
+    std::wstring wideMetadata = toWide(metadata);
+    resbuf* chain = acutBuildList(1, wideMetadata.c_str(), 0);
+    if (!chain) {
+        error = "cannot allocate XRecord data";
+        return false;
+    }
+
+    AcDbObjectId dictionaryId = block->extensionDictionary();
+    if (dictionaryId.isNull()) {
+        const Acad::ErrorStatus createStatus = block->createExtensionDictionary();
+        if (createStatus != Acad::eOk) {
+            acutRelRb(chain);
+            error = "cannot create extension dictionary (" +
+                    std::to_string((int)createStatus) + ")";
+            return false;
+        }
+        dictionaryId = block->extensionDictionary();
+    }
+
+    AcDbDictionary* dictionary = nullptr;
+    const Acad::ErrorStatus dictionaryStatus =
+        acdbOpenObject(dictionary, dictionaryId, AcDb::kForWrite);
+    if (dictionaryStatus != Acad::eOk || !dictionary) {
+        acutRelRb(chain);
+        error = "cannot open extension dictionary (" +
+                std::to_string((int)dictionaryStatus) + ")";
+        return false;
+    }
+
+    Acad::ErrorStatus writeStatus = Acad::eOk;
+    if (dictionary->has(kAcadlibXrecordKey)) {
+        AcDbXrecord* xrecord = nullptr;
+        writeStatus = dictionary->getAt(kAcadlibXrecordKey, xrecord, AcDb::kForWrite);
+        if (writeStatus == Acad::eOk && xrecord) {
+            writeStatus = xrecord->setFromRbChain(*chain);
+            xrecord->close();
+        }
+    } else {
+        AcDbXrecord* xrecord = new AcDbXrecord();
+        writeStatus = xrecord->setFromRbChain(*chain);
+        if (writeStatus == Acad::eOk) {
+            AcDbObjectId xrecordId;
+            writeStatus = dictionary->setAt(kAcadlibXrecordKey, xrecord, xrecordId);
+        }
+        if (writeStatus == Acad::eOk) xrecord->close();
+        else delete xrecord;
+    }
+    dictionary->close();
+    acutRelRb(chain);
+
+    if (writeStatus != Acad::eOk) {
+        error = "cannot write ACADLIB XRecord (" +
+                std::to_string((int)writeStatus) + ")";
+        return false;
+    }
+    return true;
 }
 AcDbObjectId ensureLayer(AcDbDatabase* db, const std::wstring& name, int aci) {
     AcDbObjectId id = AcDbObjectId::kNull;
@@ -1597,7 +1855,7 @@ static int execNativeJob(const std::string& raw) {
         writeNativeDoneJson(j);
     };
 
-    AcApDocument* pDoc = findDocByName(target);
+    AcApDocument* pDoc = findDocExact(target);
     if (!pDoc) { acutPrintf(L"\n[AcadBridge] native.job: khong co ban ve dich.");
         failDone("no document"); return 0; }
     if (acDocManager->lockDocument(pDoc, AcAp::kWrite) != Acad::eOk) {
@@ -1606,12 +1864,31 @@ static int execNativeJob(const std::string& raw) {
     ensureRegApp(db);
 
     AcDbBlockTable* bt = nullptr; AcDbBlockTableRecord* ms = nullptr;
-    if (db->getBlockTable(bt, AcDb::kForRead) != Acad::eOk) { acDocManager->unlockDocument(pDoc); return 0; }
+    if (db->getBlockTable(bt, AcDb::kForRead) != Acad::eOk) {
+        acDocManager->unlockDocument(pDoc);
+        failDone("cannot open block table");
+        return 0;
+    }
     if (bt->getAt(ACDB_MODEL_SPACE, ms, AcDb::kForWrite) != Acad::eOk) {
-        bt->close(); acDocManager->unlockDocument(pDoc); return 0; }
+        bt->close(); acDocManager->unlockDocument(pDoc);
+        failDone("cannot open model space");
+        return 0;
+    }
 
     int count = 0;
     std::vector<std::string> handles;
+    std::string operationError;
+    bool hasViewMutation = mode == "PREVIEW" || mode == "APPLY";
+    if (mode == "COMMIT") {
+        for (const auto& line : lines) {
+            const std::string op = splitCh(line, '\t')[0];
+            if (op == "PIPE" || op == "TEXT" || op == "RECT" ||
+                op == "SYMBOL" || op == "CIRCLE") {
+                hasViewMutation = true;
+                break;
+            }
+        }
+    }
 
     if (mode == "APPLY") {
         if (opId.empty()) {
@@ -1645,7 +1922,65 @@ static int execNativeJob(const std::string& raw) {
             std::vector<std::string> t = splitCh(line, '\t');
             const std::string& op = t[0];
             AcDbObjectId newId;
-            if (op == "LAYER" && t.size() >= 3) {
+            if (op == "BLOCKMETA") {
+                if (isPreview) {
+                    operationError = "BLOCKMETA is only supported in COMMIT mode";
+                    break;
+                }
+                if (t.size() != 4 || t[1].empty()) {
+                    operationError = "BLOCKMETA needs blockName, commentsHexUtf8 and metaHexUtf8";
+                    break;
+                }
+                std::string comments, metadata;
+                if (!decodeHexUtf8(t[2], comments)) {
+                    operationError = "BLOCKMETA commentsHexUtf8 is invalid";
+                    break;
+                }
+                if (!decodeHexUtf8(t[3], metadata)) {
+                    operationError = "BLOCKMETA metaHexUtf8 is invalid";
+                    break;
+                }
+
+                const std::wstring blockName = toWide(t[1]);
+                AcDbObjectId blockId;
+                const Acad::ErrorStatus lookupStatus = bt->getAt(blockName.c_str(), blockId);
+                if (lookupStatus != Acad::eOk || blockId.isNull()) {
+                    operationError = "BLOCKMETA block not found: " + t[1];
+                    break;
+                }
+
+                AcDbBlockTableRecord* targetBlock = nullptr;
+                const bool targetIsModelSpace = (blockId == ms->objectId());
+                Acad::ErrorStatus openStatus = Acad::eOk;
+                if (targetIsModelSpace) targetBlock = ms;
+                else openStatus = acdbOpenObject(targetBlock, blockId, AcDb::kForWrite);
+                if (openStatus != Acad::eOk || !targetBlock) {
+                    operationError = "BLOCKMETA cannot open block for write: " + t[1];
+                    break;
+                }
+
+                AcString previousComments;
+                const Acad::ErrorStatus commentsReadStatus =
+                    targetBlock->comments(previousComments);
+                const Acad::ErrorStatus commentsWriteStatus =
+                    commentsReadStatus == Acad::eOk
+                        ? targetBlock->setComments(toWide(comments).c_str())
+                        : commentsReadStatus;
+                if (commentsWriteStatus != Acad::eOk) {
+                    operationError = "BLOCKMETA cannot update comments: " + t[1];
+                } else {
+                    std::string xrecordError;
+                    if (!writeBlockAcadlibMetadata(targetBlock, metadata, xrecordError)) {
+                        targetBlock->setComments(previousComments.kwszPtr());
+                        operationError = "BLOCKMETA ACADLIB XRecord failed for " + t[1] +
+                                         ": " + xrecordError;
+                    } else {
+                        count++;
+                    }
+                }
+                if (!targetIsModelSpace) targetBlock->close();
+                if (!operationError.empty()) break;
+            } else if (op == "LAYER" && t.size() >= 3) {
                 ensureLayer(db, toWide(t[1]), atoi(t[2].c_str()));
             } else if (op == "PIPE" && t.size() >= 5) {
                 std::string destLayer = t[1];
@@ -1760,9 +2095,15 @@ static int execNativeJob(const std::string& raw) {
     ms->close(); bt->close();
     acDocManager->unlockDocument(pDoc);
 
+    if (!operationError.empty()) {
+        failDone(operationError.c_str());
+        return 0;
+    }
+
     // After PREVIEW/COMMIT: zoom so the user actually sees new geometry (tests used tiny coords
     // at origin; without ZOOM the viewport can leave everything off-screen).
-    if (count > 0 && (mode == "PREVIEW" || mode == "COMMIT" || mode == "APPLY")) {
+    if (count > 0 && hasViewMutation &&
+        (mode == "PREVIEW" || mode == "COMMIT" || mode == "APPLY")) {
         acDocManager->sendStringToExecute(pDoc, L"(command \"_.ZOOM\" \"_E\") ", true, false, false);
         if (mode == "PREVIEW") {
             // Thaw/on preview layer if frozen; print clear cue on command line.
@@ -2058,7 +2399,7 @@ acrxEntryPoint(AcRx::AppMsgCode msg, void* pkt) {
         startReactors();
         writeDocs();   // heartbeat dau tien
         emitEvent("pluginLoaded", std::string("AcadBridge ") + kPluginVersion);
-        acutPrintf(L"\n[AcadBridge 1.2.0] Da nap. Drawing-info read-only + Raw ObjectARX menu."
+        acutPrintf(L"\n[AcadBridge 1.3.0] Da nap. Drawing-info read-only + Raw ObjectARX menu."
                    L" Lenh: MEPARX / MEPRAW / MEPDOCS / MEPWATCH / MEPUNWATCH.");
         break;
     case AcRx::kUnloadAppMsg:

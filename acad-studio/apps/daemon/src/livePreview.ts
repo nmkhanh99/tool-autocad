@@ -188,6 +188,16 @@ function clearNativeDone(): void {
   }
 }
 
+let nativeJobQueue: Promise<void> = Promise.resolve();
+
+async function acquireNativeJobLock(): Promise<() => void> {
+  const previous = nativeJobQueue;
+  let release!: () => void;
+  nativeJobQueue = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  return release;
+}
+
 /**
  * Wait until native.done matches expect.token (+ mode/opId).
  * Never returns a stale previous job's result.
@@ -220,11 +230,16 @@ export async function runNativeJob(
   expect: WaitExpect,
   waitMs?: number,
 ): Promise<NativeDone> {
-  clearNativeDone();
-  // small yield so FS watchers see delete before create
-  await new Promise((r) => setTimeout(r, 30));
-  atomicWrite(join(BRIDGE(), "native.job"), body);
-  return waitNativeDone(expect, waitMs ?? 12000);
+  const release = await acquireNativeJobLock();
+  try {
+    clearNativeDone();
+    // small yield so FS watchers see delete before create
+    await new Promise((r) => setTimeout(r, 30));
+    atomicWrite(join(BRIDGE(), "native.job"), body);
+    return await waitNativeDone(expect, waitMs ?? 12000);
+  } finally {
+    release();
+  }
 }
 
 export type StageResult =
