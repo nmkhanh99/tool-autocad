@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { FUNCTIONS, GROUPS, byId, type Fn } from "./functions";
+import { GROUPS, MENU_FUNCTIONS, byId, type Fn } from "./functions";
 import DrawingInfoPanel from "./DrawingInfoPanel";
 import DrawingStandardsPanel from "./DrawingStandardsPanel";
 import BlockLibraryPanel from "./BlockLibraryPanel";
@@ -66,6 +66,16 @@ type Msg = {
 type QOption = { label: string; value: string };
 type QQuestion = { id: string; label: string; type: "radio" | "select" | "checkbox" | "text" | "number"; options?: (string | QOption)[] };
 type QForm = { id: string; title: string; questions: QQuestion[]; submitted?: boolean };
+type PendingPageCadAction = {
+  id: string;
+  revision: string;
+  action: "activate-document" | "select";
+  target: string;
+  targetLabel: string;
+  scopeLabel: string;
+  count?: number;
+  drawTargetTitle?: string;
+};
 
 let messageSequence = 0;
 function newMessageId(): string {
@@ -172,6 +182,10 @@ export default function Page() {
   /** Bản vẽ đang mở trong AutoCAD + đích vẽ đang chọn ("" = file .work mặc định). */
   const [drawDocs, setDrawDocs] = useState<{ title: string; file: string; active: boolean }[]>([]);
   const [drawTarget, setDrawTarget] = useState("");
+  const [pendingPageCadAction, setPendingPageCadAction] =
+    useState<PendingPageCadAction | null>(null);
+  const [pageCadActionBusy, setPageCadActionBusy] = useState("");
+  const [pageCadActionError, setPageCadActionError] = useState("");
   const sessionRef = useRef<string | null>(null);
   const viewEpochRef = useRef(0);
   const lispReviewExpectationRef = useRef<{
@@ -191,10 +205,18 @@ export default function Page() {
     handler: string; reason: string; defaultParams?: Record<string, unknown>;
   };
   const [rawMenu, setRawMenu] = useState<Record<string, RawCap[]> | null>(null);
-  const [rawOpen, setRawOpen] = useState(true);
+  const [rawOpen, setRawOpen] = useState(false);
   const [rawSummary, setRawSummary] = useState<any>(null);
 
   useEffect(() => { loadAgents(); loadConvs(); loadRawCatalog(); loadDrawDocs(); }, []);
+  useEffect(() => {
+    if (!pendingPageCadAction) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") void rejectPageCadAction();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pendingPageCadAction, pageCadActionBusy]);
   useEffect(() => {   // sự kiện realtime từ AutoCAD (plugin reactor → daemon SSE)
     const es = new EventSource(`${DAEMON}/api/acad/events`);
     es.onmessage = (e) => {
@@ -442,26 +464,178 @@ export default function Page() {
       const r = await (await fetch(`${DAEMON}/api/acad/draw/docs`)).json();
       if (!r.ok) return;
       setDrawDocs(r.docs || []);
-      setDrawTarget(r.target?.kind === "live" ? r.target.title : "");
+      setDrawTarget(
+        r.target?.kind === "live"
+          ? String(r.target.file || r.target.title || "")
+          : "",
+      );
     } catch { /* daemon chưa lên */ }
   }
 
-  /** Chọn đích vẽ: "" = file .work mặc định; ngược lại = title bản vẽ đang mở. */
-  async function pickDrawTarget(title: string) {
-    setDrawTarget(title);
+  async function persistDrawTarget(exactTarget: string) {
+    const response = await fetch(`${DAEMON}/api/acad/draw/target`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(exactTarget ? { file: exactTarget } : {}),
+    });
+    const r = await response.json();
+    if (!response.ok || r.error) {
+      throw new Error(r.error || `HTTP ${response.status}`);
+    }
+    const savedTarget = r.target?.kind === "live"
+      ? String(r.target.file || r.target.title || exactTarget)
+      : "";
+    setDrawTarget(savedTarget);
+    setMessages((p) => [
+      ...p,
+      { role: "assistant", text: r.agentOutput || "Đã đổi đích vẽ." },
+    ]);
+  }
+
+  async function preparePageCadAction(
+    request: Record<string, unknown>,
+    display: Omit<PendingPageCadAction, "id" | "revision" | "target"> & {
+      target: string;
+    },
+  ) {
+    if (pageCadActionBusy || pendingPageCadAction) return;
+    setPageCadActionBusy("prepare");
+    setPageCadActionError("");
     try {
-      const r = await (await fetch(`${DAEMON}/api/acad/draw/target`, {
+      const response = await fetch(`${DAEMON}/api/acad/selection/prepare`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(title ? { title } : {}),
-      })).json();
-      setMessages((p) => [
-        ...p,
-        { role: "assistant", text: r.agentOutput || (r.error ? `✗ ${r.error}` : "Đã đổi đích vẽ.") },
+        body: JSON.stringify(request),
+      });
+      const body = await response.json();
+      if (!response.ok || body.error) {
+        throw new Error(body.error || `HTTP ${response.status}`);
+      }
+      const operation = body.operation || {};
+      if (!operation.id || !operation.revision) {
+        throw new Error("Daemon không trả operation/revision để xác nhận.");
+      }
+      const count = Number(
+        operation.subjectCount ?? operation.summary?.count ?? display.count,
+      );
+      setPendingPageCadAction({
+        ...display,
+        id: String(operation.id),
+        revision: String(operation.revision),
+        target: String(operation.target || display.target),
+        count: Number.isFinite(count) ? count : display.count,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setPageCadActionError(message);
+      setMessages((messages) => [
+        ...messages,
+        { role: "assistant", text: `Không thể tạo proposal AutoCAD: ${message}` },
       ]);
-      if (r.error) setDrawTarget("");
-    } catch (e) {
-      setMessages((p) => [...p, { role: "assistant", text: "Lỗi đổi đích vẽ: " + e }]);
+    } finally {
+      setPageCadActionBusy("");
+    }
+  }
+
+  /** Chọn đích live chỉ sau proposal + xác nhận kích hoạt trong AutoCAD. */
+  async function pickDrawTarget(exactTarget: string) {
+    if (!exactTarget) {
+      try {
+        await persistDrawTarget("");
+      } catch (error) {
+        setMessages((p) => [...p, {
+          role: "assistant",
+          text: "Lỗi đổi đích vẽ: " +
+            (error instanceof Error ? error.message : String(error)),
+        }]);
+      }
+      return;
+    }
+    const matches = drawDocs.filter((doc) =>
+      doc.file === exactTarget || doc.title === exactTarget);
+    if (matches.length !== 1) {
+      setPageCadActionError(
+        matches.length
+          ? "Tên bản vẽ không duy nhất; hãy nạp lại danh sách."
+          : "Bản vẽ không còn trong danh sách đang mở.",
+      );
+      return;
+    }
+    const document = matches[0];
+    const target = document.file || document.title;
+    await preparePageCadAction(
+      { target, action: "activate-document" },
+      {
+        action: "activate-document",
+        target,
+        targetLabel: document.title || target,
+        scopeLabel: "Kích hoạt bản vẽ và đặt làm đích vẽ",
+        drawTargetTitle: target,
+      },
+    );
+  }
+
+  async function applyPageCadAction() {
+    const pending = pendingPageCadAction;
+    if (!pending || pageCadActionBusy) return;
+    setPageCadActionBusy("apply");
+    setPageCadActionError("");
+    try {
+      const response = await fetch(
+        `${DAEMON}/api/acad/selection/operations/${encodeURIComponent(pending.id)}/apply`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            revision: pending.revision,
+            confirmed: true,
+          }),
+        },
+      );
+      const body = await response.json();
+      if (!response.ok || body.error) {
+        throw new Error(body.error || `HTTP ${response.status}`);
+      }
+      if (pending.action === "activate-document") {
+        await persistDrawTarget(pending.drawTargetTitle || pending.target);
+        await loadDrawDocs();
+      } else {
+        setMessages((messages) => [...messages, {
+          role: "assistant",
+          text: body.hint || `Đã chọn layer ${pending.scopeLabel} trong AutoCAD.`,
+        }]);
+      }
+      setPendingPageCadAction(null);
+    } catch (error) {
+      // Apply là one-shot; stale/error phải chuẩn bị proposal mới.
+      setPendingPageCadAction(null);
+      const message = error instanceof Error ? error.message : String(error);
+      setPageCadActionError(message);
+      setMessages((messages) => [
+        ...messages,
+        { role: "assistant", text: `AutoCAD không thay đổi: ${message}` },
+      ]);
+    } finally {
+      setPageCadActionBusy("");
+    }
+  }
+
+  async function rejectPageCadAction() {
+    const pending = pendingPageCadAction;
+    if (!pending || pageCadActionBusy) return;
+    setPendingPageCadAction(null);
+    setPageCadActionBusy("reject");
+    try {
+      await fetch(
+        `${DAEMON}/api/acad/selection/operations/${encodeURIComponent(pending.id)}/reject`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ revision: pending.revision }),
+        },
+      );
+    } finally {
+      setPageCadActionBusy("");
     }
   }
 
@@ -578,16 +752,31 @@ export default function Page() {
       patchLast((m) => { m.fnResult = { live: true, hint: r.hint }; });
     } catch (e) { patchLast((m) => { m.error = "Lỗi: " + e; }); }
   }
-  async function highlight(layer: string) {
+  async function prepareBomLayerSelection(layer: string) {
     const { alive, docs } = await loadDocs();
     if (!alive || !docs.length) return;
-    const target = (docs.find((d: any) => d.active) || docs[0]).title;
-    try {
-      await fetch(`${DAEMON}/api/acad/highlight`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target, layer }),
-      });
-    } catch { /* im lặng: đây là thao tác phụ trợ */ }
+    const activeDocuments = docs.filter((document: any) => document.active);
+    if (activeDocuments.length !== 1) {
+      setPageCadActionError(
+        "Không xác định được duy nhất bản vẽ active; hãy nạp lại AutoCAD.",
+      );
+      return;
+    }
+    const document = activeDocuments[0];
+    const target = String(document.file || document.title || "");
+    await preparePageCadAction(
+      {
+        target,
+        action: "select",
+        scope: { kind: "layer", name: layer },
+      },
+      {
+        action: "select",
+        target,
+        targetLabel: String(document.title || target),
+        scopeLabel: `Layer ${layer}`,
+      },
+    );
   }
   async function liveBom() {
     let idx = -1;
@@ -1053,11 +1242,12 @@ export default function Page() {
           <select
             value={drawTarget}
             onChange={(e) => pickDrawTarget(e.target.value)}
+            disabled={!!pageCadActionBusy || !!pendingPageCadAction}
             title="Bản vẽ đích — lệnh «Vẽ …» sẽ vẽ vào đây"
           >
             <option value="">📁 File .work (mặc định)</option>
             {drawDocs.map((d) => (
-              <option key={d.file || d.title} value={d.title}>
+              <option key={d.file || d.title} value={d.file || d.title}>
                 ✏️ {d.title}{d.active ? " •" : ""}
               </option>
             ))}
@@ -1087,7 +1277,8 @@ export default function Page() {
               onDecide={decide} decideBusy={decideBusy === i}
               onLispDecision={decideLispProposal} lispBusy={lispProposalBusy === i}
               onSend={(text) => send(text)} setMessages={setMessages}
-              onHighlight={highlight} onOpenAcad={() => openAutoCAD()} />)}
+              onHighlight={prepareBomLayerSelection}
+              onOpenAcad={() => openAutoCAD()} />)}
           </div>
         </div>
 
@@ -1103,29 +1294,71 @@ export default function Page() {
 
       {panel && (
         <aside className="fnpanel">
-          <div className="fnhead">Chức năng <span onClick={() => setPanel(false)}>✕</span></div>
-          <div className="demorow" onClick={() => openAutoCAD(undefined, { newFile: true })}
-            title="Mở AutoCAD 2027 + file scratch mới (ACAD-RAW-scratch.dwg) — AcadBridge / rebuild">
-            🚀 Mở AutoCAD + file mới (trống)
-          </div>
-          <div className="demorow sel" onClick={querySelection} title="Đọc các đối tượng đang được chọn trong AutoCAD">
-            🎯 Đối tượng đang chọn (từ AutoCAD)
-          </div>
-          <div className="demorow sel" onClick={liveBom} title="Bóc khối lượng bản vẽ đang mở — plugin C++ quét trực tiếp">
-            📊 BOM live (bản vẽ đang mở)
-          </div>
-          <div className="demorow sel" onClick={insertBomTable} title="Chèn bảng khối lượng (AcDbTable) vào bản vẽ đang mở">
-            📋 Chèn bảng BOQ vào bản vẽ
-          </div>
-          <div className={"demorow sel" + (autoBom ? " on" : "")} onClick={toggleAutoBom}
-            title="Bật: BOM tự cập nhật mỗi khi bạn vẽ/sửa/xóa trong AutoCAD">
-            {autoBom ? "🟢 BOM tự cập nhật: BẬT" : "🔄 BOM tự cập nhật: TẮT"}
+          <div className="fnhead">Công cụ AutoCAD <span onClick={() => setPanel(false)}>✕</span></div>
+
+          <div className="fngroup quickgroup">
+            <div className="fngrouplbl">Bản vẽ đang mở</div>
+            <div className="fnbtn quickfn" onClick={() => openAutoCAD(undefined, { newFile: true })}
+              title="Mở AutoCAD 2027 với một bản vẽ trống">
+              <span className="fnicon">🚀</span>
+              <div><div className="fnname">Mở AutoCAD + bản vẽ trống</div><div className="fndesc">Khởi tạo file scratch để thử công cụ.</div></div>
+            </div>
+            <div className="fnbtn quickfn" onClick={querySelection} title="Đọc các đối tượng đang được chọn trong AutoCAD">
+              <span className="fnicon">🎯</span>
+              <div><div className="fnname">Đối tượng đang chọn</div><div className="fndesc">Đọc selection hiện tại từ AutoCAD.</div></div>
+            </div>
           </div>
 
-          {/* ── ObjectARX RAW (catalog đầy đủ, không phải workflow MEP phối hợp) ── */}
+          <div className="fngroup quickgroup">
+            <div className="fngrouplbl">Khối lượng trực tiếp</div>
+            <div className="fnbtn quickfn" onClick={liveBom} title="Plugin C++ quét trực tiếp bản vẽ đang mở">
+              <span className="fnicon">📊</span>
+              <div><div className="fnname">Bóc khối lượng bản vẽ mở</div><div className="fndesc">Quét nhanh bằng plugin, không cần chọn thư mục.</div></div>
+            </div>
+            <div className="fnbtn quickfn" onClick={insertBomTable} title="Chèn AcDbTable vào bản vẽ đang mở">
+              <span className="fnicon">📋</span>
+              <div><div className="fnname">Chèn bảng BOQ</div><div className="fndesc">Đưa kết quả khối lượng vào bản vẽ.</div></div>
+            </div>
+            <div className={"fnbtn quickfn" + (autoBom ? " on" : "")} onClick={toggleAutoBom}
+              title="Tự cập nhật BOM khi bản vẽ thay đổi">
+              <span className="fnicon">{autoBom ? "🟢" : "🔄"}</span>
+              <div>
+                <div className="fnname">Tự cập nhật BOM</div>
+                <div className="fndesc">{autoBom ? "Đang bật cho bản vẽ hiện tại." : "Đang tắt."}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="fngrouplbl workflowtitle">Quy trình công việc</div>
+          {GROUPS.map((g, groupIndex) => {
+            const items = MENU_FUNCTIONS.filter((f) => f.group === g);
+            return (
+              <details key={g} className="fngroup menugroup" open={groupIndex === 0}>
+                <summary className="fngrouplbl">
+                  <span>{g}</span><small>{items.length}</small>
+                </summary>
+                {items.map((f) => (
+                  <div key={f.id} className="fnbtn" onClick={() => openFn(f)} title={f.desc}>
+                    <span className="fnicon">{f.icon}</span>
+                    <div className="fnbody">
+                      <div className="fnnameline">
+                        <div className="fnname">{f.label}</div>
+                        <span className={"fnmode " + (f.preview ? "preview" : f.live ? "live" : "batch")}>
+                          {f.preview ? "Xem trước" : f.live ? "LIVE" : "Cả thư mục"}
+                        </span>
+                      </div>
+                      <div className="fndesc">{f.desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </details>
+            );
+          })}
+
+          {/* Catalog kỹ thuật: giữ ở cuối và đóng mặc định để không lấn workflow chính. */}
           <div className="fngroup rawroot">
-            <div className="fngrouplbl rawtoggle" onClick={() => setRawOpen(!rawOpen)} title="Toàn bộ API ObjectARX raw theo OBJECTARX-CAPABILITIES.md">
-              ⚙️ ObjectARX raw {rawSummary ? `(${rawSummary.enabled}/${rawSummary.total})` : ""} {rawOpen ? "▾" : "▸"}
+            <div className="fngrouplbl rawtoggle" onClick={() => setRawOpen(!rawOpen)} title="API ObjectARX cấp thấp theo OBJECTARX-CAPABILITIES.md">
+              ⚙️ Nâng cao · ObjectARX {rawSummary ? `(${rawSummary.enabled}/${rawSummary.total})` : ""} {rawOpen ? "▾" : "▸"}
               <a className="refr" style={{ marginLeft: 8 }} onClick={(e) => { e.stopPropagation(); loadRawCatalog(); }}>↻</a>
             </div>
             {rawOpen && !rawMenu && <div className="dim" style={{ padding: "4px 16px" }}>Đang tải catalog… (cần daemon)</div>}
@@ -1152,19 +1385,6 @@ export default function Page() {
               </div>
             ))}
           </div>
-
-          <div className="fngrouplbl">MEP workflows (phối hợp)</div>
-          {GROUPS.map((g) => (
-            <div key={g} className="fngroup">
-              <div className="fngrouplbl">{g}</div>
-              {FUNCTIONS.filter((f) => f.group === g).map((f) => (
-                <div key={f.id} className="fnbtn" onClick={() => openFn(f)} title={f.desc}>
-                  <span className="fnicon">{f.icon}</span>
-                  <div><div className="fnname">{f.label}</div><div className="fndesc">{f.desc}</div></div>
-                </div>
-              ))}
-            </div>
-          ))}
         </aside>
       )}
 
@@ -1272,6 +1492,41 @@ export default function Page() {
         </div>
       )}
 
+      {pendingPageCadAction && (
+        <div className="standards-confirm-backdrop" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) {
+            void rejectPageCadAction();
+          }
+        }}>
+          <div className="standards-confirm" role="alertdialog" aria-modal="true"
+            aria-labelledby="page-cad-confirm-title">
+            <div className="standards-confirm-icon">!</div>
+            <h3 id="page-cad-confirm-title">
+              {pendingPageCadAction.action === "activate-document"
+                ? "Kích hoạt bản vẽ trong AutoCAD?"
+                : "Chọn layer trong AutoCAD?"}
+            </h3>
+            <p>Bản vẽ: <strong>{pendingPageCadAction.targetLabel}</strong>.</p>
+            <p>Phạm vi: <strong>{pendingPageCadAction.scopeLabel}</strong>.</p>
+            {pendingPageCadAction.count !== undefined && (
+              <p>Số đối tượng: <strong>{pendingPageCadAction.count}</strong>.</p>
+            )}
+            {pageCadActionError && <p>{pageCadActionError}</p>}
+            <div className="standards-confirm-actions">
+              <button type="button" onClick={() => void rejectPageCadAction()}
+                disabled={!!pageCadActionBusy} autoFocus>
+                {pageCadActionBusy === "reject" ? "Đang hủy…" : "Hủy"}
+              </button>
+              <button type="button" className="primary"
+                onClick={() => void applyPageCadAction()}
+                disabled={!!pageCadActionBusy}>
+                {pageCadActionBusy === "apply" ? "Đang áp dụng…" : "Xác nhận"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <DrawingInfoPanel
         open={drawingInfoOpen}
         daemon={DAEMON}
@@ -1374,7 +1629,10 @@ export default function Page() {
                 <b>Chấp nhận</b> / <b>Không chấp nhận</b> trên thẻ kết quả.
               </div>
             )}
-            {form.modifies && !form.preview && <div className="warn">⚠ Ghi ra thư mục xuất (bản gốc giữ nguyên).</div>}
+            {form.live && (
+              <div className="warn">⚠ Chế độ <b>LIVE</b> ghi trực tiếp vào bản vẽ đang mở. Có thể dùng UNDO trong AutoCAD.</div>
+            )}
+            {form.modifies && !form.preview && !form.live && <div className="warn">⚠ Ghi ra thư mục xuất (bản gốc giữ nguyên).</div>}
             <div className="modalbtns">
               <button type="button" onClick={() => setForm(null)}>Huỷ</button>
               <button type="button" className="primary" onClick={() => runFn(form, formVals)}>
@@ -1412,6 +1670,7 @@ function MessageView({
           onSubmit={(msg) => { setMessages((p) => p.map((x, i) => i === idx && x.form ? { ...x, form: { ...x.form, submitted: true } } : x)); onSend(msg); }} />}
         {m.suggest && m.suggest.length > 0 && (
           <div className="suggest">{m.suggest.map((id) => { const f = byId(id); return f
+            && f.menu !== false
             ? <button key={id} className="sgbtn" onClick={() => onRun(f)}>{f.icon} {f.label}</button> : null; })}</div>
         )}
         {m.lispProposal && (
@@ -1721,14 +1980,14 @@ function FunctionResult({ m, onHighlight, onOpenAcad }: {
             <div className="livebox">{r.hint || `✓ Đã gửi — AutoCAD tự thực hiện (plugin AcadBridge).`}</div>
             {r.selRows && (
               <>
-              {canHi && <div className="dim">💡 Bấm 1 dòng để AutoCAD sáng + zoom tới nhóm ống đó.</div>}
+              {canHi && <div className="dim">💡 Bấm 1 dòng, kiểm tra proposal rồi xác nhận để chọn nhóm ống trong AutoCAD.</div>}
               <div className="tblwrap"><table className="rtbl">
                 <thead><tr>{r.selRows[0].map((h: string, j: number) => <th key={j}>{h}</th>)}</tr></thead>
                 <tbody>{r.selRows.slice(1, 30).map((row: string[], j: number) => {
                   const hi = canHi && row[0] && !row[0].startsWith("—");
                   return <tr key={j} className={hi ? "hirow" : undefined}
                     onClick={hi ? () => onHighlight?.(row[0]) : undefined}
-                    title={hi ? "Sáng + zoom trong AutoCAD" : undefined}>
+                    title={hi ? "Xác nhận chọn layer trong AutoCAD" : undefined}>
                     {row.map((c, k) => <td key={k}>{c}</td>)}</tr>;
                 })}</tbody>
               </table></div>

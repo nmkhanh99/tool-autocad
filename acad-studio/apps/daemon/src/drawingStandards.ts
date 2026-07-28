@@ -832,6 +832,14 @@ export function drawingStandardsRouter(): Router {
       const target = String(req.body?.target ?? "");
       const { exactTarget } = await resolveDocument(target);
       const action = String(req.body?.action ?? "").trim();
+      if (action === "select" || action === "layer") {
+        return res.status(409).json({
+          ok: false,
+          code: "confirmation_required",
+          error:
+            "Thao tác chọn/chuyển layer phải đi qua prepare → xác nhận → apply",
+        });
+      }
       const handles = cleanHandles(req.body?.handles);
       const params = asRecord(req.body?.params);
       if (["select", "dimspace"].includes(action) && !handles.length) {

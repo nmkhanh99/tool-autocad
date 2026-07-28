@@ -86,8 +86,32 @@ button.send:disabled { opacity: .5; cursor: default; }
 .fnbtn { display: flex; gap: 10px; align-items: flex-start; padding: 9px 16px; cursor: pointer; }
 .fnbtn:hover { background: var(--panel2); }
 .fnicon { font-size: 18px; flex: none; margin-top: 1px; }
+.fnbody { flex: 1; min-width: 0; }
+.fnnameline { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .fnname { font-size: 14px; font-weight: 500; }
 .fndesc { font-size: 12px; color: var(--dim); line-height: 1.35; }
+.quickgroup { padding-bottom: 5px; border-bottom: 1px solid var(--line); }
+.quickfn.on { background: #12261a; color: #7ee2a8; }
+.workflowtitle { padding-top: 14px; color: var(--txt); font-weight: 650; }
+.menugroup { border-top: 1px solid rgba(42, 49, 59, .65); }
+.menugroup summary {
+  display: flex; align-items: center; gap: 7px; padding: 10px 16px;
+  cursor: pointer; list-style: none; user-select: none;
+}
+.menugroup summary::-webkit-details-marker { display: none; }
+.menugroup summary::before { content: "▸"; color: var(--dim); }
+.menugroup[open] summary::before { content: "▾"; }
+.menugroup summary small {
+  margin-left: auto; min-width: 20px; padding: 1px 6px; text-align: center;
+  color: var(--dim); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px;
+}
+.fnmode {
+  flex: none; padding: 1px 5px; border: 1px solid var(--line); border-radius: 999px;
+  color: var(--dim); font-size: 9px; font-weight: 650; letter-spacing: .25px; text-transform: uppercase;
+}
+.fnmode.preview { color: #7ee2a8; border-color: #2f6b45; background: #12261a; }
+.fnmode.live { color: #ffd88a; border-color: #6b5a2f; background: #3a2f16; }
+.fnmode.batch { color: #bfe0ff; border-color: #315a7d; background: var(--tool); }
 .rawroot { border-top: 1px solid var(--line); margin-top: 6px; }
 .rawtoggle { cursor: pointer; color: var(--accent) !important; font-weight: 600; text-transform: none !important; letter-spacing: 0 !important; font-size: 13px !important; }
 .rawsub { font-size: 11px !important; opacity: .85; }
@@ -174,18 +198,11 @@ code { background: var(--panel2); padding: 1px 6px; border-radius: 5px; font-siz
 .hdetail { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hfix { flex: none; padding: 6px 12px; font-size: 13px; border-radius: 8px; text-decoration: none; }
 a.hfix { display: inline-flex; align-items: center; }
-.demorow { margin: 10px 12px; padding: 10px; text-align: center; font-size: 13.5px; cursor: pointer;
-  background: #12261a; color: #7ee2a8; border: 1px solid #2f6b45; border-radius: 8px; }
-.demorow:hover { background: #163524; }
 .refr { color: var(--accent); cursor: pointer; font-size: 12px; }
 .acadchip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 6px 11px;
   background: #12261a; color: #7ee2a8; border: 1px solid #2f6b45; border-radius: 999px; max-width: 340px;
   white-space: nowrap; overflow: hidden; }
 .acadchip em { color: var(--dim); font-style: normal; overflow: hidden; text-overflow: ellipsis; }
-.demorow.sel { background: var(--tool); color: #cfe6ff; border-color: var(--accent); }
-.demorow.sel:hover { background: var(--accent2); color: #fff; }
-.demorow.sel.on { background: #12261a; color: #7ee2a8; border-color: #2f6b45; }
-
 /* ── Dashboard thông tin bản vẽ active ── */
 .drawing-info-backdrop {
   position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 16px;

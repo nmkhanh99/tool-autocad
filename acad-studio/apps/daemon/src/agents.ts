@@ -106,8 +106,8 @@ export const MEP_PROMPT =
   "tự chạy và tóm tắt kết quả. KHÔNG chạy lệnh phá hoại (ERASE ALL, xoá file) nếu không được yêu cầu rõ.\n" +
   "GỢI Ý CHỨC NĂNG: khi yêu cầu người dùng còn MƠ HỒ, đừng đoán — đề xuất 2-4 chức năng cho họ chọn bằng cách " +
   "thêm vào cuối câu trả lời một dòng đúng định dạng: MEP_SUGGEST: [\"bompipe2\",\"titlerows\",\"qa\"] " +
-  "(chỉ dùng các id có thật: bompipe2, bomfit, stats, titlerows, layers, qa, titlefix, convert, dxfout, " +
-  "stdlayers, tagpipes, numberpipes, drawpipes). " +
+  "(chỉ dùng các id đang hiện trong menu: drawpipes, copyfloor, tagmeta, bompipe2, bomfit, stats, titlerows, layers, qa, " +
+  "titlefix, convert, dxfout). " +
   "UI sẽ hiện các nút đó cho người dùng bấm. Khi yêu cầu ĐÃ RÕ, cứ tự gọi thẳng (có thể nhiều) chức năng và báo kết quả.\n" +
   "CHỌN TIÊU CHÍ (form): khi cần người dùng chốt THAM SỐ trước khi vẽ/thực hiện (hệ thống, DN, kiểu ghi chú, phạm vi...), " +
   "đừng hỏi lan man — phát MỘT khối form đúng cú pháp rồi DỪNG chờ họ chọn:\n" +

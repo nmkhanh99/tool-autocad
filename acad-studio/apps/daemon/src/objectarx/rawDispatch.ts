@@ -49,6 +49,25 @@ function atomicWrite(path: string, content: string): void {
   atomicWriteFile(path, content);
 }
 
+// raw.job/raw.done is a single-slot transport shared by every capability.
+// Serialize the complete write + wait cycle so concurrent HTTP requests cannot
+// overwrite a job or consume another request's result.
+let liveInvokeTail: Promise<void> = Promise.resolve();
+
+async function withLiveInvokeLock<T>(run: () => Promise<T>): Promise<T> {
+  const previous = liveInvokeTail;
+  let release = () => {};
+  liveInvokeTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+  }
+}
+
 export function exportRawCatalog() {
   const byGroup = capabilitiesByGroup();
   const summary = coverageSummary();
@@ -136,42 +155,63 @@ export async function invokeRaw(
     };
   }
 
-  ensureBridge();
-  const RAW_JOB = liveRawJob();
-  const RAW_DONE = liveRawDone();
-  const before = Date.now();
-  // Clear stale done so we don't read an old result.
-  try {
-    writeFileSync(RAW_DONE + ".stamp", String(before), "utf8");
-  } catch { /* */ }
-  atomicWrite(RAW_JOB, jobBody);
-
-  const waitMs = opts.waitMs ?? (cap!.interactive ? 120_000 : 8_000);
-  while (Date.now() - before < waitMs) {
+  return withLiveInvokeLock(async () => {
+    ensureBridge();
+    const RAW_JOB = liveRawJob();
+    const RAW_DONE = liveRawDone();
+    const before = Date.now();
+    // Clear stale done so we don't read an old result.
     try {
-      const st = statSync(RAW_DONE);
-      if (st.mtimeMs >= before - 50) {
-        const text = readFileSync(RAW_DONE, "utf8");
-        const result = parseRawResult(text);
-        // Ignore stale result from a previous job with different id
-        if (result.id === id || result.id === "*") return result;
-      }
-    } catch { /* not yet */ }
-    await new Promise((r) => setTimeout(r, 120));
-  }
+      writeFileSync(RAW_DONE + ".stamp", String(before), "utf8");
+    } catch { /* */ }
+    atomicWrite(RAW_JOB, jobBody);
 
-  return {
-    ok: false,
-    id,
-    blocked: true,
-    interactive: cap!.interactive,
-    error: cap!.interactive
-      ? "Timeout — lệnh interactive cần người dùng thao tác trong AutoCAD (plugin có thể đã mở prompt)."
-      : `Plugin không phản hồi raw.done — khởi động lại AutoCAD để nạp plugin raw, hoặc kiểm tra ${PRODUCT.plugin}.`,
-    diagnostic: "plugin_timeout",
-    jobBody,
-    payload: { name: cap!.name, api: cap!.api },
-  };
+    const waitMs = opts.waitMs ?? (cap!.interactive ? 120_000 : 8_000);
+    while (Date.now() - before < waitMs) {
+      try {
+        const st = statSync(RAW_DONE);
+        if (st.mtimeMs >= before - 50) {
+          const text = readFileSync(RAW_DONE, "utf8");
+          const result = parseRawResult(text);
+          // Ignore stale results and the command-context acknowledgement; an
+          // interactive command writes a second, final result after it runs.
+          if (result.id === id || result.id === "*") {
+            const selectionResponseMatches =
+              id !== "ed.selection_control" ||
+              (
+                result.id === id &&
+                result.payload?.token === String(params.token ?? "") &&
+                result.payload?.action === String(params.action ?? "")
+              );
+            if (!selectionResponseMatches) {
+              await new Promise((r) => setTimeout(r, 20));
+              continue;
+            }
+            const awaitingCommand =
+              result.payload?.status === "awaiting_user" ||
+              result.payload?.status === "awaiting_command";
+            if (!awaitingCommand) {
+              return result;
+            }
+          }
+        }
+      } catch { /* not yet */ }
+      await new Promise((r) => setTimeout(r, 120));
+    }
+
+    return {
+      ok: false,
+      id,
+      blocked: true,
+      interactive: cap!.interactive,
+      error: cap!.interactive
+        ? "Timeout — lệnh interactive cần người dùng thao tác trong AutoCAD (plugin có thể đã mở prompt)."
+        : `Plugin không phản hồi raw.done — khởi động lại AutoCAD để nạp plugin raw, hoặc kiểm tra ${PRODUCT.plugin}.`,
+      diagnostic: "plugin_timeout",
+      jobBody,
+      payload: { name: cap!.name, api: cap!.api },
+    };
+  });
 }
 
 export function getCapability(id: string): RawCapability | undefined {

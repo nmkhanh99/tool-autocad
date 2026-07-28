@@ -54,6 +54,7 @@ Quét từ SDK 2027 trên máy (737 headers + samples) + **kiểm chứng symbol
 | ✅ | **Nhập số (real/int/dist/angle)** | `acedGetReal, acedGetInt, acedGetDist, acedGetAngle (acedads.h)` | Verified đủ 4 hàm trong libaccore. |
 | ✅ | **Selection set query (ssget) có filter** | `acedSSGet, acedSSLength, acedSSName, acedSSNameX, acedSSFree, acedSSAdd (acedads.h)` | Verified đầy đủ trong libaccore; hỗ trợ filter resbuf (layer, entity type). |
 | ✅ | **Pickfirst selection get/set** | `acedSSGetFirst, acedSSSetFirst (aced.h)` | Verified — đọc thứ user đang chọn và set selection từ code. |
+| ✅ | **Điều khiển selection hai chiều có xác nhận và stale guard** | `acedSSGet/acedSSSetFirst + AcDbHandle/ObjectId + AcDbEntity::setLayer trong document exact-target` | Control-plane tokenized chạy trong command context: activate/capture/select/move; move kiểm tra handle, type, layer và owner trước khi ghi. |
 | ✅ | **Pick 1 entity (kể cả nested trong block)** | `acedEntSel, acedNEntSel (acedads.h)` | Verified; acedNEntSel pick được nested entity trong block. |
 | ✅ | **Highlight subentity + selection filter** | `acedSSGet/acedSSNameX + AcDbFullSubentPath + AcDbEntity::highlight; AcEdSSGetFilter` | acedSSGet=6, AcEdSSGetFilter=14 symbol libaccore. Sample: entity/hilight_dg (GS marker). |
 | ✅ | **Chạy lệnh programmatic (synchronous, non-fiber)** | `acedCommandS, acedCmdS (acedCmdNF.h); acedCommand cũ` | _acedCommandS/_acedCmdS extern-C thật trong libaccore. Phải gọi trong command context. |

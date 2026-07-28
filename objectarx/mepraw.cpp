@@ -71,12 +71,20 @@ extern std::string gBridgeDir;
 extern std::string toUtf8(const wchar_t* w);
 extern std::wstring toWide(const std::string& s);
 extern std::string jsonEsc(const std::string& s);
+extern std::string acadDocumentInstanceToken(const AcApDocument* document);
 extern std::string readAll(const std::string& p);
 extern bool tsChanged(const struct timespec& a, const struct timespec& b);
 extern AcApDocument* findDocByName(const std::string& want);
 extern void emitEvent(const char* type, const std::string& detail);
 extern AcDbObjectId ensureLayer(AcDbDatabase* db, const std::wstring& name, int aci);
 extern void ensureRegApp(AcDbDatabase* db);
+bool acadSelectionControlRequestInfo(
+    const std::map<std::string, std::string>& params,
+    std::string& token, std::string& action, std::string& exactTarget,
+    std::string& error);
+bool acadSelectionControlRun(
+    const std::map<std::string, std::string>& params,
+    std::string& payload, std::string& error);
 
 static std::string gRawPath, gRawDonePath;
 static struct timespec gRawMtime = {0, 0};
@@ -149,6 +157,42 @@ static double pnum(const std::map<std::string, std::string>& p, const char* k, d
 }
 static std::string pstr(const std::map<std::string, std::string>& p, const char* k, const char* d = "") {
     auto it = p.find(k); return it == p.end() ? std::string(d) : it->second;
+}
+
+static AcApDocument* findExactRawDocument(const std::string& target,
+                                          bool& ambiguous) {
+    ambiguous = false;
+    if (!acDocManager || target.empty()) return nullptr;
+    AcApDocument* found = nullptr;
+    AcApDocumentIterator* iterator =
+        acDocManager->newAcApDocumentIterator();
+    if (!iterator) return nullptr;
+    for (; !iterator->done(); iterator->step()) {
+        AcApDocument* document = iterator->document();
+        if (!document) continue;
+        if (toUtf8(document->docTitle()) != target &&
+            toUtf8(document->fileName()) != target) {
+            continue;
+        }
+        if (found && found != document) {
+            ambiguous = true;
+            found = nullptr;
+            break;
+        }
+        found = document;
+    }
+    delete iterator;
+    return found;
+}
+
+static std::string selectionControlPayload(const std::string& token,
+                                           const std::string& action,
+                                           const std::string& target,
+                                           const char* status) {
+    return "{\"token\":\"" + jsonEsc(token) +
+           "\",\"action\":\"" + jsonEsc(action) +
+           "\",\"target\":\"" + jsonEsc(target) +
+           "\",\"status\":\"" + jsonEsc(status ? status : "") + "\"}";
 }
 
 // -------------------- handlers --------------------
@@ -1109,9 +1153,28 @@ public:
     const ACHAR* tooltipString() const override { return L"MEP raw osnap"; }
 };
 
+static void cmdSelectionControl() {
+    const std::string id = gPendingInteractiveId;
+    if (id != "ed.selection_control") {
+        acutPrintf(L"\n[MEPRAW] no pending selection-control op");
+        return;
+    }
+    std::string payload, err;
+    const bool ok = acadSelectionControlRun(gPendingParams, payload, err);
+    writeRawResult(ok, id, payload.empty() ? "{}" : payload, err, true, false);
+    gPendingInteractiveId.clear();
+    gPendingParams.clear();
+    acutPrintf(
+        L"\n[MEPRAW] selection control → %s", ok ? L"ok" : L"err");
+}
+
 static void cmdRawInteractive() {
     std::string id = gPendingInteractiveId;
     if (id.empty()) { acutPrintf(L"\n[MEPRAW] no pending interactive op"); return; }
+    if (id == "ed.selection_control") {
+        acutPrintf(L"\n[MEPRAW] selection control is pending ACADSELECT");
+        return;
+    }
     std::string payload, err;
     bool ok = false;
     if (id == "ed.get_point") {
@@ -1348,12 +1411,14 @@ static void cmdRawInteractive() {
     }
     writeRawResult(ok, id, payload.empty() ? "{}" : payload, err, true, false);
     gPendingInteractiveId.clear();
+    gPendingParams.clear();
     acutPrintf(L"\n[MEPRAW] interactive %s → %s", toWide(id).c_str(), ok ? L"ok" : L"err");
 }
 
 static bool isInteractiveId(const std::string& id) {
     static const char* ids[] = {
-        "ed.get_point","ed.get_string","ed.get_number","ed.ssget","ed.ssget_first","ed.entsel",
+        "ed.selection_control","ed.get_point","ed.get_string","ed.get_number",
+        "ed.ssget","ed.ssget_first","ed.entsel",
         "ed.highlight_subent","ed.grdraw","ed.input_point","ed.custom_osnap","ed.command_s",
         "adv.jig","adv.overrule","adv.custom_entity","adv.acgi","ui.inplace_text","ui.viewcube",
         "ui.cocoa","ui.plot", nullptr
@@ -1370,15 +1435,121 @@ static void execRawJob(const std::string& raw) {
     parseJob(raw, id, target, params);
     if (id.empty()) { writeRawResult(false, "?", "{}", "missing RAW id"); return; }
 
-    if (isInteractiveId(id)) {
-        // Schedule interactive command in command context
+    if (id == "ed.selection_control") {
+        std::string token = pstr(params, "token");
+        std::string action = pstr(params, "action");
+        std::string exactTarget;
+        std::string requestError;
+        if (!acadSelectionControlRequestInfo(
+                params, token, action, exactTarget, requestError)) {
+            writeRawResult(
+                false, id,
+                selectionControlPayload(token, action, exactTarget, "error"),
+                requestError, true, false);
+            return;
+        }
+        if (!gPendingInteractiveId.empty()) {
+            writeRawResult(
+                false, id,
+                selectionControlPayload(token, action, exactTarget, "busy"),
+                "another interactive raw command is pending", true, false);
+            return;
+        }
+        if (!acDocManager) {
+            writeRawResult(
+                false, id,
+                selectionControlPayload(token, action, exactTarget, "error"),
+                "document manager is unavailable", true, true);
+            return;
+        }
+        bool ambiguous = false;
+        AcApDocument* document =
+            findExactRawDocument(exactTarget, ambiguous);
+        if (ambiguous || !document) {
+            writeRawResult(
+                false, id,
+                selectionControlPayload(token, action, exactTarget, "not_found"),
+                ambiguous ? "exactTarget matches more than one open document"
+                          : "exactTarget is not open",
+                true, false);
+            return;
+        }
+        const std::string documentInstance =
+            pstr(params, "documentInstance");
+        const std::string activeDocumentInstance =
+            pstr(params, "activeDocumentInstance");
+        if (acadDocumentInstanceToken(document) != documentInstance) {
+            writeRawResult(
+                false, id,
+                selectionControlPayload(token, action, exactTarget, "stale"),
+                "document_stale: exact document instance changed", true, false);
+            return;
+        }
+        AcApDocument* active = acDocManager->mdiActiveDocument();
+        AcApDocument* current = acDocManager->curDocument();
+        if (!active || active != current ||
+            acadDocumentInstanceToken(active) != activeDocumentInstance) {
+            writeRawResult(
+                false, id,
+                selectionControlPayload(token, action, exactTarget, "stale"),
+                "document_stale: active document changed", true, false);
+            return;
+        }
+        if (!document->isQuiescent()) {
+            writeRawResult(
+                false, id,
+                selectionControlPayload(token, action, exactTarget, "busy"),
+                "exact target has an active command", true, false);
+            return;
+        }
+
+        const bool activate = action == "activate";
+        if (!activate &&
+            (document != active || document != current)) {
+            writeRawResult(
+                false, id,
+                selectionControlPayload(token, action, exactTarget, "not_active"),
+                "selection control never activates a document without a confirmed activate action",
+                true, false);
+            return;
+        }
+
         gPendingInteractiveId = id;
         gPendingParams = params;
+        writeRawResult(
+            true, id,
+            selectionControlPayload(
+                token, action, exactTarget, "awaiting_command"),
+            "", true, false);
+        const Acad::ErrorStatus scheduleStatus =
+            acDocManager->sendStringToExecute(
+                document, L"ACADSELECT ", activate, false, false);
+        if (scheduleStatus != Acad::eOk) {
+            gPendingInteractiveId.clear();
+            gPendingParams.clear();
+            writeRawResult(
+                false, id,
+                selectionControlPayload(token, action, exactTarget, "error"),
+                "cannot schedule selection command (" +
+                    std::to_string(static_cast<int>(scheduleStatus)) + ")",
+                true, false);
+        }
+        return;
+    }
+
+    if (isInteractiveId(id)) {
+        // Schedule interactive command in command context
+        if (!gPendingInteractiveId.empty()) {
+            writeRawResult(false, id, "{}", "another interactive raw command is pending", true, false);
+            return;
+        }
         AcApDocument* pDoc = findDocByName(target);
         if (!pDoc || !acDocManager) {
             writeRawResult(false, id, "{}", "no document for interactive op", true, true);
             return;
         }
+        gPendingInteractiveId = id;
+        gPendingParams = params;
         // Tell client we're waiting on user; command writes final result
         writeRawResult(true, id,
                        "{\"status\":\"awaiting_user\",\"command\":\"MEPRAW\"}",
@@ -1554,5 +1725,9 @@ void mepRawOnStartWatch() {
 
 void mepRawRegisterCommands() {
     acedRegCmds->addCommand(L"ACAD_BRIDGE", L"ACADRAW", L"ACADRAW", ACRX_CMD_MODAL, &cmdRawInteractive);
+    acedRegCmds->addCommand(
+        L"ACAD_BRIDGE", L"ACADSELECT", L"ACADSELECT",
+        ACRX_CMD_MODAL | ACRX_CMD_USEPICKSET | ACRX_CMD_REDRAW,
+        &cmdSelectionControl);
     acedRegCmds->addCommand(L"ACAD_BRIDGE", L"MEPRAW", L"MEPRAW", ACRX_CMD_MODAL, &cmdRawInteractive); // legacy alias
 }

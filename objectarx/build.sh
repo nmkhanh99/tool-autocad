@@ -14,6 +14,7 @@ SDK_INC="/Library/Developer/Autodesk/ObjectARX 2027/inc"
 
 SRC="mepbridge.cpp"
 RAW="mepraw.cpp"
+SELECTION="selection_control.cpp"
 XML="PackageContents.xml"
 PKG_NAME="Acad-Bridge"
 MOD_NAME="AcadBridge"
@@ -26,6 +27,7 @@ DEST_ADDINS="$HOME/Library/Application Support/Autodesk/ApplicationAddins"
 [ -d "$SDK_INC" ] || { echo "!! Missing ObjectARX SDK: $SDK_INC"; exit 1; }
 [ -f "$SRC" ]     || { echo "!! Missing $SRC"; exit 1; }
 [ -f "$RAW" ]     || { echo "!! Missing $RAW"; exit 1; }
+[ -f "$SELECTION" ] || { echo "!! Missing $SELECTION"; exit 1; }
 [ -f "$XML" ]     || { echo "!! Missing $XML"; exit 1; }
 
 rm -rf "$PKG"
@@ -42,7 +44,7 @@ clang++ -std=c++17 -arch x86_64 -arch arm64 \
   -L"$FW" -lacdb -laccore -lgelib -lAcPal -lacfirst -lwinapi \
   -framework CoreServices -framework CoreFoundation \
   -Wl,-rpath,"$FW" -Wl,-headerpad_max_install_names \
-  -o "$PKG/Contents/MacOS/$MOD_NAME" "$SRC" "$RAW"
+  -o "$PKG/Contents/MacOS/$MOD_NAME" "$SRC" "$RAW" "$SELECTION"
 
 cat > "$PKG/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -53,8 +55,8 @@ cat > "$PKG/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>$MOD_NAME</string>
   <key>CFBundleIdentifier</key><string>io.smartcorex.$MOD_NAME</string>
   <key>CFBundleName</key><string>$MOD_NAME</string>
-  <key>CFBundleShortVersionString</key><string>1.3.0</string>
-  <key>CFBundleVersion</key><string>5</string>
+  <key>CFBundleShortVersionString</key><string>1.4.0</string>
+  <key>CFBundleVersion</key><string>6</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
 </dict>
 </plist>

@@ -46,14 +46,49 @@ assert(/onClick=\{\(\) => onDecide\(idx, true\)\}/.test(page), "accept onClick â
 // decide uses messagesRef (not stale messages[])
 assert(page.includes("messagesRef"), "decide uses messagesRef");
 assert(page.includes("messagesRef.current"), "decide reads messagesRef.current");
-// demo draws via preview not permanent native
-assert(page.includes("await runPreview(fn"), "demoDraw uses runPreview");
-assert(!/demoDraw[\s\S]{0,400}\/api\/acad\/native/.test(page), "demoDraw does not call permanent /native");
-
-// preview:true functions must not only be live:true permanent
-const drawpipes = fns.match(/id:\s*"drawpipes"[\s\S]*?preview:\s*true/);
-assert(!!drawpipes, "drawpipes has preview:true");
-assert(!/id:\s*"drawpipes"[\s\S]*?live:\s*true/.test(fns.split("id: \"tagpipes\"")[0]), "drawpipes is not live permanent");
+// The visible drawpipes menu entry must use the safe preview route, not permanent native.
+const drawpipesStart = fns.indexOf('{ id: "drawpipes"');
+const drawpipesEnd = fns.indexOf("\n  { id:", drawpipesStart + 1);
+const drawpipes = fns.slice(drawpipesStart, drawpipesEnd);
+assert(drawpipesStart >= 0 && drawpipes.includes("preview: true"), "drawpipes has preview:true");
+assert(!drawpipes.includes("live: true"), "drawpipes is not live permanent");
+assert(!drawpipes.includes("menu: false"), "drawpipes remains visible in the main menu");
+for (const id of ["livedraw", "stdlayers", "tagpipes", "numberpipes"]) {
+  const start = fns.indexOf(`{ id: "${id}"`);
+  const end = fns.indexOf("\n  { id:", start + 1);
+  const source = fns.slice(start, end < 0 ? undefined : end);
+  assert(start >= 0 && source.includes("menu: false"), `${id} hidden from the main menu`);
+}
+assert(
+  page.includes("const [rawOpen, setRawOpen] = useState(false)"),
+  "advanced ObjectARX menu starts collapsed",
+);
+assert(
+  page.includes("/api/acad/selection/prepare"),
+  "page-level document/layer choices create a confirmation proposal",
+);
+assert(
+  page.includes('action: "activate-document"') &&
+    page.includes('action: "select"'),
+  "page-level drawing and BOM layer choices use guarded selection actions",
+);
+assert(
+  page.includes("confirmed: true") &&
+    page.includes("/reject"),
+  "page-level CAD proposal has explicit apply and reject decisions",
+);
+assert(
+  page.includes("value={d.file || d.title}"),
+  "drawing selector binds the exact document path when available",
+);
+assert(
+  !page.includes("/api/acad/highlight"),
+  "page cannot call the legacy direct highlight bypass",
+);
+assert(
+  !page.includes("setDrawTarget(title)"),
+  "drawing target is not changed eagerly before confirmation",
+);
 
 const btnLines = page
   .split("\n")

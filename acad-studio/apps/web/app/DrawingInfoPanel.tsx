@@ -50,6 +50,17 @@ type DrawingInfoResponse = {
   hint?: string;
 };
 
+type PendingCadAction = {
+  id: string;
+  revision: string;
+  action: "activate-document" | "select";
+  target: string;
+  targetLabel: string;
+  scopeLabel: string;
+  count?: number;
+  nextTarget?: string;
+};
+
 export type DrawingInfoPanelProps = {
   open: boolean;
   daemon: string;
@@ -187,7 +198,8 @@ function normalizeRows(value: unknown): JsonRecord[] {
 }
 
 function targetOf(doc: DocumentInfo | null | undefined): string {
-  return String(doc?.title || doc?.file || "");
+  // Full paths are unique across open documents; titles are not.
+  return String(doc?.file || doc?.title || "");
 }
 
 function firstValue(source: JsonRecord | null | undefined, keys: string[]): unknown {
@@ -233,6 +245,15 @@ function matchesFilter(row: JsonRecord, filter: string): boolean {
     `${humanize(key)} ${plainValue(value)}`.toLocaleLowerCase("vi").includes(filter));
 }
 
+async function responseRecord(response: Response): Promise<JsonRecord> {
+  const body = await response.json().catch(() => ({}));
+  const record = asRecord(body) || {};
+  if (!response.ok || record.ok === false) {
+    throw new Error(String(record.error || record.message || `HTTP ${response.status}`));
+  }
+  return record;
+}
+
 function KeyValueGrid({ data, filter = "" }: { data: unknown; filter?: string }) {
   const record = asRecord(data);
   if (!record || !Object.keys(record).length) return <EmptyValue />;
@@ -259,10 +280,16 @@ function DataTable({
   data,
   filter,
   preferred = [],
+  rowAction,
 }: {
   data: unknown;
   filter: string;
   preferred?: string[];
+  rowAction?: {
+    label: string;
+    disabled?: boolean;
+    onClick: (row: JsonRecord) => void;
+  };
 }) {
   const allRows = useMemo(() => normalizeRows(data), [data]);
   const rows = useMemo(() => allRows.filter((row) => matchesFilter(row, filter)), [allRows, filter]);
@@ -281,7 +308,10 @@ function DataTable({
       <div className="drawing-table-wrap">
         <table className="drawing-table">
           <thead>
-            <tr>{columns.map((key) => <th key={key}>{humanize(key)}</th>)}</tr>
+            <tr>
+              {columns.map((key) => <th key={key}>{humanize(key)}</th>)}
+              {rowAction && <th>Thao tác</th>}
+            </tr>
           </thead>
           <tbody>
             {rows.map((row, rowIndex) => (
@@ -292,6 +322,15 @@ function DataTable({
                     {shownValue(row[key])}
                   </td>
                 ))}
+                {rowAction && (
+                  <td>
+                    <button type="button" className="standards-link-button"
+                      disabled={rowAction.disabled}
+                      onClick={() => rowAction.onClick(row)}>
+                      {rowAction.label}
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -375,11 +414,16 @@ export default function DrawingInfoPanel({
   const [requestError, setRequestError] = useState("");
   const [filter, setFilter] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
+  const [pendingCadAction, setPendingCadAction] = useState<PendingCadAction | null>(null);
+  const [cadActionBusy, setCadActionBusy] = useState("");
+  const [cadActionError, setCadActionError] = useState("");
 
   useEffect(() => {
     if (!open) return;
     setSelectedTarget(initialTarget?.trim() || "");
     setFilter("");
+    setPendingCadAction(null);
+    setCadActionError("");
   }, [open, initialTarget]);
 
   useEffect(() => {
@@ -414,19 +458,30 @@ export default function DrawingInfoPanel({
   useEffect(() => {
     if (!open) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      if (pendingCadAction) {
+        void rejectPendingCadAction();
+        return;
+      }
+      onClose();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [open, onClose]);
+  }, [open, onClose, pendingCadAction]);
 
   const documents = Array.isArray(data?.documents) ? data.documents : [];
   const document = data?.document || null;
   const drawing = data?.drawing || null;
   const summary = data?.summary || null;
   const normalizedFilter = filter.trim().toLocaleLowerCase("vi");
-  const activeTarget = selectedTarget || targetOf(document) || targetOf(documents.find((doc) => doc.active));
-  const documentTitle = String(firstValue(document, ["title", "name", "fileName"]) || activeTarget || "Bản vẽ AutoCAD");
+  const selectedMatches = documents.filter((doc) =>
+    doc.file === selectedTarget || doc.title === selectedTarget);
+  const selectedDocument = selectedMatches.find((doc) => doc.active) || selectedMatches[0];
+  const viewedTarget = targetOf(selectedDocument) || selectedTarget ||
+    targetOf(document) || targetOf(documents.find((doc) => doc.active));
+  const activeDocumentTarget =
+    targetOf(documents.find((doc) => doc.active)) || viewedTarget;
+  const documentTitle = String(firstValue(document, ["title", "name", "fileName"]) || viewedTarget || "Bản vẽ AutoCAD");
   const documentPath = String(firstValue(document, ["file", "path", "fullPath"]) || "");
 
   const entityCount = firstNumber(summary, ["totalEntities", "entityCount", "entities"],
@@ -459,17 +514,154 @@ export default function DrawingInfoPanel({
   const autoCadOffline = status === "offline" || status === "autocad_offline" || data?.running === false;
   const responseError = data?.error || (!data?.ok && !autoCadOffline && !pluginOffline && !noDocument ? data?.hint : "");
 
-  if (!open) return null;
-
   const refresh = () => setReloadToken((token) => token + 1);
-  const selectTarget = (target: string) => {
-    setData(null);
-    setSelectedTarget(target);
-  };
+
+  async function prepareCadAction(
+    request: JsonRecord,
+    display: Omit<PendingCadAction, "id" | "revision" | "action" | "target"> & {
+      action: PendingCadAction["action"];
+      target: string;
+    },
+  ) {
+    if (cadActionBusy || pendingCadAction) return;
+    setCadActionBusy("prepare");
+    setCadActionError("");
+    try {
+      const body = await responseRecord(await fetch(
+        `${daemon.replace(/\/+$/, "")}/api/acad/selection/prepare`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        },
+      ));
+      const operation = asRecord(body.operation) || {};
+      const id = String(operation.id || body.operationId || "");
+      if (!id) throw new Error("Daemon không trả operation id để xác nhận.");
+      const summary = asRecord(operation.summary) || {};
+      const subjects = Array.isArray(operation.subjects) ? operation.subjects : [];
+      const rawCount = operation.subjectCount ?? operation.count ??
+        summary.count ?? summary.subjectCount ??
+        (subjects.length ? subjects.length : display.count);
+      const count = Number(rawCount);
+      setPendingCadAction({
+        ...display,
+        id,
+        revision: String(operation.revision || body.revision || ""),
+        action: display.action,
+        target: String(operation.target || display.target),
+        nextTarget: display.action === "activate-document"
+          ? String(operation.target || display.nextTarget || display.target)
+          : display.nextTarget,
+        count: Number.isFinite(count) ? count : display.count,
+      });
+    } catch (error) {
+      setCadActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCadActionBusy("");
+    }
+  }
+
+  async function applyPendingCadAction() {
+    const pending = pendingCadAction;
+    if (!pending || cadActionBusy) return;
+    setCadActionBusy("apply");
+    setCadActionError("");
+    try {
+      await responseRecord(await fetch(
+        `${daemon.replace(/\/+$/, "")}/api/acad/selection/operations/` +
+          `${encodeURIComponent(pending.id)}/apply`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ revision: pending.revision, confirmed: true }),
+        },
+      ));
+      setPendingCadAction(null);
+      if (pending.nextTarget) {
+        setData(null);
+        setSelectedTarget(pending.nextTarget);
+      } else {
+        refresh();
+      }
+    } catch (error) {
+      // Apply is one-shot server-side. Force a fresh prepare instead of
+      // offering a retry against an operation that may already be terminal.
+      setPendingCadAction(null);
+      setCadActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCadActionBusy("");
+    }
+  }
+
+  async function rejectPendingCadAction() {
+    const pending = pendingCadAction;
+    if (!pending || cadActionBusy) return;
+    setPendingCadAction(null);
+    setCadActionBusy("reject");
+    try {
+      await fetch(
+        `${daemon.replace(/\/+$/, "")}/api/acad/selection/operations/` +
+          `${encodeURIComponent(pending.id)}/reject`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ revision: pending.revision }),
+        },
+      );
+    } catch {
+      // Best effort: the staged operation expires server-side and no CAD change is applied.
+    } finally {
+      setCadActionBusy("");
+    }
+  }
+
+  function selectTarget(target: string) {
+    if (!target || target === activeDocumentTarget) return;
+    const selectedDocument = documents.find((doc) => targetOf(doc) === target);
+    void prepareCadAction(
+      { target, action: "activate-document" },
+      {
+        action: "activate-document",
+        target,
+        targetLabel: String(selectedDocument?.title || selectedDocument?.file || target),
+        scopeLabel: "Chuyển bản vẽ đang active trong AutoCAD",
+        nextTarget: target,
+      },
+    );
+  }
+
+  function selectTableRow(kind: "layer" | "block", row: JsonRecord) {
+    const name = String(row.name || "");
+    if (!name) return;
+    const exactTarget = documentPath || viewedTarget;
+    const handle = String(row.handle || "");
+    void prepareCadAction(
+      {
+        target: exactTarget,
+        action: "select",
+        scope: { kind, name, handle },
+      },
+      {
+        action: "select",
+        target: exactTarget,
+        targetLabel: documentTitle,
+        scopeLabel:
+          `${kind === "layer" ? "Layer" : "Block"} “${name}” trong layout hiện hành`,
+      },
+    );
+  }
+
+  if (!open) return null;
 
   return (
     <div className="drawing-info-backdrop" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onClose();
+      if (event.target !== event.currentTarget) return;
+      if (pendingCadAction) {
+        void rejectPendingCadAction();
+      } else {
+        onClose();
+      }
     }}>
       <section className="drawing-info-panel" role="dialog" aria-modal="true" aria-labelledby="drawing-info-title">
         <header className="drawing-info-head">
@@ -490,9 +682,9 @@ export default function DrawingInfoPanel({
           <div className="drawing-info-actions">
             <label className="drawing-doc-select">
               <span className="drawing-sr-only">Chọn bản vẽ</span>
-              <select value={activeTarget} onChange={(event) => selectTarget(event.target.value)}
-                disabled={loading && !data || !documents.length}>
-                {!documents.length && <option value={activeTarget}>{documentTitle}</option>}
+              <select value={activeDocumentTarget} onChange={(event) => selectTarget(event.target.value)}
+                disabled={loading && !data || !documents.length || !!cadActionBusy || !!pendingCadAction}>
+                {!documents.length && <option value={activeDocumentTarget}>{documentTitle}</option>}
                 {documents.map((doc, index) => {
                   const target = targetOf(doc);
                   return (
@@ -507,7 +699,13 @@ export default function DrawingInfoPanel({
               title="Nạp lại toàn bộ thông tin" aria-label="Nạp lại toàn bộ thông tin">
               <span className={loading ? "drawing-spin" : ""}>↻</span>
             </button>
-            <button type="button" className="drawing-icon-btn close" onClick={onClose}
+            <button type="button" className="drawing-icon-btn close" onClick={() => {
+              if (pendingCadAction) {
+                void rejectPendingCadAction();
+              } else {
+                onClose();
+              }
+            }}
               title="Đóng" aria-label="Đóng">×</button>
           </div>
         </header>
@@ -535,6 +733,13 @@ export default function DrawingInfoPanel({
         </div>
 
         <div className="drawing-info-body">
+          {cadActionError && (
+            <div className="drawing-warnings">
+              <strong>⚠ Không thực hiện được thao tác AutoCAD</strong>
+              <div>{cadActionError}</div>
+            </div>
+          )}
+
           {loading && !data && !requestError && (
             <div className="drawing-loading" role="status">
               <span className="drawing-loader" />
@@ -633,12 +838,22 @@ export default function DrawingInfoPanel({
 
               <Section title="Layer" count={countFrom(drawing?.layers)}>
                 <DataTable data={drawing?.layers} filter={normalizedFilter}
-                  preferred={TABLE_COLUMNS.layers} />
+                  preferred={TABLE_COLUMNS.layers}
+                  rowAction={{
+                    label: "Chọn trong AutoCAD",
+                    disabled: !!cadActionBusy || !!pendingCadAction,
+                    onClick: (row) => selectTableRow("layer", row),
+                  }} />
               </Section>
 
               <Section title="Block" count={countFrom(drawing?.blocks)}>
                 <DataTable data={drawing?.blocks} filter={normalizedFilter}
-                  preferred={TABLE_COLUMNS.blocks} />
+                  preferred={TABLE_COLUMNS.blocks}
+                  rowAction={{
+                    label: "Chọn trong AutoCAD",
+                    disabled: !!cadActionBusy || !!pendingCadAction,
+                    onClick: (row) => selectTableRow("block", row),
+                  }} />
               </Section>
 
               <Section title="Layout và viewport" count={countFrom(drawing?.layouts)}>
@@ -687,6 +902,38 @@ export default function DrawingInfoPanel({
           )}
         </div>
       </section>
+
+      {pendingCadAction && (
+        <div className="standards-confirm-backdrop" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) void rejectPendingCadAction();
+        }}>
+          <div className="standards-confirm" role="alertdialog" aria-modal="true"
+            aria-labelledby="drawing-cad-confirm-title">
+            <div className="standards-confirm-icon">!</div>
+            <h3 id="drawing-cad-confirm-title">
+              {pendingCadAction.action === "activate-document"
+                ? "Chuyển bản vẽ trong AutoCAD?"
+                : "Chọn đối tượng trong AutoCAD?"}
+            </h3>
+            <p>Bản vẽ: <strong>{pendingCadAction.targetLabel}</strong>.</p>
+            <p>Phạm vi: <strong>{pendingCadAction.scopeLabel}</strong>.</p>
+            {pendingCadAction.count !== undefined && (
+              <p>Số đối tượng: <strong>{pendingCadAction.count}</strong>.</p>
+            )}
+            {cadActionError && <p>{cadActionError}</p>}
+            <div className="standards-confirm-actions">
+              <button type="button" onClick={() => void rejectPendingCadAction()}
+                disabled={!!cadActionBusy} autoFocus>
+                {cadActionBusy === "reject" ? "Đang hủy…" : "Hủy"}
+              </button>
+              <button type="button" className="primary"
+                onClick={() => void applyPendingCadAction()} disabled={!!cadActionBusy}>
+                {cadActionBusy === "apply" ? "Đang áp dụng…" : "Xác nhận"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

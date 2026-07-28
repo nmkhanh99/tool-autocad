@@ -131,6 +131,16 @@ type Notice = {
   text: string;
 };
 
+type PendingSelectionAction = {
+  id: string;
+  revision: string;
+  action: "activate-document" | "select" | "move-to-layer";
+  target: string;
+  scopeLabel: string;
+  count?: number;
+  nextTarget?: string;
+};
+
 type TabId =
   | "overview"
   | "frame"
@@ -675,6 +685,8 @@ export default function DrawingStandardsPanel({
   const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
   const [selection, setSelection] = useState<SelectionObject[]>([]);
   const [selectionBusy, setSelectionBusy] = useState(false);
+  const [pendingSelectionAction, setPendingSelectionAction] =
+    useState<PendingSelectionAction | null>(null);
   const [layerImportBusy, setLayerImportBusy] = useState(false);
   const [directScope, setDirectScope] = useState<"selection" | "drawing">("selection");
   const [directFactor, setDirectFactor] = useState("1");
@@ -683,6 +695,8 @@ export default function DrawingStandardsPanel({
   const [directColor, setDirectColor] = useState("ByLayer");
   const [directLayer, setDirectLayer] = useState("");
   const [actionResult, setActionResult] = useState<unknown>(null);
+  const activeDocument = documents.find((document) => document.active);
+  const activeDocumentTarget = activeDocument ? targetOf(activeDocument) : "";
 
   const selectedIssues = useMemo(
     () => new Set(selectedIssueIds),
@@ -780,6 +794,7 @@ export default function DrawingStandardsPanel({
     setSelectedIssueIds([]);
     setDimBaseHandle("");
     setSelection([]);
+    setPendingSelectionAction(null);
     setActionResult(null);
     void Promise.all([
       loadDocuments(controller.signal),
@@ -817,6 +832,10 @@ export default function DrawingStandardsPanel({
     if (!open) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (pendingSelectionAction) {
+        void rejectPendingSelectionAction();
+        return;
+      }
       if (confirmApplyOpen) {
         setConfirmApplyOpen(false);
         return;
@@ -825,7 +844,7 @@ export default function DrawingStandardsPanel({
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [open, confirmApplyOpen, dirty, onClose]);
+  }, [open, confirmApplyOpen, pendingSelectionAction, dirty, onClose]);
 
   if (!open) return null;
 
@@ -1108,6 +1127,136 @@ export default function DrawingStandardsPanel({
     }
   }
 
+  async function prepareSelectionAction(
+    request: JsonRecord,
+    action: PendingSelectionAction["action"],
+    scopeLabel: string,
+    fallbackCount?: number,
+  ) {
+    const requestedTarget = String(request.target || target);
+    if (!requestedTarget || actionBusy || pendingSelectionAction) return;
+    setActionBusy(action);
+    setNotice(null);
+    try {
+      const body = await responseJson<JsonRecord>(await fetch(
+        `${baseUrl}/api/acad/selection/prepare`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        },
+      ));
+      const operation = asRecord(body.operation) || {};
+      const id = String(operation.id || body.operationId || "");
+      if (!id) throw new Error("Daemon không trả operation id để xác nhận.");
+      const summary = asRecord(operation.summary) || {};
+      const subjects = Array.isArray(operation.subjects) ? operation.subjects : [];
+      const rawCount = operation.subjectCount ?? operation.count ??
+        summary.count ?? summary.subjectCount ??
+        (subjects.length ? subjects.length : fallbackCount);
+      const count = Number(rawCount);
+      setPendingSelectionAction({
+        id,
+        revision: String(operation.revision || body.revision || ""),
+        action,
+        target: String(operation.target || requestedTarget),
+        scopeLabel,
+        count: Number.isFinite(count) ? count : fallbackCount,
+        ...(action === "activate-document"
+          ? { nextTarget: String(operation.target || requestedTarget) }
+          : {}),
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function applyPendingSelectionAction() {
+    const pending = pendingSelectionAction;
+    if (!pending || actionBusy) return;
+    setActionBusy("selection-apply");
+    setNotice(null);
+    try {
+      const body = await responseJson<JsonRecord>(await fetch(
+        `${baseUrl}/api/acad/selection/operations/${encodeURIComponent(pending.id)}/apply`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ revision: pending.revision, confirmed: true }),
+        },
+      ));
+      setPendingSelectionAction(null);
+      if (pending.action === "activate-document") {
+        await loadDocuments();
+        setTarget(pending.nextTarget || pending.target);
+        setScan(null);
+        setSelectedIssueIds([]);
+        setDimBaseHandle("");
+        setScanStale(false);
+        setSelection([]);
+        setActionResult(null);
+      } else {
+        if (pending.action === "move-to-layer") setScanStale(!!scan);
+        const result = asRecord(body.result);
+        const resultSubjects = recordRows(result?.subjects);
+        if (!resultSubjects.length) {
+          throw new Error(
+            "AutoCAD đã xử lý thao tác nhưng daemon không trả selection để đồng bộ app.",
+          );
+        }
+        setSelection(resultSubjects.map((object) => ({
+          handle: String(object.handle || object.id || ""),
+          type: String(object.type || object.name || ""),
+          layer: String(object.layer || ""),
+        })).filter((object) => object.handle));
+      }
+      setNotice({
+        tone: "ok",
+        text: String(body.hint || body.message ||
+          (pending.action === "activate-document"
+            ? "Đã kích hoạt bản vẽ trong AutoCAD."
+            : pending.action === "select"
+              ? "Đã chọn đối tượng trong AutoCAD."
+              : "Đã chuyển layer cho selection.")),
+      });
+    } catch (error) {
+      // Apply is one-shot. A retry must start from a new capture/proposal.
+      setPendingSelectionAction(null);
+      setNotice({
+        tone: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function rejectPendingSelectionAction() {
+    const pending = pendingSelectionAction;
+    if (!pending || actionBusy) return;
+    setPendingSelectionAction(null);
+    setActionBusy("selection-reject");
+    try {
+      await fetch(
+        `${baseUrl}/api/acad/selection/operations/${encodeURIComponent(pending.id)}/reject`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ revision: pending.revision }),
+        },
+      );
+    } catch {
+      // Best effort: no apply call is made and the operation expires server-side.
+    } finally {
+      setActionBusy("");
+    }
+  }
+
   async function runAction(
     action: StandardAction,
     params: JsonRecord = {},
@@ -1156,42 +1305,75 @@ export default function DrawingStandardsPanel({
     }
   }
 
-  async function selectIssueObjects(issue: StandardsIssue) {
-    if (!issue.handles.length) return;
-    await runAction("select", {}, issue.handles);
+  async function prepareHandleSelection(handles: string[], scopeLabel: string) {
+    if (!handles.length) return;
+    await prepareSelectionAction(
+      {
+        target,
+        action: "select",
+        scope: { kind: "handles", handles },
+      },
+      "select",
+      scopeLabel,
+      handles.length,
+    );
   }
 
-  async function importCurrentSelection() {
+  async function prepareTargetActivation(nextTarget: string) {
+    if (!nextTarget || nextTarget === activeDocumentTarget) return;
+    const document = documents.find((item) => targetOf(item) === nextTarget);
+    await prepareSelectionAction(
+      { target: nextTarget, action: "activate-document" },
+      "activate-document",
+      `Kích hoạt bản vẽ “${document?.title || nextTarget}”`,
+      1,
+    );
+  }
+
+  async function selectIssueObjects(issue: StandardsIssue) {
+    await prepareHandleSelection(
+      issue.handles,
+      `${issue.handles.length} handle của lỗi “${issue.message}”`,
+    );
+  }
+
+  async function importCurrentSelection(silent = false) {
     if (!target) return;
     setSelectionBusy(true);
-    setNotice(null);
+    if (!silent) setNotice(null);
     try {
       const query = `?target=${encodeURIComponent(target)}`;
       const body = await responseJson<JsonRecord>(await fetch(
-        `${baseUrl}/api/acad/drawing-info${query}`,
+        `${baseUrl}/api/acad/selection/current${query}`,
         { cache: "no-store" },
       ));
-      const drawing = asRecord(body.drawing);
-      const rawSelection = asRecord(drawing?.selection) || asRecord(body.selection);
+      const rawSelection = asRecord(body.selection) || body;
       const rawObjects = rawSelection?.objects ?? rawSelection?.entities ??
-        rawSelection?.items ?? rawSelection?.rows;
+        rawSelection?.items ?? rawSelection?.rows ?? body.subjects;
       const objects = recordRows(rawObjects).map((object) => ({
         handle: String(object.handle || object.id || ""),
         type: String(object.type || object.name || ""),
         layer: String(object.layer || ""),
       })).filter((object) => object.handle);
       setSelection(objects);
-      setNotice({
-        tone: objects.length ? "ok" : "info",
-        text: objects.length
-          ? `Đã lấy ${objects.length} đối tượng đang chọn trong AutoCAD.`
-          : "AutoCAD hiện không có đối tượng nào trong Pickfirst selection.",
-      });
+      if (!silent) {
+        const rawCount = Number(body.count ?? rawSelection?.count);
+        const count = Number.isFinite(rawCount) ? rawCount : objects.length;
+        setNotice({
+          tone: count ? "ok" : "info",
+          text: count
+            ? `Đã lấy ${count} đối tượng đang chọn trong AutoCAD.`
+            : "AutoCAD hiện không có đối tượng nào trong Pickfirst selection.",
+        });
+      }
+      return objects;
     } catch (error) {
-      setNotice({
-        tone: "error",
-        text: error instanceof Error ? error.message : String(error),
-      });
+      if (!silent) {
+        setNotice({
+          tone: "error",
+          text: error instanceof Error ? error.message : String(error),
+        });
+      }
     } finally {
       setSelectionBusy(false);
     }
@@ -1270,6 +1452,13 @@ export default function DrawingStandardsPanel({
   }
 
   async function runDirect(action: "scale" | "rotate" | "color" | "layer" | "area") {
+    if (action === "layer" && directScope === "drawing") {
+      setNotice({
+        tone: "warn",
+        text: "Chuyển layer cần một selection đã được đọc từ AutoCAD; không áp dụng toàn bộ bản vẽ.",
+      });
+      return;
+    }
     const handles = directHandles();
     if (directScope === "selection" && !handles?.length) {
       setNotice({ tone: "warn", text: "Hãy lấy selection hiện tại từ AutoCAD trước." });
@@ -1318,6 +1507,19 @@ export default function DrawingStandardsPanel({
     const subject = directScope === "selection"
       ? `${handles?.length || 0} đối tượng đang chọn`
       : "toàn bộ bản vẽ";
+    if (action === "layer") {
+      await prepareSelectionAction(
+        {
+          target,
+          action: "move-to-layer",
+          params: { layer: directLayer.trim() },
+        },
+        "move-to-layer",
+        `${subject} → layer “${directLayer.trim()}”`,
+        handles?.length,
+      );
+      return;
+    }
     await runAction(
       action,
       params,
@@ -1335,7 +1537,12 @@ export default function DrawingStandardsPanel({
 
   return (
     <div className="standards-backdrop" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) requestClose();
+      if (event.target !== event.currentTarget) return;
+      if (pendingSelectionAction) {
+        void rejectPendingSelectionAction();
+      } else {
+        requestClose();
+      }
     }}>
       <section className="standards-panel" role="dialog" aria-modal="true"
         aria-labelledby="standards-title">
@@ -1360,22 +1567,22 @@ export default function DrawingStandardsPanel({
             }} disabled={loading} title="Nạp lại dữ liệu">
               <span className={loading ? "standards-spin" : ""}>↻</span>
             </button>
-            <button type="button" className="close" onClick={requestClose}
+            <button type="button" className="close" onClick={() => {
+              if (pendingSelectionAction) {
+                void rejectPendingSelectionAction();
+              } else {
+                requestClose();
+              }
+            }}
               title="Đóng" aria-label="Đóng">×</button>
           </div>
         </header>
 
         <div className="standards-toolbar">
           <Field label="Bản vẽ đích">
-            <select value={target} onChange={(event) => {
-              setTarget(event.target.value);
-              setScan(null);
-              setSelectedIssueIds([]);
-              setDimBaseHandle("");
-              setScanStale(false);
-              setSelection([]);
-              setActionResult(null);
-            }} disabled={!documents.length}>
+            <select value={activeDocumentTarget || target}
+              onChange={(event) => void prepareTargetActivation(event.target.value)}
+              disabled={!documents.length || !!actionBusy || !!pendingSelectionAction}>
               {!documents.length && (
                 <option value={target}>
                   {docsAlive === false ? "Plugin chưa phản hồi" : "Chưa có bản vẽ"}
@@ -1658,7 +1865,7 @@ export default function DrawingStandardsPanel({
                         <option value="drawing">Toàn bộ bản vẽ</option>
                       </select>
                     </Field>
-                    <button type="button" onClick={importCurrentSelection}
+                    <button type="button" onClick={() => void importCurrentSelection()}
                       disabled={selectionBusy || !target}>
                       {selectionBusy ? "Đang đọc…" : "↻ Lấy selection AutoCAD"}
                     </button>
@@ -1820,7 +2027,10 @@ export default function DrawingStandardsPanel({
                             <td>{object.handle ? (
                               <button type="button" className="standards-link-button"
                                 disabled={!!actionBusy}
-                                onClick={() => runAction("select", {}, [object.handle])}>
+                                onClick={() => void prepareHandleSelection(
+                                  [object.handle],
+                                  `Đối tượng “${object.label || object.mappingId || object.handle}”`,
+                                )}>
                                 {object.handle}
                               </button>
                             ) : "—"}</td>
@@ -2132,6 +2342,45 @@ export default function DrawingStandardsPanel({
           </div>
         </footer>
       </section>
+
+      {pendingSelectionAction && (
+        <div className="standards-confirm-backdrop" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) void rejectPendingSelectionAction();
+        }}>
+          <div className="standards-confirm" role="alertdialog" aria-modal="true"
+            aria-labelledby="standards-selection-confirm-title">
+            <div className="standards-confirm-icon">!</div>
+            <h3 id="standards-selection-confirm-title">
+              {pendingSelectionAction.action === "activate-document"
+                ? "Chuyển bản vẽ trong AutoCAD?"
+                : pendingSelectionAction.action === "select"
+                  ? "Chọn đối tượng trong AutoCAD?"
+                  : "Chuyển layer cho selection?"}
+            </h3>
+            <p>
+              Bản vẽ: <strong>
+                {documents.find((doc) => targetOf(doc) === pendingSelectionAction.target)?.title ||
+                  pendingSelectionAction.target}
+              </strong>.
+            </p>
+            <p>Phạm vi: <strong>{pendingSelectionAction.scopeLabel}</strong>.</p>
+            {pendingSelectionAction.count !== undefined && (
+              <p>Số đối tượng: <strong>{pendingSelectionAction.count}</strong>.</p>
+            )}
+            {notice?.tone === "error" && <p>{notice.text}</p>}
+            <div className="standards-confirm-actions">
+              <button type="button" onClick={() => void rejectPendingSelectionAction()}
+                disabled={!!actionBusy} autoFocus>
+                {actionBusy === "selection-reject" ? "Đang hủy…" : "Hủy"}
+              </button>
+              <button type="button" className="primary"
+                onClick={() => void applyPendingSelectionAction()} disabled={!!actionBusy}>
+                {actionBusy === "selection-apply" ? "Đang áp dụng…" : "Xác nhận áp dụng"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmApplyOpen && (
         <div className="standards-confirm-backdrop" onMouseDown={(event) => {

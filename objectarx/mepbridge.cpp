@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cstdint>
 #include <cmath>
 #include <string>
 
@@ -63,7 +64,37 @@ static struct timespec  gDrawingInfoReqMtime = {0, 0};
 static std::string      gHiLayer;   // layer dang duoc highlight (de unhighlight khi doi)
 
 static const ACHAR* kGroup = L"ACAD_BRIDGE";
-static const char*  kPluginVersion = "1.3.0";
+static const char*  kPluginVersion = "1.4.0";
+static const uint64_t gDocumentNonce =
+    (static_cast<uint64_t>(arc4random()) << 32) | arc4random();
+static uint64_t gNextDocumentInstance = 1;
+static std::map<const AcApDocument*, std::string> gDocumentInstances;
+static std::map<const AcDbDatabase*, uint64_t> gDatabaseRevisions;
+
+std::string acadDocumentInstanceToken(const AcApDocument* document) {
+    if (!document) return "";
+    const auto found = gDocumentInstances.find(document);
+    if (found != gDocumentInstances.end()) return found->second;
+    char token[64] = {};
+    snprintf(
+        token, sizeof token, "%016llX-%016llX",
+        static_cast<unsigned long long>(gDocumentNonce),
+        static_cast<unsigned long long>(gNextDocumentInstance++));
+    const std::string value(token);
+    gDocumentInstances.emplace(document, value);
+    return value;
+}
+
+uint64_t acadDatabaseRevision(const AcDbDatabase* database) {
+    if (!database) return 0;
+    return gDatabaseRevisions[database];
+}
+
+static void forgetDocumentState(const AcApDocument* document) {
+    if (!document) return;
+    gDocumentInstances.erase(document);
+    if (document->database()) gDatabaseRevisions.erase(document->database());
+}
 
 // ============================ UTF-8 <-> wchar_t (UTF-32 tren Mac) ============================
 std::string toUtf8(const wchar_t* w) {
@@ -193,7 +224,12 @@ static void writeDocs() {
             first = false;
             json += "{\"title\":\"" + jsonEsc(toUtf8(d->docTitle())) +
                     "\",\"file\":\"" + jsonEsc(toUtf8(d->fileName())) +
-                    "\",\"active\":" + (d == pActive ? "true" : "false") + "}";
+                    "\",\"active\":" + (d == pActive ? "true" : "false") +
+                    ",\"instance\":\"" +
+                        jsonEsc(acadDocumentInstanceToken(d)) + "\"" +
+                    ",\"revision\":" +
+                        std::to_string(acadDatabaseRevision(d->database())) +
+                    "}";
         }
         delete it;
     }
@@ -588,6 +624,7 @@ static std::string layerTableJson(AcDbDatabase* db, long long& total,
                 if (!first) out += ",";
                 first = false;
                 out += "{\"name\":" + jsonString(toUtf8(name.kwszPtr())) +
+                       ",\"handle\":" + jsonString(objectHandle(layer)) +
                        ",\"aci\":" + std::to_string((unsigned)color.colorIndex()) +
                        ",\"color\":" + std::to_string((unsigned)color.colorIndex()) +
                        ",\"rgb\":[" + std::to_string((unsigned)color.red()) + "," +
@@ -1204,7 +1241,11 @@ static void writeDrawingInfo() {
         ",\"named\":" + jsonBool(!file.empty()) +
         ",\"readOnly\":" + jsonBool(readOnly) +
         ",\"quiescent\":" + jsonBool(quiescent) +
-        ",\"dbmod\":" + dbmod + "}";
+        ",\"dbmod\":" + dbmod +
+        ",\"instance\":" + jsonString(acadDocumentInstanceToken(doc)) +
+        ",\"revision\":" +
+            std::to_string(acadDatabaseRevision(db)) +
+        "}";
 
     const std::string tables =
         "{\"layers\":" + layers +
@@ -2204,6 +2245,7 @@ public:
         if (d) detachDbReactorIfDoc(d);
         emitEvent("docClosed", d ? toUtf8(d->docTitle()) : "");
         writeDocs();
+        forgetDocumentState(d);
     }
     void documentActivated(AcApDocument* d) override {
         // Re-attach only after activation; never removeReactor on a dead db pointer.
@@ -2231,9 +2273,18 @@ public:
 // trong callback — chi set co; emit 1 lan khi lenh ket thuc de tranh spam).
 class MepDbReactor : public AcDbDatabaseReactor {
 public:
-    void objectAppended(const AcDbDatabase*, const AcDbObject*) override { gDirty = true; }
-    void objectModified(const AcDbDatabase*, const AcDbObject*) override { gDirty = true; }
-    void objectErased(const AcDbDatabase*, const AcDbObject*, bool) override { gDirty = true; }
+    void objectAppended(const AcDbDatabase* db, const AcDbObject*) override {
+        gDirty = true;
+        if (db) ++gDatabaseRevisions[db];
+    }
+    void objectModified(const AcDbDatabase* db, const AcDbObject*) override {
+        gDirty = true;
+        if (db) ++gDatabaseRevisions[db];
+    }
+    void objectErased(const AcDbDatabase* db, const AcDbObject*, bool) override {
+        gDirty = true;
+        if (db) ++gDatabaseRevisions[db];
+    }
 };
 static MepDocReactor gDocReactor;
 static MepEdReactor  gEdReactor;
@@ -2300,6 +2351,8 @@ static void stopReactors() {
     if (acDocManager) acDocManager->removeReactor(&gDocReactor);
     if (acedEditor)   acedEditor->removeReactor(&gEdReactor);
     detachDbReactor();
+    gDocumentInstances.clear();
+    gDatabaseRevisions.clear();
     gReactorsOn = false;
 }
 
@@ -2399,7 +2452,7 @@ acrxEntryPoint(AcRx::AppMsgCode msg, void* pkt) {
         startReactors();
         writeDocs();   // heartbeat dau tien
         emitEvent("pluginLoaded", std::string("AcadBridge ") + kPluginVersion);
-        acutPrintf(L"\n[AcadBridge 1.3.0] Da nap. Drawing-info read-only + Raw ObjectARX menu."
+        acutPrintf(L"\n[AcadBridge 1.4.0] Da nap. Drawing-info + selection control + Raw ObjectARX."
                    L" Lenh: MEPARX / MEPRAW / MEPDOCS / MEPWATCH / MEPUNWATCH.");
         break;
     case AcRx::kUnloadAppMsg:

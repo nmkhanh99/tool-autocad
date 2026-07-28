@@ -42,8 +42,8 @@ for (const line of md.split("\n")) {
   const m = line.match(/\| (✅|🟡|❓|❌) \| \*\*(.+?)\*\* \| `(.+?)` \|/);
   if (m) mdRows.push({ status: m[1], name: m[2], api: m[3], section });
 }
-assert(mdRows.length === 86, `MD rows = 86 (got ${mdRows.length})`);
-assert(catalog.RAW_CAPABILITIES.length === 86, `Registry size = 86 (got ${catalog.RAW_CAPABILITIES.length})`);
+assert(mdRows.length === 87, `MD rows = 87 (got ${mdRows.length})`);
+assert(catalog.RAW_CAPABILITIES.length === 87, `Registry size = 87 (got ${catalog.RAW_CAPABILITIES.length})`);
 
 const macMd = mdRows.filter(
   (r) =>
@@ -137,6 +137,58 @@ assert(noAcad.ok === false && noAcad.blocked === true, "no AutoCAD → blocked s
 assert(noAcad.id === "db.layer", "no AutoCAD keeps id");
 assert(noAcad.diagnostic === "autocad_not_running", "diagnostic autocad_not_running");
 
+// An intermediate interactive acknowledgement must yield to the event loop so
+// the plugin can replace raw.done with the final result.
+{
+  const previousBridgeDir = process.env.ACAD_BRIDGE_DIR;
+  const pollingBridgeDir = join(SCRATCH, "raw-awaiting-poll");
+  mkdirSync(pollingBridgeDir, { recursive: true });
+  process.env.ACAD_BRIDGE_DIR = pollingBridgeDir;
+  const donePath = join(pollingBridgeDir, "raw.done");
+  const pending = rawDispatch.invokeRaw(
+    {
+      id: "ed.selection_control",
+      target: "/tmp/Drawing1.dwg",
+      params: { token: "poll-test", action: "activate" },
+    },
+    { acadRunning: true, waitMs: 1_000 },
+  );
+  // A fresh result from the previous same-id call must not be consumed.
+  writeFileSync(donePath, JSON.stringify({
+    ok: true,
+    id: "ed.selection_control",
+    payload: { status: "ok", token: "old-token", action: "capture" },
+  }), "utf8");
+  setTimeout(() => {
+    writeFileSync(donePath, JSON.stringify({
+      ok: true,
+      id: "ed.selection_control",
+      payload: {
+        status: "awaiting_command",
+        token: "poll-test",
+        action: "activate",
+      },
+    }), "utf8");
+  }, 40);
+  setTimeout(() => {
+    writeFileSync(donePath, JSON.stringify({
+      ok: true,
+      id: "ed.selection_control",
+      payload: { status: "ok", token: "poll-test", action: "activate" },
+    }), "utf8");
+  }, 90);
+  const polled = await pending;
+  assert(
+    polled.ok === true &&
+      polled.payload?.status === "ok" &&
+      polled.payload?.token === "poll-test" &&
+      polled.payload?.action === "activate",
+    "same-id stale result is ignored before the matching final result",
+  );
+  if (previousBridgeDir === undefined) delete process.env.ACAD_BRIDGE_DIR;
+  else process.env.ACAD_BRIDGE_DIR = previousBridgeDir;
+}
+
 // ── 5. Catalog export shape ──
 const exp = rawDispatch.exportRawCatalog();
 assert(exp.ok === true, "exportRawCatalog ok");
@@ -153,6 +205,10 @@ assert(!allEnabledIds.includes("win.mfc"), "enabled excludes win.mfc");
 const root = resolve(__dirname, "../../../../objectarx");
 const mepraw = readFileSync(join(root, "mepraw.cpp"), "utf8");
 const mepbridge = readFileSync(join(root, "mepbridge.cpp"), "utf8");
+const selectionControl = readFileSync(
+  join(root, "selection_control.cpp"),
+  "utf8",
+);
 const buildSh = readFileSync(join(root, "build.sh"), "utf8");
 assert(mepraw.includes("execRawJob"), "mepraw.cpp has execRawJob");
 assert(mepraw.includes("writeRawResult"), "mepraw.cpp has writeRawResult");
@@ -164,6 +220,21 @@ assert(mepbridge.includes("mepRawRegisterCommands"), "mepbridge registers raw co
 assert(mepbridge.includes("AcadBridge") || mepbridge.includes("ACADARX"), "plugin product AcadBridge");
 assert(mepbridge.includes("/job.lsp") || mepbridge.includes("job.lsp"), "plugin watches job.lsp");
 assert(buildSh.includes("mepraw.cpp"), "build.sh compiles mepraw.cpp");
+assert(buildSh.includes("selection_control.cpp"), "build.sh compiles selection control");
+assert(
+  mepraw.includes("ACRX_CMD_USEPICKSET | ACRX_CMD_REDRAW"),
+  "ACADSELECT retains Pickfirst after the command ends",
+);
+assert(
+  selectionControl.includes("acedSSSetFirst(selection, nullptr)"),
+  "selection control sets the C++ Pickfirst argument",
+);
+assert(
+  selectionControl.includes("source_layer_locked") &&
+    selectionControl.includes("source_layer_frozen") &&
+    selectionControl.includes("source_layer_off"),
+  "selection move rejects locked/frozen/off source layers",
+);
 assert(buildSh.includes("Acad-Bridge") || buildSh.includes("AcadBridge"), "build.sh package Acad-Bridge");
 // Bundle may be absent if SDK not installed — accept either new or legacy artifact
 const hasBundle =
@@ -217,7 +288,8 @@ assert(mepraw.includes("h_probe_ok") === false, "no h_probe_ok fake success help
 const interactiveIds = catalog.RAW_CAPABILITIES.filter((c) => c.interactive).map((c) => c.id);
 assert(interactiveIds.length >= 19, `interactive count >= 19 (got ${interactiveIds.length})`);
 const requiredBranches = [
-  "ed.get_point", "ed.get_string", "ed.get_number", "ed.ssget", "ed.ssget_first", "ed.entsel",
+  "ed.selection_control", "ed.get_point", "ed.get_string", "ed.get_number",
+  "ed.ssget", "ed.ssget_first", "ed.entsel",
   "ed.highlight_subent", "ed.grdraw", "ed.input_point", "ed.custom_osnap", "ed.command_s",
   "adv.jig", "adv.overrule", "adv.custom_entity", "adv.acgi", "ui.inplace_text", "ui.viewcube",
   "ui.cocoa", "ui.plot",

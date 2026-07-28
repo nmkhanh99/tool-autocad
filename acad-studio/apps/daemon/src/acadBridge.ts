@@ -256,9 +256,17 @@ export function inlineLib(): string {
   try { return readFileSync(acadLib(), "utf8") + "\n"; } catch { return ""; }
 }
 
+export type OpenAcadDocument = {
+  title: string;
+  file: string;
+  active: boolean;
+  instance?: string;
+  revision?: number;
+};
+
 /** Hỏi plugin danh sách bản vẽ đang mở (ghi docs.req → chờ docs.json mới). Heartbeat plugin. */
 export async function listOpenDocs(timeoutMs = 3000):
-  Promise<{ alive: boolean; docs: { title: string; file: string; active: boolean }[] }> {
+  Promise<{ alive: boolean; docs: OpenAcadDocument[] }> {
   ensureBridgeDirs();
   const reqAt = Date.now();
   writeFileSync(join(getBridgeDir(), "docs.req"), String(reqAt), "utf8");
@@ -639,10 +647,25 @@ export function acadBridgeRouter(): Router {
   });
   r.post("/raw/invoke", async (req, res) => {
     const { id, target, params, dryRun = false, waitMs } = req.body ?? {};
-    if (!id) return res.status(400).json({ ok: false, error: "Thiếu id (capability id từ catalog)" });
+    const capabilityId = String(id ?? "").trim();
+    if (!capabilityId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Thiếu id (capability id từ catalog)",
+      });
+    }
+    if (capabilityId === "ed.selection_control" && !dryRun) {
+      return res.status(409).json({
+        ok: false,
+        id: "ed.selection_control",
+        code: "confirmation_required",
+        error:
+          "Selection control phải đi qua /api/acad/selection/prepare → xác nhận → apply",
+      });
+    }
     const running = await acadRunning();
     const result = await invokeRaw(
-      { id: String(id), target: target ? String(target) : undefined, params: params || {} },
+      { id: capabilityId, target: target ? String(target) : undefined, params: params || {} },
       { dryRun: !!dryRun, waitMs, acadRunning: running },
     );
     // Always return structured body with ok + id (acceptance criterion).
@@ -717,25 +740,15 @@ export function acadBridgeRouter(): Router {
     res.json({ ok: true, op });
   });
 
-  // QA highlight + zoom (rank 7): app bấm 1 nhóm ống → AutoCAD sáng + zoom tới nhóm đó.
-  r.post("/highlight", async (req, res) => {
-    if (!(await acadRunning())) return res.status(400).json({ error: "AutoCAD chưa chạy" });
-    ensureBridgeDirs();
-    const { target = "", layer = "" } = req.body ?? {};
-    const before = Date.now();
-    atomicWrite(join(getBridgeDir(), "select.req"), `${target}|${layer}`);
-    const evFile = join(getBridgeDir(), "events.jsonl");
-    while (Date.now() - before < 6000) {   // chờ event highlighted
-      try {
-        const st = statSync(evFile);
-        if (st.mtimeMs >= before - 50) {
-          const last = readFileSync(evFile, "utf8").trim().split("\n").slice(-3).join(" ");
-          if (last.includes("highlighted")) return res.json({ ok: true, hint: `✓ Đã sáng + zoom "${layer}".` });
-        }
-      } catch { /* */ }
-      await new Promise((r2) => setTimeout(r2, 120));
-    }
-    res.json({ ok: false, error: "Plugin không phản hồi — khởi động lại AutoCAD (nạp plugin mới)." });
+  // Legacy direct highlight mutated Pickfirst/active document without a proposal.
+  // Keep the route fail-closed for old clients; the UI uses selection/prepare.
+  r.post("/highlight", (_req, res) => {
+    res.status(409).json({
+      ok: false,
+      code: "confirmation_required",
+      error:
+        "Chọn layer phải đi qua /api/acad/selection/prepare → xác nhận → apply",
+    });
   });
 
   // Chèn BẢNG BOQ (AcDbTable) vào bản vẽ đang mở — plugin C++ dựng bảng thật.

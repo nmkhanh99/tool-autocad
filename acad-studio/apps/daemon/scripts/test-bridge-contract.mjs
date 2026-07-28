@@ -222,6 +222,64 @@ assert(dry.ok === true || dry.dryRun === true || dry.jobBody || dry.id === "db.l
 // Accept either {ok, dryRun, jobBody} or preflight — just not silent throw
 assert(typeof dry === "object" && dry.id === "db.layer", "dry invoke has id");
 
+// Public raw invoke must not bypass selection's prepare/confirm/apply gate.
+{
+  const router = bridge.acadBridgeRouter();
+  const layer = router.stack.find((item) =>
+    item.route?.path === "/raw/invoke" && item.route.methods.post);
+  assert(layer, "raw invoke route exists");
+  let status = 200;
+  let payload;
+  const response = {
+    status(value) {
+      status = value;
+      return response;
+    },
+    json(value) {
+      payload = value;
+      return response;
+    },
+  };
+  await layer.route.stack[0].handle({
+    body: {
+      id: "  ed.selection_control  ",
+      target: "/tmp/Drawing1.dwg",
+      params: { action: "move" },
+    },
+  }, response);
+  assert(
+    status === 409 && payload?.code === "confirmation_required",
+    "public raw invoke cannot bypass selection confirmation",
+  );
+}
+
+// Legacy highlight must also fail closed instead of writing select.req.
+{
+  const router = bridge.acadBridgeRouter();
+  const layer = router.stack.find((item) =>
+    item.route?.path === "/highlight" && item.route.methods.post);
+  assert(layer, "legacy highlight route exists as a fail-closed compatibility route");
+  let status = 200;
+  let payload;
+  const response = {
+    status(value) {
+      status = value;
+      return response;
+    },
+    json(value) {
+      payload = value;
+      return response;
+    },
+  };
+  await layer.route.stack[0].handle({
+    body: { target: "/tmp/Drawing1.dwg", layer: "P-ThongHoi" },
+  }, response);
+  assert(
+    status === 409 && payload?.code === "confirmation_required",
+    "legacy highlight cannot bypass selection confirmation",
+  );
+}
+
 // ── Headless discovery (shipped entry) ──
 const app = bridge.findAcadApp();
 const core = bridge.findCoreConsole();
