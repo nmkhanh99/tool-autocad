@@ -107,6 +107,17 @@ assert(body.includes("acad:write-result"), "wrapJob uses acad:write-result");
 assert(body.includes("acad:resfile"), "wrapJob sets acad:resfile");
 assert(body.includes("==end=="), "wrapJob includes sentinel");
 assert(!body.includes(";;; MEP job"), "wrapJob header not MEP-branded");
+const savedError = body.indexOf("(setq acad:outer-error *error*)");
+const installedError = body.indexOf("(setq *error*", savedError + 1);
+const payload = body.indexOf('(princ "hello")');
+const restoredError = body.lastIndexOf("(setq *error* acad:outer-error)");
+assert(savedError >= 0 && savedError < installedError, "wrapJob saves the caller error handler");
+assert(
+  /\(lambda \(m\)\s+\(setq \*error\* acad:outer-error\)\s+\(acad:write-result/.test(body),
+  "wrapJob restores the caller handler on payload errors",
+);
+assert(restoredError > payload, "wrapJob restores the caller handler after success");
+assert(!body.includes("(setq *error* nil)"), "wrapJob does not discard the caller error handler");
 
 contract.atomicWriteFile(jobPath, body);
 assert(existsSync(jobPath), "atomicWriteFile creates job.lsp");
@@ -183,6 +194,33 @@ writeFileSync(
 const parsed = bridge.parseJobResultText(readFileSync(join(results, "t1.txt"), "utf8"));
 assert(parsed && parsed.status === "ok", "parseJobResultText status ok");
 assert(parsed.message.includes("job da chay"), "parseJobResultText message");
+
+const priorEvents = '{"detail":"Bản vẽ số 1"}\n';
+const appendedEvents = '{"detail":"Đã cập nhật"}\n';
+const eventBytes = Buffer.from(priorEvents + appendedEvents, "utf8");
+assert(
+  bridge.utf8FromByteOffset(eventBytes, Buffer.byteLength(priorEvents, "utf8")) ===
+    appendedEvents,
+  "event SSE cursor slices UTF-8 data by byte offset",
+);
+
+const duplicateTitleDocs = [
+  { title: "Plan.dwg", file: "/tmp/a/Plan.dwg", active: true },
+  { title: "Plan.dwg", file: "/tmp/b/Plan.dwg", active: false },
+];
+assert(
+  bridge.selectOpenDocument(duplicateTitleDocs, "/tmp/b/Plan.dwg").document?.file ===
+    "/tmp/b/Plan.dwg",
+  "open-document selection prefers an exact full path",
+);
+assert(
+  bridge.selectOpenDocument(duplicateTitleDocs, "Plan.dwg").ambiguous === true,
+  "open-document selection rejects duplicate titles",
+);
+assert(
+  bridge.selectOpenDocument(duplicateTitleDocs, "").document?.file === "/tmp/a/Plan.dwg",
+  "open-document selection resolves one active document",
+);
 
 // writeLiveJob with env override
 process.env.ACAD_BRIDGE_DIR = bridgeDir;
@@ -319,6 +357,11 @@ const acadBridgeSrc = readFileSync(join(__dirname, "../src/acadBridge.ts"), "utf
 assert(acadBridgeSrc.includes('r.get("/drawing-info"'), "drawing-info HTTP route wired");
 assert(acadBridgeSrc.includes("requestDrawingInfo(exactTarget)"), "drawing-info route sends exact target");
 assert(!acadBridgeSrc.includes("globSync("), "daemon avoids Node 22-only fs.globSync");
+assert(
+  acadBridgeSrc.includes('LANG: "en_US.UTF-8"') &&
+    acadBridgeSrc.includes('LC_ALL: "en_US.UTF-8"'),
+  "Core Console receives a macOS-supported UTF-8 locale",
+);
 for (const file of ["liveDraw.ts", "livePreview.ts", "session.ts"]) {
   const source = readFileSync(join(__dirname, "../src", file), "utf8");
   assert(source.includes("dispatchLiveJob"), `${file} uses shared live-job queue`);
@@ -326,6 +369,9 @@ for (const file of ["liveDraw.ts", "livePreview.ts", "session.ts"]) {
 }
 const arxCpp = readFileSync(join(__dirname, "../../../../objectarx/mepbridge.cpp"), "utf8");
 assert(arxCpp.includes("/Acad-Bridge"), "plugin default path Acad-Bridge");
+const arxAcadEnv = arxCpp.indexOf('std::getenv("ACAD_BRIDGE_DIR")');
+const arxMepEnv = arxCpp.indexOf('std::getenv("MEP_BRIDGE_DIR")');
+assert(arxAcadEnv >= 0 && arxMepEnv > arxAcadEnv, "plugin honors ACAD_BRIDGE_DIR before MEP_BRIDGE_DIR");
 assert(arxCpp.includes('"/job.lsp"') || arxCpp.includes("/job.lsp"), "plugin watches job.lsp");
 assert(arxCpp.includes('"/drawing-info.req"'), "plugin watches drawing-info.req");
 assert(arxCpp.includes("findDocExact"), "drawing-info resolves exact document target");
@@ -344,6 +390,15 @@ assert(!drawingInfoBlock.includes("kForWrite"), "drawing-info snapshot opens no 
 assert(drawingInfoBlock.includes("pluginVersion"), "drawing-info reports plugin version");
 assert(arxCpp.includes("AcadBridge"), "plugin product AcadBridge");
 assert(arxCpp.includes("ACADARX"), "plugin registers ACADARX");
+for (const lispFile of ["core.lsp", "mep.lsp"]) {
+  const lispSource = readFileSync(join(__dirname, "../../../../acad-lisp", lispFile), "utf8");
+  const acadEnv = lispSource.indexOf('(getenv "ACAD_BRIDGE_DIR")');
+  const mepEnv = lispSource.indexOf('(getenv "MEP_BRIDGE_DIR")');
+  assert(
+    acadEnv >= 0 && mepEnv > acadEnv,
+    `${lispFile} honors ACAD_BRIDGE_DIR before MEP_BRIDGE_DIR`,
+  );
+}
 const pkg = readFileSync(join(__dirname, "../../../../objectarx/PackageContents.xml"), "utf8");
 assert(pkg.includes('Name="Acad-Bridge"'), "PackageContents Name Acad-Bridge");
 assert(pkg.includes("AcadBridge"), "PackageContents AppName AcadBridge");

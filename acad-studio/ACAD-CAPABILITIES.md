@@ -86,7 +86,7 @@ Thư viện LISP: `acad-lisp/headless/mep_lib.lsp`. Kênh tổng quát: `/api/ac
 | ❓ | **-ATTEXT ra CSV (attribute extraction)** | `(setvar "FILEDIA" 0)(command "-ATTEXT" "C" "tmpl.txt" "out.txt") (C=CDF, S=SDF cần template; D=DXF→.dxx không cần).` | CHƯA probe headless trên Mac. Có trang help AutoCAD-MAC-Core → nhiều khả năng chạy. Đường thay thế DATAEXTRACTION trên Mac. Cần test cục bộ. |
 | ❓ | **MEASUREGEOM** | `(command "MEASUREGEOM" "Area" p1 p2 p3 "" "eXit"). Kết quả chỉ in command line → phải bắt qua log.` | CHƯA probe cách đọc kết quả từ console log. Offline nên tính area/length bằng ezdxf/shapely hoặc DXF thuần. |
 | ❓ | **BCOUNT (Express Tool đếm block)** | `(command "BCOUNT" ""). Thay headless: đếm bằng ssget INSERT + gom theo (assoc 2), hoặc ezdxf.` | Express Tool (acett.arx) thường KHÔNG tự nạp trong console → nhiều khả năng 'unknown command'. Đếm block bằng LISP core an toàn hơn. |
-| ❓ | **ObjectARX for Mac (C++/Obj-C → .bundle)** | `Viết C++/Obj-C, build bằng Xcode ra .bundle (không .arx). Cần ObjectARX for Mac SDK.` | API Mac là tập con Windows. MEMORY: máy user CHƯA có Xcode/ODA → ưu tiên Python+ezdxf offline + AcCoreConsole trước. |
+| ❓ | **ObjectARX for Mac (C++/Obj-C → .bundle)** | `Viết C++/Obj-C, build bằng Xcode ra .bundle (không .arx). Cần ObjectARX for Mac SDK.` | API Mac là tập con Windows. Khi chưa có toolchain đầy đủ, ưu tiên Python offline + AcCoreConsole trước. |
 | ❓ | **.NET managed (AcCoreMgd, NETLOAD)** | `Thử (command "NETLOAD" "asm.dll") trong AcCoreConsole Mac.` | PHÁT HIỆN LOCAL: bundle Mac 2027 CÓ .NET runtime (DotNetRunTime .../Microsoft.NETCore.App/10.0.0) + DesignAutomation → gợi ý managed plugin  |
 | ❓ | **acad.lsp / acaddoc.lsp autoload** | `Chắc ăn: (load "/abs/file.lsp") tường minh trong .scr. Autoload: (autoload "APP" '("cmd")). Support path Mac trong ~/Library (hidden).` | Chưa xác nhận AcCoreConsole Mac tự nạp acaddoc.lsp (ACADLSPASDOC ảnh hưởng). Cần probe. |
 | ❓ | **Design Automation for AutoCAD (APS cloud)** | `Đóng gói AppBundle (.NET/LISP)+Activity chạy engine headless trên cloud APS, không cần license desktop.` | Bundle Mac 2027 có thư mục DesignAutomation. Hướng headless 'chính chủ' nếu muốn scale, không phụ thuộc máy Mac. |
@@ -152,4 +152,4 @@ Thư viện LISP: `acad-lisp/headless/mep_lib.lsp`. Kênh tổng quát: `/api/ac
 - CUI / customization dialog: có thể crash Core Console (Kean 2013)
 - MODEMACRO (status bar DIESEL): GUI, vô nghĩa headless
 - BCOUNT (Express Tool): thường không tự nạp trong AcCoreConsole → dùng ssget INSERT đếm thay
-- Dấu vết cần probe thêm (chưa xác nhận, không dùng ngay): -ATTEXT trên Mac, DGNEXPORT, MEASUREGEOM đọc kết quả, NETLOAD/.NET AcCoreMgd, acaddoc.lsp autoload, ObjectARX .bundle (chưa có Xcode/ODA)
+- Dấu vết cần probe thêm (chưa xác nhận, không dùng ngay): -ATTEXT trên Mac, DGNEXPORT, MEASUREGEOM đọc kết quả, NETLOAD/.NET AcCoreMgd, acaddoc.lsp autoload, ObjectARX .bundle

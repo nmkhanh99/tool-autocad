@@ -13,8 +13,8 @@ Domain-agnostic toolkit for reading, analyzing, and editing AutoCAD drawings on 
      ┌────────────────┐  ┌─────────────────┐  ┌──────────────────┐
      │ A. OFFLINE CORE│  │ B. ACAD CONTROL │  │ C. OBJECTARX     │
      │ app/acadtool   │  │ daemon /api/acad│  │ objectarx/*.bundle│
-     │ ODA/ezdxf/     │  │ AcCoreConsole   │  │ in-process CAD   │
-     │ LibreDWG       │  │ + job file LISP │  │ watch + raw ops  │
+     │ LibreDWG       │  │ AcCoreConsole   │  │ in-process CAD   │
+     │ DWG → JSON     │  │ + job file LISP │  │ watch + raw ops  │
      └────────────────┘  └────────┬────────┘  └────────┬─────────┘
                                   │                    │
                                   ▼                    ▼
@@ -33,7 +33,7 @@ Domain-agnostic toolkit for reading, analyzing, and editing AutoCAD drawings on 
 
 | Column | Path | Role |
 |--------|------|------|
-| **A. Offline core** | `app/acadtool`, `app/cli.py` | Inventory, layers, title, takeoff without AutoCAD open (ODA / ezdxf / LibreDWG) |
+| **A. Offline core** | `app/acadtool`, `app/cli.py` | Inventory, layers, title, takeoff without AutoCAD open (LibreDWG) |
 | **B. ACAD Control** | `acad-studio/apps/daemon` → `/api/acad/*` | AcCoreConsole **headless/batch** on closed DWG; **live job** LISP into open session |
 | **C. ObjectARX** | `objectarx/` → **AcadBridge** | In-process Mac plugin: FSEvents watch `job.lsp` + **raw.job** catalog (no Accessibility) |
 

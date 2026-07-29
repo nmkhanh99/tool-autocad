@@ -10,17 +10,27 @@
 ;;; ============================================================================
 
 ;; Bridge dir + ACAD-RUN (shared with mep.lsp for compatibility)
-(defun acad:bridgedir ( / d primary legacy)
-  (setq d (cond ((getenv "HOME")) ((getenv "USERPROFILE")) (".")))
-  (if (and (> (strlen d) 0)
-           (/= (substr d (strlen d)) "/") (/= (substr d (strlen d)) "\\"))
-    (setq d (strcat d "/")))
-  (setq primary (strcat d "Acad-Bridge/")
-        legacy  (strcat d "MEP-Bridge/"))
-  (cond
-    ((vl-file-directory-p primary) primary)
-    ((vl-file-directory-p legacy) legacy)
-    (T primary)))
+(defun acad:bridgedir ( / d env primary legacy)
+  (setq env (getenv "ACAD_BRIDGE_DIR"))
+  (if (or (null env) (= env ""))
+    (setq env (getenv "MEP_BRIDGE_DIR")))
+  (if (and env (/= env ""))
+    (progn
+      (if (and (/= (substr env (strlen env)) "/")
+               (/= (substr env (strlen env)) "\\"))
+        (setq env (strcat env "/")))
+      env)
+    (progn
+      (setq d (cond ((getenv "HOME")) ((getenv "USERPROFILE")) (".")))
+      (if (and (> (strlen d) 0)
+               (/= (substr d (strlen d)) "/") (/= (substr d (strlen d)) "\\"))
+        (setq d (strcat d "/")))
+      (setq primary (strcat d "Acad-Bridge/")
+            legacy  (strcat d "MEP-Bridge/"))
+      (cond
+        ((vl-file-directory-p primary) primary)
+        ((vl-file-directory-p legacy) legacy)
+        (T primary)))))
 
 (defun acad:job-path ( / dir p)
   (setq dir (acad:bridgedir)

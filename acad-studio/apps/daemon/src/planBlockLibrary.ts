@@ -742,7 +742,6 @@ export function buildPlanBlockInventoryLisp(names: string[] = [...PLAN_BLOCK_NAM
  * Headless script: WBLOCK each unique plan block from sample to library dir.
  */
 export function buildWblockExportScript(
-  sampleDwg: string,
   blockNames: string[],
   outDir: string,
 ): string {

@@ -9,6 +9,7 @@ import {
   listOpenDocs as defaultListOpenDocs,
   requestDrawingInfo as defaultRequestDrawingInfo,
   runHeadless as defaultRunHeadless,
+  selectOpenDocument,
 } from "./acadBridge.js";
 import {
   BlockLibraryConflictError,
@@ -320,9 +321,11 @@ async function resolveDocument(
   const open = await deps.listOpenDocs(4_000);
   if (!open.alive) throw new Error("Plugin AcadBridge không phản hồi");
   const requested = String(target ?? "").trim();
-  const document = requested
-    ? open.docs.find((item) => item.title === requested || item.file === requested)
-    : open.docs.find((item) => item.active);
+  const selected = selectOpenDocument(open.docs, requested);
+  if (selected.ambiguous) {
+    throw new Error("Có nhiều bản vẽ khớp target; hãy chọn bằng full file path");
+  }
+  const document = selected.document;
   if (!document) {
     throw new Error(requested
       ? "Không thấy bản vẽ đang mở khớp chính xác target"

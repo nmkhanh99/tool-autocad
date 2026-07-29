@@ -25,11 +25,9 @@ export type Fn = {
   menu?: boolean;      // false = giữ action cho tương thích nhưng không hiện trong menu chính
 };
 
-const DEFAULT_DIR = "/Users/khanhnm/Desktop/tool-autocad/As-built drawing";
-const SAMPLE = DEFAULT_DIR + "/ABD_He thong thong hoi tang 8_04052026_V.00.dwg";
-const dirField: Field = { name: "dir", label: "Thư mục bản vẽ", type: "dir", default: DEFAULT_DIR };
-const fileField: Field = { name: "file", label: "File bản vẽ (.dwg)", type: "text", default: SAMPLE };
-const outField: Field = { name: "outDir", label: "Thư mục xuất", type: "text", default: "/tmp/mep-out" };
+const dirField: Field = { name: "dir", label: "Thư mục bản vẽ", type: "dir" };
+const fileField: Field = { name: "file", label: "File bản vẽ (.dwg)", type: "file" };
+const outField: Field = { name: "outDir", label: "Thư mục xuất", type: "dir", default: "/tmp/mep-out" };
 
 export const FUNCTIONS: Fn[] = [
   // ─── Thiết kế & dữ liệu MEP ───

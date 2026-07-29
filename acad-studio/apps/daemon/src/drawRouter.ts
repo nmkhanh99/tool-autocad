@@ -25,6 +25,7 @@ import {
 import {
   coreConsoleAvailable, createBlankDwg, readReport, runHeadlessLisp,
 } from "./headlessDraw.js";
+import { selectOpenDocument } from "./acadBridge.js";
 import { openDocs, runLiveLisp } from "./liveDraw.js";
 
 export const DRAW_CONTRACT = {
@@ -104,6 +105,27 @@ async function runForTarget(
   return { ok: out.ok, result: out.result, error: out.error || out.output.slice(-400) };
 }
 
+async function discardStagedOps(): Promise<{ ok: true } | { ok: false; error: string }> {
+  for (const op of ops.values()) {
+    if (op.state !== "staged") continue;
+    const out = await runForTarget(op.target, (mode) =>
+      buildRejectLisp(op.stepId, op.opId, {
+        mode,
+        resultPath: resultPath(),
+        savePath: op.target.kind === "file" ? op.target.dwg : undefined,
+      }),
+    );
+    if (!out.ok) {
+      return {
+        ok: false,
+        error: `Không thể xoá preview ${op.opId}: ${out.error || "reject thất bại"}`,
+      };
+    }
+    op.state = "rejected";
+  }
+  return { ok: true };
+}
+
 export function drawRouter(): Router {
   const r = express.Router();
 
@@ -161,17 +183,23 @@ export function drawRouter(): Router {
     try {
       const wantDwg = req.body?.dwg ? String(req.body.dwg) : "";
       const wantDoc = String(req.body?.title || req.body?.file || "");
+      let nextTarget: DrawTarget | null = null;
 
       if (wantDwg) {
         if (!existsSync(wantDwg)) {
           return res.status(400).json({ ok: false, error: `Không thấy file ${wantDwg}` });
         }
-        setDrawTarget({ kind: "file", dwg: wantDwg });
+        nextTarget = { kind: "file", dwg: wantDwg };
       } else if (wantDoc) {
         const d = await openDocs();
-        const hit = d.docs.find(
-          (x) => x.title === wantDoc || x.file === wantDoc || x.file.endsWith(`/${wantDoc}`),
-        );
+        const selected = selectOpenDocument(d.docs, wantDoc);
+        if (selected.ambiguous) {
+          return res.status(409).json({
+            ok: false,
+            error: "Có nhiều bản vẽ trùng tên; hãy chọn bằng full file path",
+          });
+        }
+        const hit = selected.document;
         if (!hit) {
           return res.status(400).json({
             ok: false,
@@ -179,12 +207,15 @@ export function drawRouter(): Router {
             docs: d.docs.map((x) => x.title),
           });
         }
-        setDrawTarget({ kind: "live", title: hit.title, file: hit.file });
-      } else {
-        setDrawTarget(null);
+        nextTarget = { kind: "live", title: hit.title, file: hit.file };
       }
 
-      ops.clear(); // đổi đích → bỏ mọi preview treo của đích cũ
+      const discarded = await discardStagedOps();
+      if (!discarded.ok) {
+        return res.status(500).json({ ok: false, error: discarded.error });
+      }
+      setDrawTarget(nextTarget);
+      ops.clear();
       const cur = getDrawTarget();
       res.json({
         ok: true,
@@ -201,11 +232,21 @@ export function drawRouter(): Router {
   });
 
   r.post("/draw/new", async (req, res) => {
-    const dwg = String(req.body?.dwg || defaultDwg());
-    const out = await createBlankDwg(dwg);
-    setDrawTarget({ kind: "file", dwg });
-    ops.clear();
-    res.json({ ok: out.ok, dwg, target: getDrawTarget(), error: out.error });
+    try {
+      const discarded = await discardStagedOps();
+      if (!discarded.ok) {
+        return res.status(500).json({ ok: false, error: discarded.error });
+      }
+      const dwg = String(req.body?.dwg || defaultDwg());
+      const out = await createBlankDwg(dwg);
+      if (out.ok) {
+        setDrawTarget({ kind: "file", dwg });
+        ops.clear();
+      }
+      return res.json({ ok: out.ok, dwg, target: getDrawTarget(), error: out.error });
+    } catch (error) {
+      return res.status(500).json({ ok: false, error: String(error) });
+    }
   });
 
   r.post("/draw/stage", async (req, res) => {
@@ -216,8 +257,21 @@ export function drawRouter(): Router {
       else if (req.body?.target) {
         const d = await openDocs();
         const want = String(req.body.target);
-        const hit = d.docs.find((x) => x.title === want || x.file === want);
-        if (hit) t = { kind: "live", title: hit.title, file: hit.file };
+        const selected = selectOpenDocument(d.docs, want);
+        if (selected.ambiguous) {
+          return res.status(409).json({
+            ok: false,
+            error: "Có nhiều bản vẽ trùng tên; hãy chọn bằng full file path",
+          });
+        }
+        const hit = selected.document;
+        if (!hit) {
+          return res.status(400).json({
+            ok: false,
+            error: `Không thấy bản vẽ đang mở '${want}'`,
+          });
+        }
+        t = { kind: "live", title: hit.title, file: hit.file };
       }
       if (t.kind === "file" && !existsSync(t.dwg)) {
         return res.status(400).json({
@@ -306,6 +360,9 @@ export function drawRouter(): Router {
       const opId = String(req.body?.opId || "");
       const op = ops.get(opId);
       if (!op) return res.status(400).json({ ok: false, error: `Không thấy opId '${opId}'` });
+      if (op.state !== "staged") {
+        return res.status(409).json({ ok: false, error: `op '${opId}' đã ${op.state}` });
+      }
       const out = await runForTarget(op.target, (mode) =>
         buildRejectLisp(op.stepId, opId, {
           mode,
@@ -313,9 +370,10 @@ export function drawRouter(): Router {
           savePath: op.target.kind === "file" ? op.target.dwg : undefined,
         }),
       );
+      if (!out.ok) return res.status(500).json({ ok: false, error: out.error });
       op.state = "rejected";
       res.json({
-        ok: out.ok, opId, committed: false,
+        ok: true, opId, committed: false,
         erased: Number(out.result.erased || 0), stepId: op.stepId,
         target: op.target, targetLabel: targetLabel(op.target),
         agentOutput: `✗ Đã xoá ${out.result.erased || 0} đối tượng preview — bản vẽ giữ nguyên.`,

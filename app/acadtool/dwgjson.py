@@ -1,8 +1,4 @@
-"""DWG -> JSON qua LibreDWG (dwgread), có cache.
-
-Đây là lớp BACKEND đọc duy nhất chạm tới file .dwg. Khi chuyển sang ODA
-File Converter + ezdxf, chỉ cần thay module này (và model.py đọc nguồn mới).
-"""
+"""DWG -> JSON qua LibreDWG (dwgread), có cache."""
 from __future__ import annotations
 
 import hashlib
@@ -37,8 +33,7 @@ def _cache_path(dwg: Path) -> Path:
 def dwg_to_json(dwg_path: str | Path, *, force: bool = False) -> dict:
     """Trả về dict JSON của bản vẽ. Cache theo mtime+size để chạy lại nhanh.
 
-    Raise DwgReadError nếu LibreDWG xuất JSON hỏng (đã gặp với 1 file thật) —
-    file đó cần ODA File Converter để đọc.
+    Raise DwgReadError nếu LibreDWG xuất JSON hỏng.
     """
     dwg = Path(dwg_path)
     if not dwg.is_file():
@@ -46,7 +41,13 @@ def dwg_to_json(dwg_path: str | Path, *, force: bool = False) -> dict:
 
     cache = _cache_path(dwg)
     if cache.is_file() and not force:
-        return _load_json(cache)
+        try:
+            return _load_json(cache)
+        except json.JSONDecodeError as e:
+            cache.unlink(missing_ok=True)
+            raise DwgReadError(
+                f"Cache LibreDWG JSON hỏng cho {dwg.name} (vị trí {e.pos})."
+            ) from e
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     tmp = cache.with_suffix(".tmp.json")
@@ -64,8 +65,7 @@ def dwg_to_json(dwg_path: str | Path, *, force: bool = False) -> dict:
     except json.JSONDecodeError as e:
         tmp.unlink(missing_ok=True)
         raise DwgReadError(
-            f"LibreDWG xuất JSON hỏng cho {dwg.name} (vị trí {e.pos}). "
-            f"File này cần ODA File Converter để đọc."
+            f"LibreDWG xuất JSON hỏng cho {dwg.name} (vị trí {e.pos})."
         ) from e
     tmp.replace(cache)
     return data

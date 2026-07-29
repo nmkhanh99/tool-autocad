@@ -1,7 +1,6 @@
 """Sinh script AutoLISP để GHI vào bản vẽ đang mở trong AutoCAD (Mac/Win).
 
-Đường ghi này không cần ODA: AutoCAD 2027 đã cài, AutoLISP ghi attribute native
-nên tin cậy, không rủi ro round-trip DXF làm hỏng dữ liệu. Người dùng nạp .lsp
+AutoLISP ghi attribute native nên không có rủi ro round-trip làm hỏng dữ liệu. Người dùng nạp .lsp
 (APPLOAD) rồi gõ lệnh; script tự nhận bản vẽ hiện tại theo tên file và điền đúng.
 """
 from __future__ import annotations
@@ -9,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .model import Drawing
-from .titleblock import gen_khbv, read_titleblock
+from .titleblock import gen_khbv
 
 
 def _esc(s: str) -> str:

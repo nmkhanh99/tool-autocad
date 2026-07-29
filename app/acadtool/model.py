@@ -5,7 +5,11 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .dwgjson import dwg_to_json
+from .dwgjson import DwgReadError, dwg_to_json
+
+
+class DrawingReadError(RuntimeError):
+    """LibreDWG could not decode a drawing."""
 
 
 @dataclass
@@ -44,7 +48,7 @@ def _h(ref):
 
 def fix_text(s):
     """Best-effort sửa mojibake: LibreDWG ghi bytes, ta đọc latin-1.
-    Nhiều chuỗi thực ra là UTF-8 -> thử khôi phục. (Sẽ chuẩn hẳn khi dùng ODA.)"""
+    Nhiều chuỗi thực ra là UTF-8 nên thử khôi phục lại."""
     if not isinstance(s, str):
         return s
     try:
@@ -61,92 +65,37 @@ def _poly_len(points) -> float:
     return total
 
 
+def _lwpolyline_len(
+    points: list[tuple[float, float, float]],
+    *,
+    closed: bool,
+) -> float:
+    """Return chord/arc length; each vertex bulge describes its next segment."""
+    if len(points) < 2:
+        return 0.0
+    pairs = list(zip(points, points[1:]))
+    if closed:
+        pairs.append((points[-1], points[0]))
+
+    total = 0.0
+    for start, end in pairs:
+        chord = math.dist(start[:2], end[:2])
+        bulge = abs(start[2])
+        if chord == 0.0 or bulge == 0.0:
+            total += chord
+            continue
+        angle = 4.0 * math.atan(bulge)
+        radius = chord * (1.0 + bulge * bulge) / (4.0 * bulge)
+        total += radius * angle
+    return total
+
+
 def read_drawing(dwg_path: str | Path) -> Drawing:
-    """Đọc bản vẽ -> Drawing. Ưu tiên ODA + ezdxf (sạch, không mojibake, đọc
-    được file LibreDWG hỏng); nếu chưa cài ODA thì fallback LibreDWG."""
-    from .dxfsource import oda_available
-
-    if oda_available():
-        return read_drawing_dxf(dwg_path)
-    return _read_drawing_libredwg(dwg_path)
-
-
-def read_drawing_dxf(dwg_path: str | Path) -> Drawing:
-    """Đọc qua ODA File Converter (DWG->DXF) rồi ezdxf. Không cần fix_text."""
-    import ezdxf
-
-    from .dxfsource import dwg_to_dxf
-
-    dxf = dwg_to_dxf(dwg_path)
-    doc = ezdxf.readfile(dxf)
-    return _drawing_from_doc(doc, Path(dwg_path))
-
-
-def _drawing_from_doc(doc, path: Path) -> Drawing:
-    """Dựng Drawing từ một ezdxf Document (tách ra để test độc lập với ODA)."""
-    msp = doc.modelspace()
-
-    layers = sorted(
-        {l.dxf.name for l in doc.layers if l.dxf.name and l.dxf.name != "0"},
-        key=str.lower,
-    )
-
-    inserts: list[Insert] = []
-    texts: list[tuple[str, str]] = []
-    pipes: list[PolyPipe] = []
-    layer_usage: dict[str, int] = {}
-
-    for e in msp:
-        et = e.dxftype()
-        lyr = e.dxf.get("layer", "0") or "0"
-        layer_usage[lyr] = layer_usage.get(lyr, 0) + 1
-
-        if et == "INSERT":
-            pos = e.dxf.insert
-            attribs = {a.dxf.tag: (a.dxf.text or "") for a in e.attribs}
-            inserts.append(Insert(
-                name=e.dxf.name or "?",
-                layer=lyr,
-                pos=(float(pos.x), float(pos.y)),
-                attribs=attribs,
-            ))
-        elif et == "TEXT":
-            val = e.dxf.text
-            if val:
-                texts.append((val, lyr))
-        elif et == "MTEXT":
-            val = e.text
-            if val:
-                texts.append((e.plain_text() if hasattr(e, "plain_text") else val, lyr))
-        elif et == "LINE":
-            s, en = e.dxf.start, e.dxf.end
-            pipes.append(PolyPipe("LINE", lyr, math.dist((s.x, s.y), (en.x, en.y))))
-        elif et == "LWPOLYLINE":
-            pts = [(p[0], p[1]) for p in e.get_points("xy")]
-            if len(pts) >= 2:
-                pipes.append(PolyPipe("LWPOLYLINE", lyr, _poly_len(pts)))
-        elif et == "MLINE":
-            locs = _mline_points(e)
-            if len(locs) >= 2:
-                pipes.append(PolyPipe("MLINE", lyr, _poly_len(locs)))
-
-    return Drawing(
-        path=path,
-        layers=layers,
-        inserts=inserts,
-        texts=texts,
-        pipes=pipes,
-        layer_usage=layer_usage,
-    )
-
-
-def _mline_points(mline) -> list[tuple[float, float]]:
-    """Lấy toạ độ đỉnh MLINE (ezdxf API khác nhau giữa các bản)."""
+    """Đọc bản vẽ bằng LibreDWG rồi chuẩn hóa thành Drawing."""
     try:
-        locs = mline.get_locations()  # -> list[Vec3]
-    except AttributeError:
-        locs = [v.location for v in getattr(mline, "vertices", [])]
-    return [(p[0], p[1]) for p in locs]
+        return _read_drawing_libredwg(dwg_path)
+    except (DwgReadError, OSError) as exc:
+        raise DrawingReadError(str(exc)) from exc
 
 
 def _read_drawing_libredwg(dwg_path: str | Path) -> Drawing:
@@ -211,7 +160,23 @@ def _read_drawing_libredwg(dwg_path: str | Path) -> Drawing:
         elif ent == "LWPOLYLINE":
             pts = o.get("points") or []
             if len(pts) >= 2:
-                pipes.append(PolyPipe("LWPOLYLINE", lname(o), _poly_len(pts)))
+                bulges = o.get("bulges") or []
+                vertices = [
+                    (
+                        float(point[0]),
+                        float(point[1]),
+                        float(bulges[index]) if index < len(bulges) else 0.0,
+                    )
+                    for index, point in enumerate(pts)
+                ]
+                # LibreDWG's internal flag uses bit 512 for closed; bit 1
+                # means the optional extrusion vector is present.
+                closed = bool(int(o.get("flag") or 0) & 512)
+                pipes.append(PolyPipe(
+                    "LWPOLYLINE",
+                    lname(o),
+                    _lwpolyline_len(vertices, closed=closed),
+                ))
         elif ent == "MLINE":
             verts = o.get("verts") or o.get("vertices") or []
             pts = [v.get("vertex", v) if isinstance(v, dict) else v for v in verts]

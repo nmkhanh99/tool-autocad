@@ -7,6 +7,7 @@ import {
   dispatchLiveJob,
   listOpenDocs,
   requestDrawingInfo,
+  selectOpenDocument,
 } from "./acadBridge.js";
 import {
   ensureBridgeLayout,
@@ -111,10 +112,6 @@ function lispString(value: unknown): string {
   const text = String(value ?? "");
   if (/[\0\r\n]/.test(text)) throw new Error("Chuỗi chứa ký tự không an toàn");
   return `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-function lispNumber(value: unknown, label: string): string {
-  return String(finiteNumber(value, label));
 }
 
 function lispPoint(value: unknown): string {
@@ -327,9 +324,11 @@ async function resolveDocument(target: unknown): Promise<{
   const open = await listOpenDocs(4_000);
   if (!open.alive) throw new Error("Plugin AcadBridge không phản hồi");
   const requested = String(target ?? "").trim();
-  const document = requested
-    ? open.docs.find((item) => item.title === requested || item.file === requested)
-    : open.docs.find((item) => item.active);
+  const selected = selectOpenDocument(open.docs, requested);
+  if (selected.ambiguous) {
+    throw new Error("Có nhiều bản vẽ khớp target; hãy chọn bằng full file path");
+  }
+  const document = selected.document;
   if (!document) {
     throw new Error(requested
       ? "Không thấy bản vẽ đang mở khớp chính xác target"
@@ -340,10 +339,19 @@ async function resolveDocument(target: unknown): Promise<{
   return { document, exactTarget };
 }
 
-function drawingRevision(snapshot: unknown): string {
+export function drawingRevision(snapshot: unknown): string {
   const root = asRecord(snapshot);
   const document = asRecord(root.document);
-  return String(document.dbmod ?? "");
+  const instance = typeof document.instance === "string"
+    ? document.instance.trim()
+    : "";
+  const revision = typeof document.revision === "number"
+    ? document.revision
+    : Number.NaN;
+  if (instance && Number.isSafeInteger(revision) && revision >= 0) {
+    return `native:${JSON.stringify([instance, revision])}`;
+  }
+  return `dbmod:${String(document.dbmod ?? "")}`;
 }
 
 function cleanupScans(): void {

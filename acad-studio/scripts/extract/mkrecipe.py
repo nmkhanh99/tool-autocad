@@ -6,7 +6,7 @@ Text tiếng Việt: dùng bản Unicode giải mã từ escape \\U+XXXX (nguồ
 các chuỗi lưu bằng byte TCVN3 legacy được thay bằng bản Unicode tương đương
 đã đối chiếu với nhãn ATTRIB (xem DRAW-FUNCTIONS.md §Text).
 """
-import csv, json, math, os, re, sys, collections
+import csv, json, math, os, re, collections
 from pathlib import Path
 
 DUMP = Path(os.environ.get("ACAD_DUMP_OUT", "/tmp/acad-dump"))

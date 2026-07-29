@@ -13,38 +13,30 @@ MEP/plumbing BOM là **profile sample**, không phải product identity.
 | #2 Bóc BOM (phụ kiện + chiều dài ống) → Excel | `bom` | ✅ Chạy được |
 | #1 Soát khung tên + sinh mã KHBV | `title` | ✅ Đọc/soát |
 | #1 Ghi/sửa khung tên (sinh AutoLISP) | `titlefix` | ✅ Sinh .lsp; cần chạy thử trong AutoCAD 2027 |
-| #3 Chuẩn hoá layer (đề xuất mapping → Excel) | `layers` | ✅ Phân tích/đề xuất; ✍️ áp đổi tên: chờ ODA |
+| #3 Chuẩn hoá layer (đề xuất mapping → Excel) | `layers` | ✅ Phân tích/đề xuất; áp đổi tên qua AutoCAD |
 | #5 Tích hợp Gemini AI (Phân tích, Hỏi đáp, Sinh AutoLISP) | `gemini` | ✅ Sẵn sàng (`analyze`, `ask`, `lisp`) |
-| #4 Batch PDF + sheet index | — | ⏳ Cần ODA |
+| #4 Batch PDF + sheet index | — | ⏳ Chưa triển khai |
 
 ## Kiến trúc
 
 ```
-.dwg ──(dxfsource.py: ODA File Converter, có cache)──► .dxf ──(ezdxf)──┐
-        │  backend ĐỌC CHÍNH (sạch, không mojibake, đọc được cả file    │
-        │  LibreDWG parse hỏng)                                          ▼
-        └──(fallback: dwgjson.py dwgread -O JSON khi CHƯA cài ODA)──► model.py
-                                          Drawing { layers, inserts+attribs, texts, pipes }
+.dwg ──(dwgjson.py: LibreDWG `dwgread -O JSON`, có cache)──► model.py
+                                      Drawing { layers, inserts+attribs, texts, pipes }
         ├─► bom.py + excel.py      → BOM.xlsx
         ├─► titleblock.py          → soát mã KHBV, trường khung tên
         └─► gemini.py              → Phân tích AI, Q&A bản vẽ, sinh AutoLISP
 ```
 
-`model.read_drawing()` tự chọn backend: **có ODA → ezdxf** (`read_drawing_dxf`),
-chưa có → **LibreDWG** (`_read_drawing_libredwg`). LibreDWG đọc được 8/9 file mẫu
-nhưng (a) hỏng JSON ở 1 file, (b) không ghi tin cậy, (c) text Việt mojibake một
-phần — nên ODA + ezdxf là đường chuẩn cho production (đọc/ghi/PDF).
+`model.read_drawing()` dùng **LibreDWG** làm backend duy nhất. Với file LibreDWG
+không giải mã được, CLI báo lỗi cho file đó và tiếp tục xử lý các file còn lại.
+Phần ghi bản vẽ dùng AutoLISP/AcadBridge trong AutoCAD, không round-trip qua DXF.
 
 ## Cài đặt
 
 ```bash
 pip3 install -r requirements.txt
 
-# Backend đọc chính — ODA File Converter (miễn phí, bản macOS):
-#   Tải tại https://www.opendesign.com/guestfiles/oda_file_converter
-#   Cài vào /Applications; app tự dò binary (hoặc đặt ODA_FILE_CONVERTER=<path>).
-
-brew install libredwg          # tuỳ chọn: fallback khi chưa cài ODA
+brew install libredwg
 
 # Cấu hình Gemini API Key (cho tính năng gemini):
 export GEMINI_API_KEY="AIzaSy..."
@@ -94,9 +86,7 @@ python3 cli.py info "../As-built drawing/<file>.dwg"
 
 ## Việc cần làm tiếp
 
-1. **Cài ODA File Converter** (miễn phí, bản Mac) để kích hoạt backend ezdxf:
-   đọc được file thứ 9 + hết mojibake tiếng Việt. Đường ĐỌC qua ODA đã hiện thực
-   (`dxfsource.py` + `model.read_drawing_dxf`); chỉ cần cài là tự dùng.
-2. Ghi DWG qua ezdxf→ODA (điền khung tên #1, đổi layer #3) và xuất PDF #4.
+1. Bổ sung kiểm thử cho các biến thể JSON LibreDWG từ nhiều phiên bản DWG.
+2. Hoàn thiện ghi layer/khung tên và xuất PDF qua AutoCAD/AcadBridge.
 3. Xác nhận quy ước mã KHBV và bộ layer chuẩn của công ty.
 4. `bnn2` (xuất hiện 26 lần) là thiết bị gì? — để phân loại đúng trong BOM.

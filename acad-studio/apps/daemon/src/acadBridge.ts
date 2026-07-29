@@ -83,6 +83,14 @@ function decodeAcad(s: string): string {
 function csvToRows(text: string): string[][] {
   return text.trim().split("\n").filter(Boolean).map((l) => decodeAcad(l).split(","));
 }
+
+/** Decode the unread suffix of an event log whose cursor is a byte offset. */
+export function utf8FromByteOffset(data: Buffer, byteOffset: number): string {
+  const offset = Number.isSafeInteger(byteOffset) && byteOffset > 0
+    ? Math.min(byteOffset, data.length)
+    : 0;
+  return data.subarray(offset).toString("utf8");
+}
 /** Chạy AcCoreConsole 1 lần trên 1 DWG với script body cho trước. */
 export function runHeadless(bin: string, dwg: string | null, body: string, timeoutMs: number):
   Promise<{ ok: boolean; exit: any; stdout: string }> {
@@ -93,7 +101,12 @@ export function runHeadless(bin: string, dwg: string | null, body: string, timeo
     const child = execFile(
       bin,
       args,
-      { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, killSignal: "SIGKILL" },
+      {
+        timeout: timeoutMs,
+        maxBuffer: 8 * 1024 * 1024,
+        killSignal: "SIGKILL",
+        env: { ...process.env, LANG: "en_US.UTF-8", LC_ALL: "en_US.UTF-8" },
+      },
       (err, so, se) => {
         try {
           rmSync(scr);
@@ -210,7 +223,7 @@ export function acadRunning(): Promise<boolean> {
  *  macOS: `pkill -x AutoCAD` often no-ops (process name is full path); use pgrep PIDs + SIGTERM/SIGKILL. */
 export function killAcadGui(): Promise<void> {
   return new Promise((resolve) => {
-    execFile("pgrep", ["-f", "AutoCAD.*\\.app/Contents/MacOS/AutoCAD"], (err, stdout) => {
+    execFile("pgrep", ["-f", "AutoCAD.*\\.app/Contents/MacOS/AutoCAD"], (_err, stdout) => {
       const pids = String(stdout || "")
         .trim()
         .split(/\s+/)
@@ -263,6 +276,26 @@ export type OpenAcadDocument = {
   instance?: string;
   revision?: number;
 };
+
+/** Resolve one open document, preferring a full-path match over a title match. */
+export function selectOpenDocument<T extends Pick<OpenAcadDocument, "title" | "file" | "active">>(
+  documents: readonly T[],
+  target: unknown,
+): { document: T | null; ambiguous: boolean } {
+  const requested = String(target ?? "").trim();
+  const matches = requested
+    ? (() => {
+        const files = documents.filter((document) => document.file === requested);
+        return files.length
+          ? files
+          : documents.filter((document) => document.title === requested);
+      })()
+    : documents.filter((document) => document.active);
+  return {
+    document: matches.length === 1 ? matches[0] : null,
+    ambiguous: matches.length > 1,
+  };
+}
 
 /** Hỏi plugin danh sách bản vẽ đang mở (ghi docs.req → chờ docs.json mới). Heartbeat plugin. */
 export async function listOpenDocs(timeoutMs = 3000):
@@ -438,11 +471,15 @@ export function wrapJob(jobId: string, lisp: string, resultsDir?: string): strin
   (princ))
 (defun mep:write-result (status msg) (acad:write-result status msg))
 (setq f (open "${run}" "w")) (write-line "running" f) (close f)
+(setq acad:outer-error *error*)
 (setq *error*
-  (lambda (m) (acad:write-result "error" (if m m "loi khong ro")) (princ)))
+  (lambda (m)
+    (setq *error* acad:outer-error)
+    (acad:write-result "error" (if m m "loi khong ro"))
+    (princ)))
 ${lisp}
 (if (null (findfile acad:resfile)) (acad:write-result "ok" "job da chay xong"))
-(setq *error* nil)
+(setq *error* acad:outer-error)
 (princ)
 `;
 }
@@ -572,7 +609,7 @@ export function acadBridgeRouter(): Router {
   });
 
   // Sự kiện realtime từ AutoCAD (plugin ghi events.jsonl qua reactor) — SSE.
-  r.get("/events", (req, res) => {
+  r.get("/events", (_req, res) => {
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
     res.flushHeaders();
@@ -581,18 +618,18 @@ export function acadBridgeRouter(): Router {
     const push = (chunk: string) =>
       chunk.split("\n").filter(Boolean).forEach((l) => res.write(`data: ${l}\n\n`));
     try {
-      const all = readFileSync(file, "utf8");
-      push(all.split("\n").filter(Boolean).slice(-15).join("\n"));   // 15 sự kiện gần nhất
-      pos = Buffer.byteLength(all);
+      const all = readFileSync(file);
+      push(all.toString("utf8").split("\n").filter(Boolean).slice(-15).join("\n"));
+      pos = all.length;
     } catch { /* chưa có file */ }
     const timer = setInterval(() => {
       try {
         const st = statSync(file);
         if (st.size < pos) pos = 0;                                   // plugin truncate
         if (st.size > pos) {
-          const all = readFileSync(file, "utf8");
-          push(all.slice(pos));
-          pos = Buffer.byteLength(all);
+          const all = readFileSync(file);
+          push(utf8FromByteOffset(all, pos));
+          pos = all.length;
         }
       } catch { /* */ }
     }, 500);
@@ -841,9 +878,17 @@ export function acadBridgeRouter(): Router {
     }
 
     const requestedTarget = queryTarget ?? "";
-    const document = requestedTarget
-      ? open.docs.find((doc) => doc.title === requestedTarget || doc.file === requestedTarget)
-      : open.docs.find((doc) => doc.active);
+    const selected = selectOpenDocument(open.docs, requestedTarget);
+    if (selected.ambiguous) {
+      return res.status(409).json({
+        ok: false,
+        status: "target_ambiguous",
+        code: "target_ambiguous",
+        error: "Có nhiều bản vẽ khớp target; hãy chọn bằng full file path",
+        ...drawingInfoRuntime(true, true, open.docs),
+      });
+    }
+    const document = selected.document;
     const exactTarget = document?.file || document?.title || "";
     if (!document || !exactTarget) {
       const status = requestedTarget ? "not_found" : "active_document_not_found";

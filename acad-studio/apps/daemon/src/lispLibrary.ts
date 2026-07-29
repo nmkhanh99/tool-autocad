@@ -27,7 +27,6 @@ import {
   renameSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import {
@@ -45,6 +44,7 @@ import {
   acadRunning as defaultAcadRunning,
   dispatchLiveJob as defaultDispatchLiveJob,
   listOpenDocs as defaultListOpenDocs,
+  selectOpenDocument,
 } from "./acadBridge.js";
 import {
   atomicWriteFile,
@@ -2042,17 +2042,15 @@ export function lispLibraryRouter(deps: RouterDeps = {}): Router {
         });
       }
       const requested = String(req.body?.target ?? "");
-      const matches = requested
-        ? open.docs.filter((doc) => doc.file === requested || doc.title === requested)
-        : [];
-      if (requested && matches.length > 1) {
+      const selected = selectOpenDocument(open.docs, requested);
+      if (selected.ambiguous) {
         return res.status(409).json({
           ok: false,
           code: "ambiguous_target",
           error: "Có nhiều bản vẽ trùng tên; hãy chọn đường dẫn file đầy đủ",
         });
       }
-      const document = requested ? matches[0] : open.docs.find((doc) => doc.active);
+      const document = selected.document;
       const exactTarget = document?.file || document?.title || "";
       if (!document || !exactTarget) {
         return res.status(404).json({
@@ -2263,17 +2261,15 @@ export function lispLibraryRouter(deps: RouterDeps = {}): Router {
         });
       }
       const requested = req.body?.target ? String(req.body.target) : "";
-      const matches = requested
-        ? open.docs.filter((doc) => doc.title === requested || doc.file === requested)
-        : [];
-      if (requested && matches.length > 1) {
+      const selected = selectOpenDocument(open.docs, requested);
+      if (selected.ambiguous) {
         return res.status(409).json({
           ok: false,
           code: "ambiguous_target",
           error: "Có nhiều bản vẽ đang mở trùng tên; hãy chọn target bằng đường dẫn file đầy đủ",
         });
       }
-      const document = requested ? matches[0] : open.docs.find((doc) => doc.active);
+      const document = selected.document;
       const exactTarget = document?.file || document?.title || "";
       if (!document || !exactTarget) {
         return res.status(404).json({

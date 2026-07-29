@@ -114,15 +114,20 @@ assert(noOp.ok === false, "apply without stage fails");
 // ── 3. Live E2E when plugin up ──
 const docs = await bridge.listOpenDocs(3000);
 const running = await bridge.acadRunning();
+const runLiveE2E = process.env.ACAD_RUN_LIVE_E2E === "1";
 console.log("acad running=", running, "alive=", docs.alive, "docs=", docs.docs?.length);
 
-if (!running || !docs.alive || !(docs.docs || []).length) {
-  console.log("skip live E2E — plugin/docs not ready");
-  writeFileSync(join(SCRATCH, "ui-preview-stage.json"), JSON.stringify({ skipped: true, reason: "plugin not live" }, null, 2));
+if (!runLiveE2E || !running || !docs.alive || !(docs.docs || []).length) {
+  const reason = !runLiveE2E
+    ? "set ACAD_RUN_LIVE_E2E=1 to allow live drawing mutation"
+    : "plugin not live";
+  console.log(`skip live E2E — ${reason}`);
+  writeFileSync(join(SCRATCH, "ui-preview-stage.json"), JSON.stringify({ skipped: true, reason }, null, 2));
   writeFileSync(join(SCRATCH, "ui-preview-apply.json"), JSON.stringify({ skipped: true }, null, 2));
   writeFileSync(join(SCRATCH, "ui-preview-reject.json"), JSON.stringify({ skipped: true }, null, 2));
 } else {
-  const target = (docs.docs.find((d) => d.active) || docs.docs[0]).title || "";
+  const document = docs.docs.find((entry) => entry.active) || docs.docs[0];
+  const target = document.file || document.title || "";
   lp.__resetLiveOpsForTests();
 
   // Stage only — committed false

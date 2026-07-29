@@ -1,3 +1,1 @@
 openpyxl>=3.1
-# ezdxf: backend đọc chính (DXF do ODA File Converter xuất). LibreDWG là fallback.
-ezdxf>=1.4

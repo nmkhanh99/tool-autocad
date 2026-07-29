@@ -169,12 +169,18 @@ static void initPaths() {
     const char* home = std::getenv("HOME");
     std::string primary = std::string(home ? home : "/tmp") + "/Acad-Bridge";
     std::string legacy  = std::string(home ? home : "/tmp") + "/MEP-Bridge";
-    // Prefer primary; fall back to legacy dir if only that exists
-    struct stat stHome;
-    if (stat(primary.c_str(), &stHome) != 0 && stat(legacy.c_str(), &stHome) == 0)
-        gBridgeDir = legacy;
-    else
-        gBridgeDir = primary;
+    const char* configured = std::getenv("ACAD_BRIDGE_DIR");
+    if (!configured || !*configured) configured = std::getenv("MEP_BRIDGE_DIR");
+    if (configured && *configured) {
+        gBridgeDir = configured;
+    } else {
+        // Prefer primary; fall back to legacy dir if only that exists.
+        struct stat stHome;
+        if (stat(primary.c_str(), &stHome) != 0 && stat(legacy.c_str(), &stHome) == 0)
+            gBridgeDir = legacy;
+        else
+            gBridgeDir = primary;
+    }
     mkdir(gBridgeDir.c_str(), 0755);
     // Primary live job filename (domain-agnostic). Legacy mep_job.lsp also watched below.
     gJobPath    = gBridgeDir + "/job.lsp";
@@ -242,7 +248,7 @@ static void writeDocs() {
     rename(tmp.c_str(), gDocsPath.c_str());
 }
 
-// ============================ tim ban ve theo ten (title/fileName/suffix) ============================
+// ============================ tim ban ve theo title/fileName chinh xac ============================
 AcApDocument* findDocByName(const std::string& want) {
     if (acDocManager == nullptr) return nullptr;
     AcApDocument* fallback = acDocManager->mdiActiveDocument();
@@ -256,14 +262,17 @@ AcApDocument* findDocByName(const std::string& want) {
             if (!d) continue;
             std::string title = toUtf8(d->docTitle());
             std::string file  = toUtf8(d->fileName());
-            if (title == want || file == want ||
-                (want.size() <= file.size() && file.compare(file.size() - want.size(), want.size(), want) == 0)) {
-                hit = d; break;
+            if (title == want || file == want) {
+                if (hit) {
+                    hit = nullptr;
+                    break;
+                }
+                hit = d;
             }
         }
         delete it;
     }
-    return hit ? hit : fallback;
+    return hit;
 }
 static AcApDocument* findDocExact(const std::string& target);
 static AcApDocument* resolveTarget() {
@@ -350,8 +359,11 @@ static AcApDocument* findDocExact(const std::string& target) {
             AcApDocument* doc = it->document();
             if (!doc) continue;
             if (toUtf8(doc->docTitle()) == target || toUtf8(doc->fileName()) == target) {
+                if (found) {
+                    found = nullptr;
+                    break;
+                }
                 found = doc;
-                break;
             }
         }
         delete it;

@@ -6,8 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-
-type JsonRecord = Record<string, unknown>;
+import { asRecord, type JsonRecord } from "./json";
 
 type AcadDocument = {
   title?: string;
@@ -236,12 +235,6 @@ const MUTATING_ACTIONS = new Set<StandardAction>([
   "sync-layers",
   "resize-frame",
 ]);
-
-function asRecord(value: unknown): JsonRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
-    : null;
-}
 
 function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -580,10 +573,12 @@ function IssueTable({
 function BoundsEditor({
   mapping,
   onChange,
+  onPendingChange,
   onError,
 }: {
   mapping: ObjectMapping;
   onChange: (bounds: JsonRecord | undefined) => void;
+  onPendingChange: (pending: boolean) => void;
   onError: (message: string) => void;
 }) {
   const serialized = mapping.bounds ? JSON.stringify(mapping.bounds, null, 2) : "";
@@ -592,10 +587,14 @@ function BoundsEditor({
   useEffect(() => setText(serialized), [mapping.id, serialized]);
 
   const commit = () => {
-    if (text === serialized) return;
+    if (text === serialized) {
+      onPendingChange(false);
+      return;
+    }
     const trimmed = text.trim();
     if (!trimmed) {
       onChange(undefined);
+      onPendingChange(false);
       return;
     }
     try {
@@ -603,7 +602,9 @@ function BoundsEditor({
       const record = asRecord(parsed);
       if (!record) throw new Error("Bounds phải là một JSON object.");
       onChange(record);
+      onPendingChange(false);
     } catch (error) {
+      onPendingChange(true);
       onError(error instanceof Error ? error.message : String(error));
     }
   };
@@ -614,7 +615,11 @@ function BoundsEditor({
       <textarea
         rows={3}
         value={text}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) => {
+          const nextText = event.target.value;
+          setText(nextText);
+          onPendingChange(nextText !== serialized);
+        }}
         onBlur={commit}
         placeholder='{"minArea": 12, "maxArea": 60}'
       />
@@ -645,9 +650,10 @@ function ListEditor({
       <input
         value={text}
         placeholder={placeholder}
-        onChange={(event) => setText(event.target.value)}
-        onBlur={() => {
-          if (text !== serialized) onChange(commaList(text));
+        onChange={(event) => {
+          const nextText = event.target.value;
+          setText(nextText);
+          onChange(commaList(nextText));
         }}
       />
     </Field>
@@ -672,6 +678,7 @@ export default function DrawingStandardsPanel({
   const [profileId, setProfileId] = useState("");
   const [draft, setDraft] = useState<StandardsProfile | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [pendingBounds, setPendingBounds] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [scanBusy, setScanBusy] = useState(false);
@@ -697,6 +704,7 @@ export default function DrawingStandardsPanel({
   const [actionResult, setActionResult] = useState<unknown>(null);
   const activeDocument = documents.find((document) => document.active);
   const activeDocumentTarget = activeDocument ? targetOf(activeDocument) : "";
+  const hasUnsavedChanges = dirty || pendingBounds.size > 0;
 
   const selectedIssues = useMemo(
     () => new Set(selectedIssueIds),
@@ -771,11 +779,13 @@ export default function DrawingStandardsPanel({
       setProfileId(wanted);
       setDraft(nextProfiles.find((profile) => profile.id === wanted) || null);
       setDirty(false);
+      setPendingBounds(new Set());
     } catch (error) {
       if (signal?.aborted) return;
       setProfiles([]);
       setProfileId("");
       setDraft(null);
+      setPendingBounds(new Set());
       setNotice({
         tone: "error",
         text: error instanceof Error ? error.message : String(error),
@@ -796,6 +806,7 @@ export default function DrawingStandardsPanel({
     setSelection([]);
     setPendingSelectionAction(null);
     setActionResult(null);
+    setPendingBounds(new Set());
     void Promise.all([
       loadDocuments(controller.signal),
       loadProfiles(undefined, controller.signal),
@@ -844,12 +855,12 @@ export default function DrawingStandardsPanel({
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [open, confirmApplyOpen, pendingSelectionAction, dirty, onClose]);
+  }, [open, confirmApplyOpen, pendingSelectionAction, hasUnsavedChanges, onClose]);
 
   if (!open) return null;
 
   function requestClose() {
-    if (dirty && !window.confirm("Mẫu quy chuẩn có thay đổi chưa lưu. Đóng và bỏ thay đổi?")) {
+    if (hasUnsavedChanges && !window.confirm("Mẫu quy chuẩn có thay đổi chưa lưu. Đóng và bỏ thay đổi?")) {
       return;
     }
     onClose();
@@ -857,11 +868,12 @@ export default function DrawingStandardsPanel({
 
   function changeProfile(nextId: string) {
     if (nextId === profileId) return;
-    if (dirty && !window.confirm("Bỏ các thay đổi chưa lưu của mẫu hiện tại?")) return;
+    if (hasUnsavedChanges && !window.confirm("Bỏ các thay đổi chưa lưu của mẫu hiện tại?")) return;
     const profile = profiles.find((item) => item.id === nextId) || null;
     setProfileId(nextId);
     setDraft(profile);
     setDirty(false);
+    setPendingBounds(new Set());
     setScan(null);
     setSelectedIssueIds([]);
     setDimBaseHandle("");
@@ -872,6 +884,16 @@ export default function DrawingStandardsPanel({
   function updateDraft(updater: (profile: StandardsProfile) => StandardsProfile) {
     setDraft((current) => current ? updater(current) : current);
     setDirty(true);
+  }
+
+  function updatePendingBounds(mappingId: string, pending: boolean) {
+    setPendingBounds((current) => {
+      if (current.has(mappingId) === pending) return current;
+      const next = new Set(current);
+      if (pending) next.add(mappingId);
+      else next.delete(mappingId);
+      return next;
+    });
   }
 
   function updateDrawing<K extends keyof DrawingStandard>(
@@ -941,6 +963,8 @@ export default function DrawingStandardsPanel({
   }
 
   function removeMapping(index: number) {
+    const mappingId = draft?.mappings[index]?.id;
+    if (mappingId) updatePendingBounds(mappingId, false);
     updateDraft((profile) => ({
       ...profile,
       mappings: profile.mappings.filter((_, row) => row !== index),
@@ -967,7 +991,7 @@ export default function DrawingStandardsPanel({
   }
 
   async function saveProfile() {
-    if (!draft?.id) return;
+    if (!draft?.id || pendingBounds.size > 0) return;
     setProfileBusy(true);
     setNotice(null);
     try {
@@ -1022,7 +1046,7 @@ export default function DrawingStandardsPanel({
   }
 
   async function runScan() {
-    if (!target || !profileId || dirty) return;
+    if (!target || !profileId || hasUnsavedChanges) return;
     setScanBusy(true);
     setNotice(null);
     setActionResult(null);
@@ -1560,7 +1584,7 @@ export default function DrawingStandardsPanel({
           </div>
           <div className="standards-head-actions">
             <button type="button" onClick={() => {
-              if (dirty && !window.confirm("Nạp lại và bỏ các thay đổi chưa lưu?")) return;
+              if (hasUnsavedChanges && !window.confirm("Nạp lại và bỏ các thay đổi chưa lưu?")) return;
               setLoading(true);
               void Promise.all([loadDocuments(), loadProfiles(profileId)])
                 .finally(() => setLoading(false));
@@ -1614,20 +1638,20 @@ export default function DrawingStandardsPanel({
             {docsAlive === false && onOpenAutoCAD && (
               <button type="button" onClick={onOpenAutoCAD}>Mở AutoCAD</button>
             )}
-            <button type="button" onClick={duplicateProfile} disabled={profileBusy || dirty}>
+            <button type="button" onClick={duplicateProfile} disabled={profileBusy || hasUnsavedChanges}>
               ＋ {draft ? "Nhân bản" : "Tạo mẫu"}
             </button>
             <button type="button" onClick={saveProfile}
-              disabled={!draft?.id || !dirty || profileBusy}
-              className={dirty ? "changed" : ""}>
+              disabled={!draft?.id || !dirty || profileBusy || pendingBounds.size > 0}
+              className={hasUnsavedChanges ? "changed" : ""}>
               {profileBusy ? "Đang lưu…" : "Lưu mẫu"}
             </button>
             <button type="button" className="primary" onClick={runScan}
-              disabled={!target || !profileId || dirty || scanBusy}>
+              disabled={!target || !profileId || hasUnsavedChanges || scanBusy}>
               {scanBusy ? "Đang quét…" : "Quét bản vẽ"}
             </button>
           </div>
-          {dirty && (
+          {hasUnsavedChanges && (
             <div className="standards-dirty-hint">
               Lưu mẫu trước khi quét.
             </div>
@@ -1644,7 +1668,7 @@ export default function DrawingStandardsPanel({
         {scanStale && scan && (
           <div className="standards-stale">
             Kết quả quét đã cũ vì bản vẽ vừa thay đổi.
-            <button type="button" onClick={runScan} disabled={scanBusy || dirty}>
+            <button type="button" onClick={runScan} disabled={scanBusy || hasUnsavedChanges}>
               Quét lại
             </button>
           </div>
@@ -1777,7 +1801,7 @@ export default function DrawingStandardsPanel({
                   </div>
                   <div className="standards-inline-actions">
                     <button type="button" className="primary"
-                      disabled={!!actionBusy || dirty}
+                      disabled={!!actionBusy || hasUnsavedChanges}
                       onClick={() => runAction(
                         "resize-frame",
                         {
@@ -1832,7 +1856,7 @@ export default function DrawingStandardsPanel({
                   </div>
                   <div className="standards-inline-actions">
                     <button type="button" className="primary"
-                      disabled={!!actionBusy || dirty}
+                      disabled={!!actionBusy || hasUnsavedChanges}
                       onClick={() => runAction(
                         "apply-units",
                         { ...draft.drawing },
@@ -1999,6 +2023,8 @@ export default function DrawingStandardsPanel({
                               onChange={(entityTypes) =>
                                 updateMapping(index, { entityTypes })} />
                             <BoundsEditor mapping={mapping}
+                              onPendingChange={(pending) =>
+                                updatePendingBounds(mapping.id, pending)}
                               onChange={(bounds) => updateMapping(index, { bounds })}
                               onError={(text) => setNotice({ tone: "error", text })} />
                           </div>
@@ -2189,7 +2215,7 @@ export default function DrawingStandardsPanel({
                   </div>
                   <div className="standards-inline-actions">
                     <button type="button" className="primary"
-                      disabled={!!actionBusy || dirty}
+                      disabled={!!actionBusy || hasUnsavedChanges}
                       onClick={() => runAction(
                         "apply-dimstyle",
                         { ...draft.dimension },
@@ -2297,7 +2323,7 @@ export default function DrawingStandardsPanel({
                   )}
                   <div className="standards-inline-actions">
                     <button type="button" className="primary"
-                      disabled={!!actionBusy || dirty || !draft.layers.length}
+                      disabled={!!actionBusy || hasUnsavedChanges || !draft.layers.length}
                       onClick={() => runAction(
                         "sync-layers",
                         { layers: draft.layers },

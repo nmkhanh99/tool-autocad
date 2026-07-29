@@ -21,11 +21,10 @@ import sys
 from pathlib import Path
 
 from acadtool.bom import fittings_bom, pipe_bom
-from acadtool.dwgjson import DwgReadError
 from acadtool.excel import write_bom, write_layer_map
 from acadtool.layers import build_layer_map, summary as layer_summary
 from acadtool.lispgen import write_titlefix_lisp
-from acadtool.model import read_drawing
+from acadtool.model import DrawingReadError, read_drawing
 from acadtool.titleblock import audit_titleblock
 
 
@@ -48,8 +47,11 @@ def _read_all(files: list[Path]):
         try:
             d = read_drawing(f)
             drawings.append(d)
-            print(f"  ✓ {f.name}  (layers={len(d.layers)} blocks={len(d.inserts)})")
-        except DwgReadError as e:
+            print(
+                f"  ✓ {f.name}  (layers={len(d.layers)} blocks={len(d.inserts)})",
+                file=sys.stderr,
+            )
+        except DrawingReadError as e:
             print(f"  ✗ {f.name}: {e}", file=sys.stderr)
     return drawings
 
@@ -288,5 +290,3 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

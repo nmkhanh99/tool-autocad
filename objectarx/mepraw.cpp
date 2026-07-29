@@ -57,7 +57,6 @@ class AcApStatusBar;
 #include <AcPlPlotEngine.h>
 #include <acgi.h>
 #include <dbproxy.h>
-#include <accmd.h>
 #include <AcCmColor.h>
 #include <geassign.h>
 #include <gelnsg3d.h>
@@ -339,7 +338,6 @@ static bool h_symbol_tables(AcDbDatabase* db, const std::map<std::string, std::s
         t->close();
     } else {
         // probe getSymbolTable for the requested family by name list
-        const char* all[] = {"block","layer","ltype","style","dimstyle","appid","ucs","view","vport"};
         payload = "{\"tables\":[\"block\",\"layer\",\"ltype\",\"style\",\"dimstyle\",\"appid\",\"ucs\",\"view\",\"vport\"],\"probed\":true}";
         return true;
     }
@@ -777,15 +775,11 @@ static bool h_send_string(AcApDocument* pDoc, std::string& payload, std::string&
     return true;
 }
 
-static void rawCmdCtxProc(void* pData) {
-    // Minimal work inside command context — set a flag.
-    if (pData) *static_cast<int*>(pData) = 1;
-}
+static void rawCmdCtxProc(void*) {}
 
 static bool h_execute_context(std::string& payload, std::string& err) {
     if (!acDocManager) { err = "no acDocManager"; return false; }
-    int flag = 0;
-    Acad::ErrorStatus es = acDocManager->beginExecuteInCommandContext(&rawCmdCtxProc, &flag);
+    Acad::ErrorStatus es = acDocManager->beginExecuteInCommandContext(&rawCmdCtxProc, nullptr);
     if (es != Acad::eOk) {
         err = "beginExecuteInCommandContext es=" + std::to_string((int)es);
         return false;
@@ -1079,14 +1073,6 @@ static bool h_side_database(std::string& payload, std::string& err) {
     // build default drawing already from ctor
     delete sdb;
     payload = "{\"sideDatabase\":true,\"buildDefaultDrawing\":true}";
-    return true;
-}
-
-static bool h_purge(AcDbDatabase* db, std::string& payload, std::string& err) {
-    AcDbObjectIdArray ids;
-    // empty purge is valid probe
-    Acad::ErrorStatus es = db->purge(ids);
-    payload = "{\"purge\":true,\"es\":" + std::to_string((int)es) + ",\"remaining\":" + std::to_string(ids.length()) + "}";
     return true;
 }
 
@@ -1554,7 +1540,17 @@ static void execRawJob(const std::string& raw) {
         writeRawResult(true, id,
                        "{\"status\":\"awaiting_user\",\"command\":\"MEPRAW\"}",
                        "", true, false);
-        acDocManager->sendStringToExecute(pDoc, L"MEPRAW ", true, false, false);
+        const Acad::ErrorStatus scheduleStatus =
+            acDocManager->sendStringToExecute(pDoc, L"MEPRAW ", true, false, false);
+        if (scheduleStatus != Acad::eOk) {
+            gPendingInteractiveId.clear();
+            gPendingParams.clear();
+            writeRawResult(
+                false, id, "{}",
+                "cannot schedule interactive command (" +
+                    std::to_string(static_cast<int>(scheduleStatus)) + ")",
+                true, false);
+        }
         return;
     }
 

@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { asRecord, type JsonRecord } from "./json";
 
-type JsonRecord = Record<string, unknown>;
 type DocumentInfo = JsonRecord & {
   title?: string;
   file?: string;
@@ -143,12 +143,6 @@ const TABLE_COLUMNS: Record<string, string[]> = {
   selection: ["type", "layer", "handle", "name"],
   variables: ["name", "value", "type"],
 };
-
-function asRecord(value: unknown): JsonRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
-    : null;
-}
 
 function humanize(key: string): string {
   if (FIELD_LABELS[key]) return FIELD_LABELS[key];

@@ -7,6 +7,7 @@ process.env.ACAD_PROJECT_ROOT = resolve(here, "../../../..");
 
 const {
   buildStandardsAction,
+  drawingRevision,
   drawingStandardsRouter,
 } = await import("../src/drawingStandards.ts");
 const { DEFAULT_PROFILE } = await import("../src/standardsProfile.ts");
@@ -84,6 +85,35 @@ assert.throws(
 assert.throws(
   () => buildStandardsAction("color", ["A1"], { color: "RGB(1,2,3)" }, "Drawing1.dwg"),
   /ACI/,
+);
+
+const firstRevision = drawingRevision({
+  document: { instance: "doc-1", revision: 7, dbmod: 0 },
+});
+assert.equal(
+  firstRevision,
+  drawingRevision({ document: { instance: "doc-1", revision: 7, dbmod: 9 } }),
+);
+assert.notEqual(
+  firstRevision,
+  drawingRevision({ document: { instance: "doc-1", revision: 8, dbmod: 0 } }),
+);
+assert.notEqual(
+  firstRevision,
+  drawingRevision({ document: { instance: "doc-2", revision: 7, dbmod: 0 } }),
+);
+assert.equal(drawingRevision({ document: { dbmod: 4 } }), "dbmod:4");
+assert.equal(
+  drawingRevision({ document: { instance: "doc-1", dbmod: 4 } }),
+  "dbmod:4",
+);
+assert.equal(
+  drawingRevision({ document: { revision: 7, dbmod: 4 } }),
+  "dbmod:4",
+);
+assert.notEqual(
+  drawingRevision({ document: { dbmod: 4 } }),
+  drawingRevision({ document: { dbmod: 5 } }),
 );
 
 const router = drawingStandardsRouter();

@@ -221,6 +221,47 @@ assert(mepbridge.includes("AcadBridge") || mepbridge.includes("ACADARX"), "plugi
 assert(mepbridge.includes("/job.lsp") || mepbridge.includes("job.lsp"), "plugin watches job.lsp");
 assert(buildSh.includes("mepraw.cpp"), "build.sh compiles mepraw.cpp");
 assert(buildSh.includes("selection_control.cpp"), "build.sh compiles selection control");
+
+const findDocByNameBlock = mepbridge.slice(
+  mepbridge.indexOf("AcApDocument* findDocByName"),
+  mepbridge.indexOf("static AcApDocument* findDocExact"),
+);
+assert(
+  findDocByNameBlock.includes("if (want.empty()) return fallback"),
+  "empty document target uses active fallback",
+);
+assert(findDocByNameBlock.includes("return hit;"), "non-empty missing document target fails closed");
+assert(
+  !findDocByNameBlock.includes("hit ? hit : fallback"),
+  "named document lookup never falls back to active drawing",
+);
+assert(
+  !findDocByNameBlock.includes("file.compare") && findDocByNameBlock.includes("if (hit)"),
+  "named document lookup rejects suffix and ambiguous matches",
+);
+
+assert(
+  /beginExecuteInCommandContext\(&rawCmdCtxProc,\s*nullptr\)/.test(mepraw),
+  "async command-context callback receives no stack pointer",
+);
+assert(
+  !mepraw.includes("beginExecuteInCommandContext(&rawCmdCtxProc, &flag)"),
+  "command-context callback has no stack UAF",
+);
+
+const genericInteractiveStart = mepraw.indexOf("if (isInteractiveId(id))");
+const genericInteractiveEnd = mepraw.indexOf("\n    if (!acDocManager)", genericInteractiveStart);
+const genericInteractiveBlock = mepraw.slice(genericInteractiveStart, genericInteractiveEnd);
+assert(
+  genericInteractiveBlock.includes('sendStringToExecute(pDoc, L"MEPRAW "') &&
+    genericInteractiveBlock.includes("if (scheduleStatus != Acad::eOk)"),
+  "generic interactive command checks scheduling status",
+);
+assert(
+  genericInteractiveBlock.includes("gPendingInteractiveId.clear()") &&
+    genericInteractiveBlock.includes("gPendingParams.clear()"),
+  "generic interactive scheduling failure clears pending state",
+);
 assert(
   mepraw.includes("ACRX_CMD_USEPICKSET | ACRX_CMD_REDRAW"),
   "ACADSELECT retains Pickfirst after the command ends",

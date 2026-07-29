@@ -1,7 +1,7 @@
 """Khung tên: đọc trường ATTRIB, sinh mã KHBV từ tên file, soát lỗi.
 
-WRITE-back (điền hàng loạt vào .dwg) cần backend ODA — sẽ bổ sung sau.
-Hiện tại module này lo phần ĐỌC + KIỂM TRA, đủ để audit cả bộ bản vẽ.
+WRITE-back được sinh thành AutoLISP và thực thi trong AutoCAD.
+Module này lo phần ĐỌC + KIỂM TRA, đủ để audit cả bộ bản vẽ.
 """
 from __future__ import annotations
 

@@ -148,6 +148,40 @@ for (const fn of ["dl:preview-apply", "dl:preview-reject", "dl:layer"]) {
 ok(/entmod/.test(codeOf("dl:preview-apply")), "dl:preview-apply đổi layer bằng entmod");
 ok(/entdel/.test(codeOf("dl:preview-reject")), "dl:preview-reject xoá bằng entdel");
 
+console.log("\n── router guards ──");
+const routerSrc = readFileSync(resolve(HERE, "../src/drawRouter.ts"), "utf8");
+const targetStart = routerSrc.indexOf("else if (req.body?.target)");
+const targetEnd = routerSrc.indexOf("if (t.kind === \"file\"", targetStart);
+const targetSource = routerSrc.slice(targetStart, targetEnd);
+ok(
+  targetSource.includes("if (selected.ambiguous)") &&
+    targetSource.includes("if (!hit)") &&
+    targetSource.includes("return res.status(400)"),
+  "explicit target không tồn tại trả lỗi thay vì fallback",
+);
+const rejectRouteStart = routerSrc.indexOf('r.post("/draw/reject"');
+const rejectRouteEnd = routerSrc.indexOf('r.get("/draw/verify"', rejectRouteStart);
+const rejectRoute = routerSrc.slice(rejectRouteStart, rejectRouteEnd);
+const rejectStateGuard = rejectRoute.indexOf('op.state !== "staged"');
+const rejectResultGuard = rejectRoute.indexOf("if (!out.ok)");
+const rejectTransition = rejectRoute.indexOf('op.state = "rejected"');
+ok(rejectStateGuard >= 0, "reject chỉ nhận op đang staged");
+ok(
+  rejectResultGuard >= 0 && rejectResultGuard < rejectTransition,
+  "reject chỉ đổi state sau khi CAD trả thành công",
+);
+const discardStart = routerSrc.indexOf("async function discardStagedOps");
+const targetRouteStart = routerSrc.indexOf('r.post("/draw/target"');
+const targetRouteEnd = routerSrc.indexOf('r.post("/draw/new"', targetRouteStart);
+const targetRoute = routerSrc.slice(targetRouteStart, targetRouteEnd);
+const discardCall = targetRoute.indexOf("await discardStagedOps()");
+const setTargetCall = targetRoute.indexOf("setDrawTarget(nextTarget)");
+ok(discardStart >= 0, "đổi đích có helper dọn preview staged");
+ok(
+  discardCall >= 0 && setTargetCall > discardCall,
+  "đổi đích chỉ diễn ra sau khi dọn preview cũ thành công",
+);
+
 console.log("\n── scenario JSON ──");
 const sc = drawScenarioJson();
 ok(sc.steps.length === steps.length, `scenario có ${sc.steps.length} bước`);

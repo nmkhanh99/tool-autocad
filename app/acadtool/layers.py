@@ -2,7 +2,7 @@
 
 ĐÂY LÀ ĐỀ XUẤT (rút từ bản vẽ mẫu) — cần bạn xác nhận/khớp chuẩn công ty.
 Sửa bảng _MAP bên dưới để đổi tên layer chuẩn. Phần ÁP đổi tên vào .dwg cần
-backend ODA (xem titleblock write-back).
+kênh ghi trong AutoCAD.
 """
 from __future__ import annotations
 

@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { asRecord, type JsonRecord } from "./json";
 
-type JsonRecord = Record<string, unknown>;
 type BlockType = "static" | "dynamic";
 type BlockSpace = "model" | "layout";
 type SyncStatus = "local_only" | "cad_only" | "synced" | "outdated" | "conflict";
@@ -62,12 +62,6 @@ export type BlockLibraryPanelProps = {
 };
 
 const TECHNICAL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-
-function asRecord(value: unknown): JsonRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
-    : null;
-}
 
 function textValue(value: unknown): string {
   return typeof value === "string" ? value : value == null ? "" : String(value);

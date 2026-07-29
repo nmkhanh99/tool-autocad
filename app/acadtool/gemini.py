@@ -7,16 +7,15 @@ from __future__ import annotations
 
 import json
 import os
-import sys
+import re
+import shutil
+import subprocess
 import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .model import Drawing
-
-import shutil
-import subprocess
 
 DEFAULT_MODEL = "gemini-2.5-flash"
 
@@ -53,20 +52,19 @@ def call_gemini(
     key = get_api_key(api_key)
     agy_path = find_agy_bin()
 
-    # Ưu tiên sử dụng agy CLI khi không có API key hoặc khi tìm thấy agy CLI trên máy
+    # Dùng agy CLI khi không có API key; key được truyền rõ ràng sẽ chọn REST API.
     if agy_path and not key:
-        cmd = [agy_path, "--dangerously-skip-permissions", "-p", full_prompt]
+        cmd = [agy_path, "--mode", "plan", "--sandbox", "-p", full_prompt]
         if model:
             cmd.extend(["--model", model])
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            if res.returncode == 0 and res.stdout.strip():
-                return res.stdout.strip()
-            elif res.stderr.strip():
-                raise RuntimeError(f"Lỗi agy CLI: {res.stderr.strip()}")
-        except Exception as e:
-            if not key:
-                raise RuntimeError(f"Lỗi khi thực thi agy CLI: {e}") from e
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise RuntimeError(f"Lỗi khi thực thi agy CLI: {e}") from e
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+        detail = res.stderr.strip() or res.stdout.strip() or f"exit code {res.returncode}"
+        raise RuntimeError(f"Lỗi agy CLI: {detail}")
 
     # Fallback dùng Direct REST API nếu người dùng cung cấp API Key
     if not key and not agy_path:
@@ -108,10 +106,12 @@ def call_gemini(
             resp_data = json.loads(resp.read().decode("utf-8"))
             candidates = resp_data.get("candidates", [])
             if not candidates:
-                return "Gemini không phản hồi (không có candidates trong kết quả)."
+                raise RuntimeError("Gemini không phản hồi (không có candidates trong kết quả)")
             parts = candidates[0].get("content", {}).get("parts", [])
-            text_result = "".join(p.get("text", "") for p in parts)
-            return text_result.strip()
+            text_result = "".join(p.get("text", "") for p in parts).strip()
+            if not text_result:
+                raise RuntimeError("Gemini không phản hồi nội dung")
+            return text_result
     except urllib.error.HTTPError as e:
         err_msg = e.read().decode("utf-8", errors="ignore")
         try:
@@ -229,7 +229,30 @@ def generate_lisp(
         "Bạn là chuyên gia lập trình AutoLISP / Visual LISP cho AutoCAD. "
         "Hãy viết mã AutoLISP hoàn chỉnh, sạch mẽ, có comment giải thích bằng tiếng Việt, "
         "sử dụng đúng syntax AutoCAD AutoLISP (định nghĩa lệnh dạng `defun c:TÊN_LỆNH () ...`). "
-        "Chỉ trả về mã LISP nằm trong markdown block ```lisp ... ```."
+        "Chỉ trả về mã AutoLISP thuần, không dùng Markdown hay dấu code fence."
     )
     user_prompt = f"Yêu cầu viết AutoLISP script: {prompt}"
-    return call_gemini(user_prompt, system_instruction=system_inst, api_key=api_key, model=model)
+    response = call_gemini(
+        user_prompt,
+        system_instruction=system_inst,
+        api_key=api_key,
+        model=model,
+    )
+    return normalize_lisp_response(response)
+
+
+def normalize_lisp_response(response: str) -> str:
+    """Strip a Markdown fence if a model ignores the raw-code instruction."""
+    text = response.strip()
+    fenced_blocks = re.findall(
+        r"```(?:(?:auto)?lisp)?[ \t]*\r?\n(.*?)```",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if len(fenced_blocks) > 1:
+        raise ValueError("Gemini trả về nhiều khối mã; không thể chọn script an toàn")
+    if fenced_blocks:
+        text = fenced_blocks[0].strip()
+    elif "```" in text:
+        raise ValueError("Gemini trả về code fence không phải AutoLISP")
+    return text + ("\n" if text else "")

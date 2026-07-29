@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Render CSV hình học phẳng (từ walk.lsp) ra PNG để MẮT NGƯỜI xem được."""
-import csv, math, os, re, sys, collections
+import csv, math, os, re, sys
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt

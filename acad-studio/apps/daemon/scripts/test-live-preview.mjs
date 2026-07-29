@@ -15,6 +15,7 @@ mkdirSync(SCRATCH, { recursive: true });
 
 const lp = await import("../src/livePreview.ts");
 const bridge = await import("../src/acadBridge.ts");
+const contract = await import("../src/bridgeContract.ts");
 
 let failed = 0;
 function assert(cond, msg) {
@@ -69,6 +70,43 @@ assert(noApply.ok === false, "apply missing op fails");
 const noRej = await lp.rejectLivePreview("missing");
 assert(noRej.ok === false, "reject missing op fails");
 
+// A failed LISP reject must leave the op staged and block the next stage.
+lp.__seedLiveOpForTests({
+  opId: "failed-lisp-reject",
+  recipe: "planblocks",
+  target: "Drawing1.dwg",
+  state: "staged",
+  params: {
+    channel: "lisp",
+    previewLayer: "MEP-PREVIEW-failed-lisp-reject",
+    destLayer: "0",
+  },
+  count: 1,
+  handles: [],
+  createdAt: Date.now(),
+});
+lp.__setLispPlanJobRunnerForTests(async () => ({
+  ok: false,
+  error: "simulated reject failure",
+}));
+const failedReject = await lp.rejectLivePreview("failed-lisp-reject");
+assert(failedReject.ok === false, "failed LISP reject returns failure");
+assert(
+  lp.getLiveOp("failed-lisp-reject")?.state === "staged",
+  "failed LISP reject keeps op staged",
+);
+const blockedStage = await lp.stageLivePreview({
+  pipes: [{ system: "thoatxi", dn: 90, points: [[0, 0], [100, 0]] }],
+  target: "Drawing1.dwg",
+});
+assert(blockedStage.ok === false, "new stage aborts when prior reject fails");
+assert(
+  !blockedStage.ok && blockedStage.error.includes("Không thể dọn preview trước đó"),
+  "prior reject failure is reported",
+);
+lp.__setLispPlanJobRunnerForTests();
+lp.__resetLiveOpsForTests();
+
 // ── UI static ──
 const page = readFileSync(join(__dirname, "../../web/app/page.tsx"), "utf8");
 const fns = readFileSync(join(__dirname, "../../web/app/functions.ts"), "utf8");
@@ -100,18 +138,23 @@ assert(mep.includes("TOKEN"), "plugin echoes TOKEN in job/done");
 // ── Live path when AutoCAD + plugin up ──
 const docs = await bridge.listOpenDocs(3000);
 const running = await bridge.acadRunning();
+const runLiveE2E = process.env.ACAD_RUN_LIVE_E2E === "1";
 console.log("acad running=", running, "plugin alive=", docs.alive, "docs=", docs.docs?.length);
 
-if (!running || !docs.alive) {
-  console.log("skip live AutoCAD E2E — plugin not live");
+if (!runLiveE2E || !running || !docs.alive) {
+  const reason = !runLiveE2E
+    ? "set ACAD_RUN_LIVE_E2E=1 to allow live drawing mutation"
+    : "plugin not live";
+  console.log(`skip live AutoCAD E2E — ${reason}`);
   writeFileSync(
     join(SCRATCH, "live-preview-preview.json"),
-    JSON.stringify({ skipped: true, reason: "plugin not live", running, alive: docs.alive }, null, 2),
+    JSON.stringify({ skipped: true, reason, running, alive: docs.alive }, null, 2),
   );
   writeFileSync(join(SCRATCH, "live-preview-apply.json"), JSON.stringify({ skipped: true }, null, 2));
   writeFileSync(join(SCRATCH, "live-preview-reject.json"), JSON.stringify({ skipped: true }, null, 2));
 } else {
-  const target = (docs.docs.find((d) => d.active) || docs.docs[0] || {}).title || "";
+  const document = docs.docs.find((entry) => entry.active) || docs.docs[0] || {};
+  const target = document.file || document.title || "";
   lp.__resetLiveOpsForTests();
 
   // PREVIEW
@@ -156,7 +199,7 @@ if (!running || !docs.alive) {
         assert(app.count >= stage2.count, "apply count >= staged count");
         assert(lp.getLiveOp(stage2.opId)?.state === "applied", "registry applied");
         // Plugin events: last nativeApply for this op must report count>=1
-        const evPath = join(process.env.HOME || "", "MEP-Bridge/events.jsonl");
+        const evPath = join(contract.resolveBridgeDir(), "events.jsonl");
         if (existsSync(evPath)) {
           const lines = readFileSync(evPath, "utf8").trim().split("\n").slice(-40);
           const hit = lines
@@ -171,8 +214,10 @@ if (!running || !docs.alive) {
             .filter((e) => e.type === "nativeApply" && String(e.detail || "").includes(stage2.opId));
           assert(hit.length >= 1, "events.jsonl has nativeApply for op");
           const last = hit[hit.length - 1];
-          const n = Number(String(last.detail).split(" ")[0]);
-          assert(n >= 1, `nativeApply event count>=1 (got ${last.detail})`);
+          if (last) {
+            const n = Number(String(last.detail).split(" ")[0]);
+            assert(n >= 1, `nativeApply event count>=1 (got ${last.detail})`);
+          }
         }
         const twice = await lp.applyLivePreview(stage2.opId);
         assert(twice.ok === false, "second apply fails");

@@ -2,8 +2,7 @@
  * Daemon-side raw ObjectARX invoke: write raw.job → wait raw.done.
  * Uses the same pure builder as unit tests (real shipped path).
  */
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import {
   buildRawJob,
   defaultParamsFor,

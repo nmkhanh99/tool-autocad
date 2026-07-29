@@ -155,6 +155,7 @@ export function opLisp(recipe: string, params: any): string | null {
       return "(mep:number-pipes)";
     case "stdlayers":
       return "(mep:std-layers)";
+    case "titlefix":
     case "titleform": {
       const kv = Object.entries(params || {})
         .map(([k, v]) => `(cons "${String(k).toUpperCase()}" "${esc(String(v))}")`)
@@ -353,7 +354,6 @@ export function applyOp(sessionId: string, opId: string): ApplyResult {
   const backup = join(s.dir, "backups", `current-${Date.now()}-${opId}.dwg`);
   copyFileSync(current, backup);
   // Atomic promote: replace current with staged
-  rmSync(current, { force: true });
   renameSync(staged, current);
   if (existsSync(stagedSnap)) {
     const curSnap = join(s.dir, "snapshots", "current.json");

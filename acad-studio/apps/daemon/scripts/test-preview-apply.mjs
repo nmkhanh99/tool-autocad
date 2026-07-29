@@ -56,6 +56,8 @@ assert(d.modified[0].h === "A1", "diff modified handle A1");
 
 // ── 2. recipeBody / opLisp ──
 assert(session.opLisp("stdlayers", {})?.includes("mep:std-layers"), "opLisp stdlayers");
+assert(session.opLisp("titlefix", { KHBV: "A-01" })?.includes("mep:set-title"), "opLisp titlefix");
+assert(session.opLisp("titleform", { KHBV: "A-01" })?.includes("mep:set-title"), "opLisp titleform alias");
 assert(session.opLisp("drawpipes", { pipes: [] }) === null, "opLisp empty pipes null");
 const pipes = [{ system: "thoatxi", dn: 90, points: [[0, 0], [1000, 0], [1000, 500]] }];
 const op = session.opLisp("drawpipes", { pipes });
@@ -210,6 +212,11 @@ const sessSrc = readFileSync(join(__dirname, "../src/session.ts"), "utf8");
 assert(sessSrc.includes("work-"), "session uses work- copy for preview");
 assert(sessSrc.includes("fileFingerprint"), "session fingerprints for immutability");
 assert(sessSrc.includes('o.state === "staged"'), "apply/reject gate on staged");
+const promoteStart = sessSrc.indexOf("export function applyOp");
+const promoteEnd = sessSrc.indexOf("export type RejectResult", promoteStart);
+const promoteSource = sessSrc.slice(promoteStart, promoteEnd);
+assert(promoteSource.includes("renameSync(staged, current)"), "apply promotes staged with rename");
+assert(!promoteSource.includes("rmSync(current"), "apply does not unlink current before atomic rename");
 
 console.log("\n---");
 if (failed) {

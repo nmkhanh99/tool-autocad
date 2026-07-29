@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-
-type JsonRecord = Record<string, unknown>;
+import { asRecord, type JsonRecord } from "./json";
 
 export type LispReviewStatus = "unreviewed" | "approved" | "stale";
 
@@ -91,12 +90,6 @@ type AcadDocument = {
 
 type Tab = "overview" | "source" | "manifest";
 type Notice = { tone: "ok" | "error" | "info"; text: string };
-
-function asRecord(value: unknown): JsonRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
-    : null;
-}
 
 function textValue(value: unknown): string {
   if (typeof value === "string") return value;

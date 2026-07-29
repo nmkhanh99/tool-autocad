@@ -304,7 +304,10 @@ export default function Page() {
     }
     try {
       const { docs, alive } = await loadDocs();
-      const target = alive && docs.length ? (docs.find((d: any) => d.active) || docs[0]).title : undefined;
+      const document = alive && docs.length
+        ? docs.find((entry: any) => entry.active) || docs[0]
+        : undefined;
+      const target = document ? document.file || document.title : undefined;
       const r = await (await fetch(`${DAEMON}/api/acad/raw/invoke`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -384,7 +387,7 @@ export default function Page() {
       setDocList(null); setDocsAlive(null);
       loadDocs().then(({ docs }) => {
         const act = docs.find((d: any) => d.active);
-        if (act) setFormVals((v) => ({ ...v, __target: act.title }));
+        if (act) setFormVals((v) => ({ ...v, __target: act.file || act.title }));
       });
     }
     setFormVals(init);
@@ -743,7 +746,8 @@ export default function Page() {
     setMessages((p) => [...p, { role: "function", text: "📋 Chèn bảng BOQ vào bản vẽ", fn: byId("livedraw") }]);
     const { alive, docs } = await loadDocs();
     if (!alive) return patchLast((m) => { m.error = "Plugin không phản hồi — khởi động lại AutoCAD."; });
-    const target = (docs.find((d: any) => d.active) || docs[0] || {}).title || "";
+    const document = docs.find((entry: any) => entry.active) || docs[0] || {};
+    const target = document.file || document.title || "";
     try {
       const r = await (await fetch(`${DAEMON}/api/acad/bomtable`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target, x: 0, y: 0 }),
@@ -807,7 +811,8 @@ export default function Page() {
     const { alive, docs } = await loadDocs();
     if (!alive) return patchLast((m) => { m.error = "Plugin AcadBridge không phản hồi — khởi động lại AutoCAD (plugin tự nạp) rồi thử lại."; });
     if (!docs.length) return patchLast((m) => { m.error = "AutoCAD chưa mở bản vẽ nào — mở 1 bản vẽ rồi thử lại."; });
-    const tgt = target || (docs.find((d: any) => d.active) || docs[0]).title;
+    const document = docs.find((entry: any) => entry.active) || docs[0];
+    const tgt = target || document.file || document.title;
     try {
       const [url, payload] = fn.native
         ? [`${DAEMON}/api/acad/native`, { target: tgt, pipes: params.pipes }]
@@ -848,7 +853,8 @@ export default function Page() {
         Array.isArray(params?.pipes) &&
         params.pipes.length > 0;
       if (canLive) {
-        const target = (docs.find((d: any) => d.active) || docs[0]).title;
+        const document = docs.find((entry: any) => entry.active) || docs[0];
+        const target = document.file || document.title;
         const lv = await (await fetch(`${DAEMON}/api/acad/livepreview`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ recipe: fn.endpoint, params, target }),
@@ -1598,7 +1604,9 @@ export default function Page() {
                 {docsAlive && docList && docList.length > 0 && (
                   <select value={formVals.__target || ""} onChange={(e) => setFormVals({ ...formVals, __target: e.target.value })}>
                     {docList.map((d) => (
-                      <option key={d.title} value={d.title}>{d.title}{d.active ? "  (đang active)" : ""}</option>
+                      <option key={d.file || d.title} value={d.file || d.title}>
+                        {d.title}{d.active ? "  (đang active)" : ""}
+                      </option>
                     ))}
                   </select>
                 )}
@@ -1964,6 +1972,7 @@ function FunctionResult({ m, onHighlight, onOpenAcad }: {
   m: Msg; onHighlight?: (layer: string) => void; onOpenAcad?: () => void;
 }) {
   const r = m.fnResult; const fn = m.fn!;
+  const results = Array.isArray(r?.results) ? r.results : null;
   const canHi = !!r?.selRows && r.selRows[0]?.[0] === "Layer";   // chỉ bảng BOM (cột 0 = Layer)
   return (
     <div className="msg function">
@@ -1995,10 +2004,10 @@ function FunctionResult({ m, onHighlight, onOpenAcad }: {
             )}
           </>
         )}
-        {r && fn.result === "index" && <IndexTable results={r.results} />}
-        {r && fn.result === "table" && <RecipeTables results={r.results} />}
-        {r && fn.result === "files" && (
-          <div className="dim">✓ Đã xử lý {r.results.filter((x: any) => x.ok).length}/{r.count} file → <code>{r.outDir}</code></div>
+        {results && fn.result === "index" && <IndexTable results={results} />}
+        {results && fn.result === "table" && <RecipeTables results={results} />}
+        {results && fn.result === "files" && (
+          <div className="dim">✓ Đã xử lý {results.filter((x: any) => x.ok).length}/{r.count} file → <code>{r.outDir}</code></div>
         )}
       </div>
     </div>

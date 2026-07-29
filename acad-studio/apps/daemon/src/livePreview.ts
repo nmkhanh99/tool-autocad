@@ -5,8 +5,7 @@
  * Concurrency: every job carries TOKEN; waitNativeDone only accepts native.done that
  * echoes the same token+mode+opId — never a stale previous reply.
  */
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -66,6 +65,10 @@ const ops = new Map<string, LiveOp>();
 
 export function __resetLiveOpsForTests(): void {
   ops.clear();
+}
+
+export function __seedLiveOpForTests(op: LiveOp): void {
+  ops.set(op.opId, op);
 }
 
 export function getLiveOp(opId: string): LiveOp | undefined {
@@ -273,7 +276,16 @@ export async function stageLivePreview(opts: {
   // Discard any prior staged live op in CAD + registry (prevents orphans).
   const prior = [...ops.values()].filter((o) => o.state === "staged");
   for (const o of prior) {
-    await rejectLivePreview(o.opId, opts.waitMs ?? 12000).catch(() => null);
+    const rejected = await rejectLivePreview(o.opId, opts.waitMs ?? 12000).catch((error) => ({
+      ok: false as const,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    if (!rejected.ok) {
+      return {
+        ok: false,
+        error: `Không thể dọn preview trước đó ${o.opId}: ${rejected.error}`,
+      };
+    }
   }
 
   const opId = randomUUID().replaceAll("-", "").slice(0, 24);
@@ -384,6 +396,13 @@ async function runLispPlanJob(
   };
 }
 
+type LispPlanJobRunner = typeof runLispPlanJob;
+let lispPlanJobRunner: LispPlanJobRunner = runLispPlanJob;
+
+export function __setLispPlanJobRunnerForTests(runner?: LispPlanJobRunner): void {
+  lispPlanJobRunner = runner ?? runLispPlanJob;
+}
+
 /**
  * Stage plan blocks on CAD.
  * Primary (when instances given): named INSERT B_MBT* / B_HienTrang on preview layer
@@ -405,7 +424,16 @@ export async function stagePlanBlockPreview(opts: {
   const target = opts.target || "";
   const prior = [...ops.values()].filter((o) => o.state === "staged");
   for (const o of prior) {
-    await rejectLivePreview(o.opId, opts.waitMs ?? 12000).catch(() => null);
+    const rejected = await rejectLivePreview(o.opId, opts.waitMs ?? 12000).catch((error) => ({
+      ok: false as const,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    if (!rejected.ok) {
+      return {
+        ok: false,
+        error: `Không thể dọn preview trước đó ${o.opId}: ${rejected.error}`,
+      };
+    }
   }
   const opId = randomUUID().replaceAll("-", "").slice(0, 24);
   const instances = opts.instances || [];
@@ -422,7 +450,7 @@ export async function stagePlanBlockPreview(opts: {
     if (insertCount < 1) {
       return { ok: false, error: "named plan stage: no instances to INSERT" };
     }
-    const lispRes = await runLispPlanJob(lisp, target, opts.waitMs ?? 45000);
+    const lispRes = await lispPlanJobRunner(lisp, target, opts.waitMs ?? 45000);
     if (!lispRes.ok) {
       return {
         ok: false,
@@ -518,7 +546,7 @@ export async function stagePlanBlockPreview(opts: {
         `Plan preview count=0 — provide instances for named INSERT or rebuild plugin (RECT/SYMBOL)`,
     };
   }
-  const lispRes = await runLispPlanJob(lisp, target, opts.waitMs ?? 25000);
+  const lispRes = await lispPlanJobRunner(lisp, target, opts.waitMs ?? 25000);
   if (!lispRes.ok) {
     return {
       ok: false,
@@ -568,7 +596,7 @@ export async function applyLivePreview(opId: string, waitMs = 12000): Promise<Co
       String(op.params.previewLayer),
       op.params.blockDestMap as Record<string, string>,
     );
-    const r = await runLispPlanJob(lisp, op.target, waitMs);
+    const r = await lispPlanJobRunner(lisp, op.target, waitMs);
     if (!r.ok) return { ok: false, error: r.error || "named plan apply failed" };
     op.state = "applied";
     return { ok: true, applied: opId, count: op.count || 0, handles: [], committed: true };
@@ -590,7 +618,7 @@ export async function applyLivePreview(opId: string, waitMs = 12000): Promise<Co
   (acad:write-result "ok" "applied=0")
 )
 `;
-    const r = await runLispPlanJob(lisp, op.target, waitMs);
+    const r = await lispPlanJobRunner(lisp, op.target, waitMs);
     if (!r.ok) return { ok: false, error: r.error || "LISP apply failed" };
     op.state = "applied";
     return { ok: true, applied: opId, count: op.count || 0, handles: [], committed: true };
@@ -640,7 +668,13 @@ export async function rejectLivePreview(opId: string, waitMs = 12000): Promise<D
   (acad:write-result "ok" "rejected=0")
 )
 `;
-    await runLispPlanJob(lisp, op.target, waitMs);
+    const result = await lispPlanJobRunner(lisp, op.target, waitMs);
+    if (!result.ok) {
+      return {
+        ok: false,
+        error: result.error || "LISP reject failed",
+      };
+    }
     op.state = "rejected";
     return {
       ok: true,

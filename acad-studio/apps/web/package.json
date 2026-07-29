@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
+    "test:contract": "node scripts/test-contract.mjs",
     "start": "next start -p 3000"
   },
   "dependencies": {
