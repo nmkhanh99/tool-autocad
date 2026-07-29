@@ -5,6 +5,7 @@ import DrawingInfoPanel from "./DrawingInfoPanel";
 import DrawingStandardsPanel from "./DrawingStandardsPanel";
 import BlockLibraryPanel from "./BlockLibraryPanel";
 import LispLibraryPanel from "./LispLibraryPanel";
+import DocumentReviewPanel, { type ReviewWorkspaceView } from "./DocumentReviewPanel";
 import {
   readLispProposal,
   proposalFingerprint,
@@ -178,6 +179,9 @@ export default function Page() {
   const [blockLibraryOpen, setBlockLibraryOpen] = useState(false);
   const [lispLibraryOpen, setLispLibraryOpen] = useState(false);
   const [lispLibraryRefreshToken, setLispLibraryRefreshToken] = useState(0);
+  const [reviewWorkspaceOpen, setReviewWorkspaceOpen] = useState(false);
+  const [reviewWorkspaceView, setReviewWorkspaceView] =
+    useState<ReviewWorkspaceView>("documents");
   const [lispProposalBusy, setLispProposalBusy] = useState<number | null>(null);
   /** Bản vẽ đang mở trong AutoCAD + đích vẽ đang chọn ("" = file .work mặc định). */
   const [drawDocs, setDrawDocs] = useState<{ title: string; file: string; active: boolean }[]>([]);
@@ -207,6 +211,12 @@ export default function Page() {
   const [rawMenu, setRawMenu] = useState<Record<string, RawCap[]> | null>(null);
   const [rawOpen, setRawOpen] = useState(false);
   const [rawSummary, setRawSummary] = useState<any>(null);
+
+  function openReviewWorkspace(view: ReviewWorkspaceView) {
+    setReviewWorkspaceView(view);
+    setReviewWorkspaceOpen(true);
+    setPanel(false);
+  }
 
   useEffect(() => { loadAgents(); loadConvs(); loadRawCatalog(); loadDrawDocs(); }, []);
   useEffect(() => {
@@ -1274,6 +1284,9 @@ export default function Page() {
                   setDrawingInfoTarget("");
                   setDrawingInfoOpen(true);
                 }}>▦ Xem hồ sơ bản vẽ đang active</button>
+                <button className="drawing-empty-open" onClick={() => openReviewWorkspace("documents")}>
+                  ▤ Mở PDF & Review Workspace
+                </button>
                 <p>Chọn <b>bản vẽ đích</b> ở góc phải trên (bản vẽ đang mở trong AutoCAD),
                 rồi gõ «Vẽ …» — ví dụ <b>«Vẽ lưới trục định vị A-B-C-D và 1-2-3-4-5-6»</b>,
                 <b>«Vẽ cầu thang bộ»</b>, <b>«Vẽ ống thoát xí DN140»</b>.</p>
@@ -1336,6 +1349,27 @@ export default function Page() {
           </div>
 
           <div className="fngrouplbl workflowtitle">Quy trình công việc</div>
+          <div className="fngroup quickgroup review-entry-group">
+            <div className="fngrouplbl">Hồ sơ PDF & phối hợp AEC</div>
+            <div className="fnbtn quickfn" onClick={() => openReviewWorkspace("documents")}
+              title="Quản lý tài liệu, phiên bản, trang, OCR và bảo mật PDF">
+              <span className="fnicon">▤</span>
+              <div><div className="fnname">Tài liệu PDF & Markup</div>
+                <div className="fndesc">Review bản vẽ, chú thích và Markups List.</div></div>
+            </div>
+            <div className="fnbtn quickfn" onClick={() => openReviewWorkspace("measure")}
+              title="Hiệu chỉnh tỉ lệ, map đơn vị AutoCAD và bóc khối lượng">
+              <span className="fnicon">⌁</span>
+              <div><div className="fnname">Đo lường & khối lượng</div>
+                <div className="fndesc">Độ dài, diện tích, thể tích, đếm và Quantity Link.</div></div>
+            </div>
+            <div className="fnbtn quickfn" onClick={() => openReviewWorkspace("compare")}
+              title="So sánh revision, overlay, batch workflow và AI review">
+              <span className="fnicon">◫</span>
+              <div><div className="fnname">So sánh & tự động hóa</div>
+                <div className="fndesc">Overlay, Slip Sheet, batch và AI Drawing Review.</div></div>
+            </div>
+          </div>
           {GROUPS.map((g, groupIndex) => {
             const items = MENU_FUNCTIONS.filter((f) => f.group === g);
             return (
@@ -1586,6 +1620,15 @@ export default function Page() {
           });
           return true;
         }}
+        onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
+      />
+
+      <DocumentReviewPanel
+        open={reviewWorkspaceOpen}
+        daemon={DAEMON}
+        initialView={reviewWorkspaceView}
+        initialCadTarget={drawTarget}
+        onClose={() => setReviewWorkspaceOpen(false)}
         onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
       />
 
