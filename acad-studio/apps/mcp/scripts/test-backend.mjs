@@ -29,6 +29,7 @@ assert.deepEqual(TOOL_NAMES, [
   "annotation",
   "pid",
   "view",
+  "review",
   "system",
 ]);
 assert.equal(
@@ -36,8 +37,8 @@ assert.equal(
     (total, operations) => total + operations.length,
     0,
   ),
-  72,
-  "base contract must expose the reference project's 72 operations",
+  76,
+  "base contract must expose 72 reference operations plus 4 review operations",
 );
 
 const runtime = await backend.call("system", { operation: "runtime" });
@@ -49,6 +50,31 @@ assert.equal(runtime.payload.capabilities.entity.offset.supported, true);
 assert.equal(runtime.payload.capabilities.entity.array.supported, true);
 assert.equal(runtime.payload.capabilities.block.define.supported, true);
 assert.equal(runtime.payload.capabilities.view.get_screenshot.supported, true);
+assert.equal(runtime.payload.capabilities.review.run_standards.supported, true);
+
+const reviewCapabilities = await backend.call("review", {
+  operation: "capabilities",
+});
+assert.equal(reviewCapabilities.ok, true);
+assert.equal(
+  reviewCapabilities.payload.aiReview.reasoningProvider,
+  "mcp_client_model",
+);
+assert.equal(
+  reviewCapabilities.payload.aiReview.guards.exactTargetMustBeActive,
+  true,
+);
+assert.equal(reviewCapabilities.payload.pdf.plotPdf.implemented, true);
+assert.equal(
+  reviewCapabilities.payload.pdf.underlayInventory.scope,
+  "direct_layout_space_references",
+);
+assert.equal(reviewCapabilities.payload.excel.dataLinkInventory.implemented, true);
+assert.equal(
+  reviewCapabilities.payload.excel.dataLinkInventory.sourceUpdatePermissionField,
+  "dataLinks[].sourceUpdateAllowed",
+);
+assert.ok(reviewCapabilities.payload.excluded.includes("ocr"));
 
 const paddedRuntime = await backend.call("system", { operation: "  runtime  " });
 assert.equal(paddedRuntime.ok, true);
@@ -82,6 +108,7 @@ const healthPayload = { ok: false, error: "mock health failure" };
 let openPayload = { ok: false, error: "mock open failure" };
 const jobBodies = [];
 const plotBodies = [];
+const standardsScanBodies = [];
 let jobPayload = {
   jobId: "a1b2c3d4",
   state: "done",
@@ -113,6 +140,72 @@ const mockDaemon = createServer(async (request, response) => {
     payload = { running: true };
   } else if (request.url === "/api/acad/raw/coverage") {
     payload = { total: 0 };
+  } else if (request.url?.startsWith("/api/acad/drawing-info?")) {
+    payload = {
+      ok: true,
+      source: {
+        channel: "objectarx",
+        protocol: 1,
+        pluginVersion: "1.6.0",
+      },
+      document: {
+        title: "one.dwg",
+        file: "/tmp/canonical/one.dwg",
+        quiescent: true,
+        instance: "document-instance-one",
+        revision: 7,
+      },
+      counts: { entities: 12, pdfUnderlays: 1, dataLinks: 1 },
+      pdfUnderlays: [{ handle: "A1", sourceFile: "/tmp/reference.pdf" }],
+      dataLinks: [{
+        handle: "B1",
+        adapterId: "AcExcel",
+        updateOption: 1_048_576,
+        sourceUpdateAllowed: true,
+      }],
+      limits: {
+        maxEntitiesScanned: 200_000,
+        pdfUnderlayScope: "direct_layout_space_references",
+      },
+      warnings: [],
+    };
+    if (request.url.includes("legacy.dwg")) {
+      payload.source.pluginVersion = "1.5.0";
+    }
+    if (request.url.includes("malformed.dwg")) {
+      delete payload.dataLinks;
+    }
+  } else if (request.url === "/api/acad/standards/profiles") {
+    payload = {
+      ok: true,
+      activeProfileId: "default-a3-mm",
+      profiles: [{ id: "default-a3-mm", revision: "profile-r1" }],
+    };
+  } else if (request.url === "/api/acad/standards/scan") {
+    standardsScanBodies.push(body);
+    payload = {
+      ok: true,
+      scanId: "private-apply-token",
+      target: body.target,
+      profileId: body.profileId,
+      profileRevision: "profile-r1",
+      scannedAt: "2026-07-29T00:00:00.000Z",
+      current: { document: { revision: 7 } },
+      evidence: {
+        drawingRevision: 'native:["document-instance-one",7]',
+        completeness: { complete: true, reasons: [] },
+        standardsScan: { objectsTruncated: false },
+      },
+      issues: [
+        { id: "unit-1", severity: "error", scope: "unit", handles: [] },
+        { id: "layer-1", severity: "warning", scope: "layer", handles: ["A1"] },
+      ],
+      objects: [],
+      dimensions: [],
+    };
+    if (body.profileId === "broken-profile") {
+      payload.issues = null;
+    }
   } else if (request.url === "/api/acad/open") {
     payload = openPayload;
   } else if (request.url === "/api/acad/job/a1b2c3d4") {
@@ -211,6 +304,80 @@ try {
       instance: "document-instance-one",
     },
   ];
+
+  const missingReviewTarget = await routedBackend.call("review", {
+    operation: "snapshot",
+  });
+  assert.equal(missingReviewTarget.ok, false);
+  assert.equal(missingReviewTarget.code, "target_required");
+
+  const reviewProfiles = await routedBackend.call("review", {
+    operation: "profiles",
+  });
+  assert.equal(reviewProfiles.ok, true);
+  assert.equal(reviewProfiles.payload.profiles[0].id, "default-a3-mm");
+
+  const reviewSnapshot = await routedBackend.call("review", {
+    operation: "snapshot",
+    target: "/tmp/canonical/one.dwg",
+  });
+  assert.equal(reviewSnapshot.ok, true);
+  assert.equal(reviewSnapshot.payload.source.pluginVersion, "1.6.0");
+  assert.equal(reviewSnapshot.payload.pdfUnderlays[0].handle, "A1");
+  assert.equal(reviewSnapshot.payload.dataLinks[0].adapterId, "AcExcel");
+  assert.equal(reviewSnapshot.payload.dataLinks[0].updateOption, 1_048_576);
+  assert.equal(reviewSnapshot.payload.dataLinks[0].sourceUpdateAllowed, true);
+
+  for (const target of ["/tmp/legacy.dwg", "/tmp/malformed.dwg"]) {
+    const invalidSnapshot = await routedBackend.call("review", {
+      operation: "snapshot",
+      target,
+    });
+    assert.equal(invalidSnapshot.ok, false);
+    assert.equal(invalidSnapshot.code, "snapshot_contract_mismatch");
+  }
+
+  const invalidReviewProfile = await routedBackend.call("review", {
+    operation: "run_standards",
+    target: "/tmp/canonical/one.dwg",
+    data: { profile_id: "../bad" },
+  });
+  assert.equal(invalidReviewProfile.ok, false);
+  assert.equal(invalidReviewProfile.code, "invalid_input");
+
+  const malformedStandards = await routedBackend.call("review", {
+    operation: "run_standards",
+    target: "/tmp/canonical/one.dwg",
+    data: { profile_id: "broken-profile" },
+  });
+  assert.equal(malformedStandards.ok, false);
+  assert.equal(malformedStandards.code, "invalid_daemon_response");
+
+  const standardsReview = await routedBackend.call("review", {
+    operation: "run_standards",
+    target: "/tmp/canonical/one.dwg",
+    data: { profile_id: "default-a3-mm" },
+  });
+  assert.equal(standardsReview.ok, true);
+  assert.equal(standardsReview.payload.scanId, undefined);
+  assert.doesNotMatch(
+    JSON.stringify(standardsReview),
+    /private-apply-token/,
+  );
+  assert.equal(
+    standardsReview.payload.evidence.drawingRevision,
+    'native:["document-instance-one",7]',
+  );
+  assert.equal(standardsReview.payload.summary.issueCount, 2);
+  assert.deepEqual(standardsReview.payload.summary.bySeverity, {
+    error: 1,
+    warning: 1,
+  });
+  assert.deepEqual(standardsScanBodies.at(-1), {
+    target: "/tmp/canonical/one.dwg",
+    profileId: "default-a3-mm",
+    readOnly: true,
+  });
 
   const plotPath = join(plotTestDir, "page-setup.pdf");
   const pageSetupPlot = {
@@ -655,5 +822,5 @@ assert.equal(imageResult.content[1].data, imageBase64);
 assert.doesNotMatch(imageResult.content[0].text, new RegExp(imageBase64));
 
 console.log(
-  "MCP backend test passed: 72-op contract, guards, target routing, screenshot content, PID catalog.",
+  "MCP backend test passed: 76-op contract, review guards, target routing, screenshot content, PID catalog.",
 );

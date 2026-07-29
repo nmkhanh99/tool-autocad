@@ -17,6 +17,7 @@ export const TOOL_NAMES = [
   "annotation",
   "pid",
   "view",
+  "review",
   "system",
 ] as const;
 
@@ -84,6 +85,7 @@ export const BASE_OPERATIONS: Record<ToolName, readonly string[]> = {
     "insert_tank",
   ],
   view: ["zoom_extents", "zoom_window", "get_screenshot"],
+  review: ["capabilities", "snapshot", "profiles", "run_standards"],
   system: [
     "status", "health", "get_backend", "runtime", "init", "execute_lisp",
   ],
@@ -127,8 +129,95 @@ const READ_ONLY_OPERATIONS: Partial<Record<ToolName, ReadonlySet<string>>> = {
   block: new Set(["list", "get_attributes"]),
   pid: new Set(["list_symbols"]),
   view: new Set(["get_screenshot"]),
+  review: new Set(["capabilities", "snapshot", "profiles", "run_standards"]),
   system: new Set(["status", "health", "get_backend", "runtime"]),
 };
+
+const REVIEW_CAPABILITIES = {
+  contractVersion: 1,
+  mode: "evidence_only",
+  aiReview: {
+    implemented: true,
+    reasoningProvider: "mcp_client_model",
+    serverSideAiConnectorRequired: false,
+    deterministicChecks: [
+      "drawing units and precision",
+      "required layer properties",
+      "dimension style and row spacing",
+      "drawing frame dimensions",
+      "required mapped objects",
+    ],
+    workflow: [
+      "review.snapshot",
+      "review.profiles",
+      "review.run_standards",
+      "model interprets evidence and proposes findings",
+    ],
+    mutationBoundary:
+      "Review never calls standards apply/action. Any later CAD mutation must use a separate guarded tool.",
+    guards: {
+      exactTargetMustBeActive: true,
+      quiescentBeforeAndAfterScan: true,
+      nativeRevisionRequired: true,
+      persistentTrustPathChange: false,
+    },
+  },
+  pdf: {
+    plotPdf: {
+      implemented: true,
+      operation: "drawing.plot_pdf",
+      api: "AcPlPlotEngine / AcDbPlotSettingsValidator",
+      runtime: "AutoCAD 2027 Mac GUI + AcadBridge",
+    },
+    underlayInventory: {
+      implemented: true,
+      snapshotField: "pdfUnderlays",
+      scope: "direct_layout_space_references",
+      api: "AcDbPdfReference / AcDbPdfDefinition",
+      requiresPluginVersion: "1.6.0",
+    },
+    importObjects: {
+      implemented: false,
+      nativeAvailable: true,
+      api: "-PDFIMPORT command (no public ObjectARX converter class)",
+    },
+    multiSheetPublish: {
+      implemented: false,
+      nativeAvailable: true,
+      api: "AcPlPlotEngine multi-page document",
+    },
+    mergeSplitReorder: {
+      implemented: false,
+      nativeAvailable: false,
+      reason: "Not an AutoCAD/ObjectARX document-editing capability.",
+    },
+  },
+  excel: {
+    dataLinkInventory: {
+      implemented: true,
+      snapshotField: "dataLinks",
+      sourceUpdatePermissionField: "dataLinks[].sourceUpdateAllowed",
+      api: "AcDbDataLinkManager / AcDbDataLink / AcDbTable",
+      requiresPluginVersion: "1.6.0",
+    },
+    bidirectionalUpdate: {
+      implemented: false,
+      nativeAvailable: true,
+      api: "AcDbDataLink update / DATALINKUPDATE",
+      requirements: [
+        "Microsoft Excel installed for Excel data links",
+        "explicit source-write permission before CAD-to-workbook update",
+      ],
+    },
+    workbookCellRead: {
+      implemented: false,
+      nativeAvailable: false,
+      reason:
+        "Workbook parsing is a separate bounded file connector, not an ObjectARX drawing snapshot.",
+    },
+  },
+  excluded: ["ocr", "digital_signatures", "storage", "realtime_collaboration"],
+} as const;
 
 class DaemonRequestError extends Error {
   readonly status: number;
@@ -161,6 +250,23 @@ function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function versionAtLeast(value: unknown, minimum: string): boolean {
+  const actual = String(value ?? "").split(".").map(Number);
+  const required = minimum.split(".").map(Number);
+  if (
+    actual.length < 2 ||
+    actual.some((part) => !Number.isInteger(part) || part < 0)
+  ) {
+    return false;
+  }
+  for (let index = 0; index < Math.max(actual.length, required.length); index++) {
+    const left = actual[index] || 0;
+    const right = required[index] || 0;
+    if (left !== right) return left > right;
+  }
+  return true;
 }
 
 function errorText(value: unknown): string {
@@ -644,6 +750,9 @@ export class DaemonAutoCADBackend implements AcadMcpBackend {
           break;
         case "view":
           response = await this.view(normalizedInput);
+          break;
+        case "review":
+          response = await this.review(normalizedInput);
           break;
         default:
           return this.failure(
@@ -1163,6 +1272,131 @@ export class DaemonAutoCADBackend implements AcadMcpBackend {
       }
       throw error;
     }
+  }
+
+  private async review(input: ToolInput): Promise<ToolResponse> {
+    const operation = input.operation;
+    if (operation === "capabilities") {
+      return this.success("review", input, REVIEW_CAPABILITIES);
+    }
+    if (operation === "profiles") {
+      const profiles = await this.daemon.request("/api/acad/standards/profiles", {
+        timeoutMs: 20_000,
+      });
+      return this.success("review", input, profiles);
+    }
+
+    const target = String(input.target || "").trim();
+    if (!target) {
+      return this.failure(
+        "review",
+        operation,
+        "target_required",
+        `review.${operation} cần target là title hoặc full path của bản vẽ đang mở.`,
+        "Gọi system(operation=\"status\") để lấy document target chính xác.",
+      );
+    }
+    if (operation === "snapshot") {
+      const snapshot = objectValue(await this.drawingSnapshot(target));
+      const source = objectValue(snapshot.source);
+      const limits = objectValue(snapshot.limits);
+      const dataLinks = Array.isArray(snapshot.dataLinks)
+        ? snapshot.dataLinks.map(objectValue)
+        : null;
+      if (
+        snapshot.ok !== true ||
+        source.channel !== "objectarx" ||
+        source.protocol !== 1 ||
+        !versionAtLeast(source.pluginVersion, "1.6.0") ||
+        !Array.isArray(snapshot.pdfUnderlays) ||
+        limits.pdfUnderlayScope !== "direct_layout_space_references" ||
+        !dataLinks ||
+        dataLinks.some((link) =>
+          typeof link.sourceUpdateAllowed !== "boolean" ||
+          !Number.isInteger(link.updateOption))
+      ) {
+        return this.failure(
+          "review",
+          operation,
+          "snapshot_contract_mismatch",
+          "Snapshot review cần AcadBridge 1.6.0+ với PDF/Data Link metadata đầy đủ.",
+          "Build, cài và nạp lại AcadBridge rồi gọi review.snapshot lần nữa.",
+        );
+      }
+      return this.success("review", { ...input, target }, snapshot);
+    }
+    if (operation === "run_standards") {
+      const profileId = String(input.data?.profile_id || "").trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/.test(profileId)) {
+        return this.failure(
+          "review",
+          operation,
+          "invalid_input",
+          "run_standards cần data.profile_id hợp lệ; hãy gọi review.profiles và chọn rõ profile.",
+        );
+      }
+      const raw = objectValue(await this.daemon.request(
+        "/api/acad/standards/scan",
+        {
+          method: "POST",
+          body: { target, profileId, readOnly: true },
+          timeoutMs: 70_000,
+        },
+      ));
+      const evidence = objectValue(raw.evidence);
+      const completeness = objectValue(evidence.completeness);
+      const issues = Array.isArray(raw.issues) ? raw.issues : null;
+      if (
+        raw.ok !== true ||
+        raw.profileId !== profileId ||
+        typeof raw.target !== "string" ||
+        typeof raw.profileRevision !== "string" ||
+        typeof raw.scannedAt !== "string" ||
+        typeof evidence.drawingRevision !== "string" ||
+        typeof completeness.complete !== "boolean" ||
+        !issues ||
+        !Array.isArray(raw.objects) ||
+        !Array.isArray(raw.dimensions)
+      ) {
+        return this.failure(
+          "review",
+          operation,
+          "invalid_daemon_response",
+          "Standards scan không trả đúng profile/evidence contract đã yêu cầu.",
+        );
+      }
+      const bySeverity: Record<string, number> = {};
+      const byScope: Record<string, number> = {};
+      for (const issueValue of issues) {
+        const issue = objectValue(issueValue);
+        const severity = String(issue.severity || "unknown");
+        const scope = String(issue.scope || "unknown");
+        bySeverity[severity] = (bySeverity[severity] || 0) + 1;
+        byScope[scope] = (byScope[scope] || 0) + 1;
+      }
+      return this.success("review", { ...input, target }, {
+        target: raw.target,
+        profileId: raw.profileId,
+        profileRevision: raw.profileRevision,
+        scannedAt: raw.scannedAt,
+        current: raw.current,
+        evidence: raw.evidence,
+        summary: {
+          issueCount: issues.length,
+          bySeverity,
+          byScope,
+        },
+        issues,
+        objects: raw.objects,
+        dimensions: raw.dimensions,
+      });
+    }
+    return this.failure(
+      "review",
+      operation,
+      "unknown_operation",
+      "Operation review không hợp lệ.",
+    );
   }
 
   private async attachScreenshot(

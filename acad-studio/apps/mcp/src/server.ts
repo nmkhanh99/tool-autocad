@@ -126,6 +126,24 @@ const viewSchema = z.object({
   y2: z.number().optional(),
 });
 
+const reviewDataSchema = z
+  .object({
+    profile_id: z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/)
+      .optional()
+      .describe(
+        "Exact standards profile id. Required only for run_standards; discover it with profiles.",
+      ),
+  })
+  .strict()
+  .optional();
+
+const reviewSchema = z.object({
+  ...commonSchema,
+  data: reviewDataSchema,
+});
+
 export function asToolResult(response: ToolResponse) {
   const payload = response.payload &&
       typeof response.payload === "object" &&
@@ -192,7 +210,7 @@ export function createAcadMcpServer(
 ): McpServer {
   const server = new McpServer({
     name: "acad-mcp",
-    version: "0.1.0",
+    version: "0.2.0",
   });
 
   server.registerTool(
@@ -277,6 +295,22 @@ export function createAcadMcpServer(
       annotations: { readOnlyHint: false },
     },
     (input) => callBackend(backend, "view", input),
+  );
+
+  server.registerTool(
+    "review",
+    {
+      title: "AutoCAD AI Drawing Review",
+      description:
+        "Read-only, evidence-first review context for an MCP model. Operations: capabilities, snapshot, profiles, run_standards. snapshot and run_standards require an exact target; run_standards also requires the target tab to already be active and data.profile_id. This tool never applies fixes or calls an external AI provider.",
+      inputSchema: reviewSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    (input) => callBackend(backend, "review", input),
   );
 
   server.registerTool(

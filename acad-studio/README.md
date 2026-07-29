@@ -11,7 +11,7 @@ gọi `/api/acad/*`, `app/cli.py`, và bridge `~/Acad-Bridge/` — domain-agnost
 | Frontend | **Next.js 16 App Router + React 19 + TS** | `apps/web` |
 | Daemon | **Node 24 · Express · SSE streaming · SQLite** (`node:sqlite`) | `apps/daemon` |
 | Desktop | **Electron 33** shell nạp UI web, quản lý vòng đời | `apps/desktop` |
-| MCP | **SDK v2 · stdio · 8 tools / 72 implemented operations** | `apps/mcp` |
+| MCP | **SDK v2 · stdio · 9 tools / 76 implemented operations** | `apps/mcp` |
 | Lifecycle | **1 entrypoint** `pnpm tools-dev` | `scripts/tools-dev.mjs` |
 
 > Ghi chú: bảng gốc Open Design ghi `better-sqlite3`; ở đây dùng **`node:sqlite`** built-in của

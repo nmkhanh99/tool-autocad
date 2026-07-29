@@ -115,8 +115,8 @@ Support Path. The loopback daemon rejects browser origins outside the packaged/d
 ## Docs
 
 - [ACAD Control](acad-studio/ACAD-CONTROL.md) — headless / batch / live
-- [MCP adapter](acad-studio/MCP.md) — 8 tools / 72 implemented operations,
-  including fail-closed native PDF plotting
+- [MCP adapter](acad-studio/MCP.md) — 9 tools / 76 implemented operations,
+  including fail-closed native PDF plotting and evidence-first AI review
 - [ObjectARX capabilities](acad-studio/OBJECTARX-CAPABILITIES.md)
 - [Bridge LISP](acad-lisp/BRIDGE.md)
 - [ObjectARX NOTES](objectarx/NOTES.md) — SDK install + build

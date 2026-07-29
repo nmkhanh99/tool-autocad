@@ -46,7 +46,11 @@
 #include <dblayout.h>
 #include <summinfo.h>
 #include <dbtable.h>
+#include <DbDataLink.h>
+#include <dbunderlaydef.h>
+#include <dbunderlayref.h>
 #include <AcCmColor.h>
+#include <algorithm>
 #include <map>
 #include <vector>
 
@@ -64,7 +68,8 @@ static struct timespec  gDrawingInfoReqMtime = {0, 0};
 static std::string      gHiLayer;   // layer dang duoc highlight (de unhighlight khi doi)
 
 static const ACHAR* kGroup = L"ACAD_BRIDGE";
-static const char*  kPluginVersion = "1.5.0";
+static const char*  kPluginVersion = "1.6.0";
+static const char*  kReadOnlyJobMarker = ";;; ACAD_BRIDGE_READ_ONLY";
 static const uint64_t gDocumentNonce =
     (static_cast<uint64_t>(arc4random()) << 32) | arc4random();
 static uint64_t gNextDocumentInstance = 1;
@@ -301,6 +306,10 @@ static const size_t kInfoMaxSelectionObjects = 200;
 static const size_t kInfoMaxXrefs             = 200;
 static const size_t kInfoMaxEntitiesScanned   = 200000;
 static const size_t kInfoMaxCustomSummary     = 50;
+static const size_t kInfoMaxPdfUnderlays      = 200;
+static const size_t kInfoMaxDataLinks         = 200;
+static const size_t kInfoMaxDataLinkSources   = 500;
+static const size_t kInfoMaxDataLinkTargets   = 500;
 
 static std::string jsonString(const std::string& s) {
     return "\"" + jsonEsc(s) + "\"";
@@ -328,6 +337,15 @@ static std::string stringArrayJson(const std::vector<std::string>& values) {
     for (size_t i = 0; i < values.size(); ++i) {
         if (i) out += ",";
         out += jsonString(values[i]);
+    }
+    return out + "]";
+}
+
+static std::string jsonRows(const std::vector<std::string>& rows) {
+    std::string out = "[";
+    for (size_t i = 0; i < rows.size(); ++i) {
+        if (i) out += ",";
+        out += rows[i];
     }
     return out + "]";
 }
@@ -943,13 +961,60 @@ struct DrawingEntityStats {
     long long typeOverflow = 0;
     long long layerOverflow = 0;
     long long spaceOverflow = 0;
+    long long pdfUnderlayCount = 0;
     bool truncated = false;
     bool haveExtents = false;
     AcDbExtents extents;
     std::map<std::string, long long> byType;
     std::map<std::string, long long> byLayer;
     std::map<std::string, long long> bySpace;
+    std::vector<std::string> pdfUnderlays;
 };
+
+static std::string pdfUnderlayJson(AcDbPdfReference* pdf, const std::string& spaceName,
+                                   std::vector<std::string>& warnings) {
+    std::string definitionHandle, sourceFile, activeFile, itemName;
+    bool definitionAvailable = false;
+    bool loaded = false;
+    AcDbPdfDefinition* definition = nullptr;
+    if (pdf && acdbOpenObject(
+            definition, pdf->definitionId(), AcDb::kForRead) == Acad::eOk &&
+        definition) {
+        definitionAvailable = true;
+        definitionHandle = objectHandle(definition);
+        sourceFile = toUtf8(definition->getSourceFileName());
+        itemName = toUtf8(definition->getItemName());
+        AcString active;
+        if (definition->getActiveFileName(active) == Acad::eOk)
+            activeFile = toUtf8(active.kwszPtr());
+        loaded = definition->isLoaded();
+        definition->close();
+    } else {
+        addWarning(warnings, "pdf_underlay_definition_unavailable");
+    }
+
+    const AcGePoint3d position = pdf->position();
+    const AcGeScale3d scale = pdf->scaleFactors();
+    return "{\"handle\":" + jsonString(objectHandle(pdf)) +
+           ",\"definitionHandle\":" + jsonString(definitionHandle) +
+           ",\"definitionAvailable\":" + jsonBool(definitionAvailable) +
+           ",\"sourceFile\":" + jsonString(sourceFile) +
+           ",\"activeFile\":" + jsonString(activeFile) +
+           ",\"item\":" + jsonString(itemName) +
+           ",\"space\":" + jsonString(spaceName) +
+           ",\"layer\":" + jsonString(entityLayer(pdf)) +
+           ",\"position\":[" + jsonNumber(position.x) + "," +
+                                jsonNumber(position.y) + "," +
+                                jsonNumber(position.z) + "]" +
+           ",\"scale\":[" + jsonNumber(scale.sx) + "," +
+                             jsonNumber(scale.sy) + "," +
+                             jsonNumber(scale.sz) + "]" +
+           ",\"rotation\":" + jsonNumber(pdf->rotation()) +
+           ",\"loaded\":" + jsonBool(loaded) +
+           ",\"visible\":" + jsonBool(pdf->isOn()) +
+           ",\"clipped\":" + jsonBool(pdf->isClipped()) +
+           ",\"monochrome\":" + jsonBool(pdf->isMonochrome()) + "}";
+}
 
 static void collectEntityStats(AcDbDatabase* db, DrawingEntityStats& stats,
                                std::vector<std::string>& warnings) {
@@ -985,6 +1050,12 @@ static void collectEntityStats(AcDbDatabase* db, DrawingEntityStats& stats,
                     stats.entities++;
                     if (model) stats.modelEntities++; else stats.paperEntities++;
                     if (AcDbBlockReference::cast(ent)) stats.blockReferences++;
+                    if (AcDbPdfReference* pdf = AcDbPdfReference::cast(ent)) {
+                        if (stats.pdfUnderlays.size() < kInfoMaxPdfUnderlays)
+                            stats.pdfUnderlays.push_back(
+                                pdfUnderlayJson(pdf, spaceName, warnings));
+                        stats.pdfUnderlayCount++;
+                    }
                     bumpBounded(stats.byType, type, stats.typeOverflow);
                     bumpBounded(stats.byLayer, layer, stats.layerOverflow);
                     bumpBounded(stats.bySpace, spaceName, stats.spaceOverflow);
@@ -1010,6 +1081,106 @@ static void collectEntityStats(AcDbDatabase* db, DrawingEntityStats& stats,
     if (stats.truncated) addWarning(warnings, "entity_scan_truncated");
     if (stats.typeOverflow || stats.layerOverflow || stats.spaceOverflow)
         addWarning(warnings, "entity_count_maps_truncated");
+    if ((size_t)stats.pdfUnderlayCount > kInfoMaxPdfUnderlays)
+        addWarning(warnings, "pdf_underlays_truncated");
+}
+
+static std::string dataLinksJson(AcDbDatabase* db, long long& total,
+                                 std::vector<std::string>& warnings) {
+    total = 0;
+    if (!db) {
+        addWarning(warnings, "data_links_unavailable");
+        return "[]";
+    }
+    AcDbDataLinkManager* manager = db->getDataLinkManager();
+    if (!manager) {
+        addWarning(warnings, "data_links_unavailable");
+        return "[]";
+    }
+    AcDbObjectIdArray linkIds;
+    manager->getDataLink(linkIds);
+    total = manager->dataLinkCount();
+
+    std::vector<std::string> rows;
+    size_t emittedSources = 0;
+    size_t emittedTargets = 0;
+    const size_t keep = std::min(
+        (size_t)linkIds.length(), kInfoMaxDataLinks);
+    for (size_t i = 0; i < keep; ++i) {
+        AcDbDataLink* link = nullptr;
+        if (acdbOpenObject(
+                link, linkIds[(int)i], AcDb::kForRead) != Acad::eOk || !link) {
+            addWarning(warnings, "data_link_open_failed");
+            continue;
+        }
+
+        std::vector<std::string> sourceRows;
+        AcStringArray sourceFiles;
+        if (link->getSourceFiles(
+                AcDb::kDataLinkGetSourceContextOther, sourceFiles) == Acad::eOk) {
+            for (int sourceIndex = 0;
+                 sourceIndex < sourceFiles.length() &&
+                 emittedSources < kInfoMaxDataLinkSources;
+                 ++sourceIndex, ++emittedSources) {
+                sourceRows.push_back(
+                    jsonString(toUtf8(sourceFiles[sourceIndex].kwszPtr())));
+            }
+            if (sourceFiles.length() > (int)sourceRows.size())
+                addWarning(warnings, "data_link_sources_truncated");
+        } else {
+            addWarning(warnings, "data_link_sources_unavailable");
+        }
+
+        std::vector<std::string> targetRows;
+        AcDbObjectIdArray targetIds;
+        link->getTargets(targetIds);
+        int attemptedTargets = 0;
+        for (int targetIndex = 0;
+             targetIndex < targetIds.length() &&
+             emittedTargets < kInfoMaxDataLinkTargets;
+             ++targetIndex, ++emittedTargets) {
+            attemptedTargets++;
+            AcDbObject* target = nullptr;
+            if (acdbOpenObject(
+                    target, targetIds[targetIndex], AcDb::kForRead) != Acad::eOk ||
+                !target) {
+                addWarning(warnings, "data_link_target_open_failed");
+                continue;
+            }
+            std::string targetRow =
+                "{\"handle\":" + jsonString(objectHandle(target)) +
+                ",\"type\":" + jsonString(objectType(target));
+            if (AcDbTable* table = AcDbTable::cast(target)) {
+                targetRow +=
+                    ",\"rows\":" + std::to_string((long long)table->numRows()) +
+                    ",\"columns\":" +
+                        std::to_string((long long)table->numColumns());
+            }
+            targetRows.push_back(targetRow + "}");
+            target->close();
+        }
+        if (targetIds.length() > attemptedTargets)
+            addWarning(warnings, "data_link_targets_truncated");
+
+        const AcString name = link->name();
+        const int updateOption = link->updateOption();
+        rows.push_back(
+            "{\"handle\":" + jsonString(objectHandle(link)) +
+            ",\"name\":" + jsonString(toUtf8(name.kwszPtr())) +
+            ",\"description\":" + jsonString(toUtf8(link->description())) +
+            ",\"adapterId\":" + jsonString(toUtf8(link->dataAdapterId())) +
+            ",\"valid\":" + jsonBool(link->isValid()) +
+            ",\"option\":" + std::to_string((int)link->option()) +
+            ",\"updateOption\":" + std::to_string(updateOption) +
+            ",\"sourceUpdateAllowed\":" +
+                jsonBool((updateOption & AcDb::kUpdateOptionAllowSourceUpdate) != 0) +
+            ",\"sourceFiles\":" + jsonRows(sourceRows) +
+            ",\"targets\":" + jsonRows(targetRows) + "}");
+        link->close();
+    }
+    if ((size_t)linkIds.length() > kInfoMaxDataLinks)
+        addWarning(warnings, "data_links_truncated");
+    return jsonRows(rows);
 }
 
 static std::string selectionJson(AcApDocument* doc, AcDbDatabase* db,
@@ -1142,6 +1313,7 @@ static void writeDrawingInfo() {
     const std::string selection = selectionJson(doc, db, stats, warnings);
 
     long long layerCount = 0, blockCount = 0, layoutCount = 0, xrefCount = 0;
+    long long dataLinkCount = 0;
     const std::string layers = layerTableJson(db, layerCount, warnings);
     AcDbSymbolTable* linetypeTable = nullptr;
     if (db->getLinetypeTable(linetypeTable, AcDb::kForRead) != Acad::eOk) linetypeTable = nullptr;
@@ -1163,6 +1335,8 @@ static void writeDrawingInfo() {
     const std::string blocks =
         blockTableJson(db, xrefs, blockCount, xrefCount, warnings);
     const std::string layouts = layoutTableJson(db, layoutCount, warnings);
+    const std::string dataLinks = dataLinksJson(db, dataLinkCount, warnings);
+    const std::string pdfUnderlays = jsonRows(stats.pdfUnderlays);
     const std::string dictionaries = dictionariesJson(db, warnings);
     const std::string metadataSummary = summaryInfoJson(db, warnings);
 
@@ -1216,6 +1390,8 @@ static void writeDrawingInfo() {
         ",\"modelEntities\":" + std::to_string(stats.modelEntities) +
         ",\"paperEntities\":" + std::to_string(stats.paperEntities) +
         ",\"blockReferences\":" + std::to_string(stats.blockReferences) +
+        ",\"pdfUnderlays\":" + std::to_string(stats.pdfUnderlayCount) +
+        ",\"dataLinks\":" + std::to_string(dataLinkCount) +
         ",\"selected\":" + std::to_string(stats.selected) +
         ",\"byType\":" + countMapJson(stats.byType, stats.typeOverflow) +
         ",\"byLayer\":" + countMapJson(stats.byLayer, stats.layerOverflow) +
@@ -1229,6 +1405,8 @@ static void writeDrawingInfo() {
         ",\"blockReferences\":" + std::to_string(stats.blockReferences) +
         ",\"layoutCount\":" + std::to_string(layoutCount) +
         ",\"xrefCount\":" + std::to_string(xrefCount) +
+        ",\"pdfUnderlayCount\":" + std::to_string(stats.pdfUnderlayCount) +
+        ",\"dataLinkCount\":" + std::to_string(dataLinkCount) +
         ",\"selectionCount\":" + std::to_string(stats.selected);
     if (metadataSummary.size() >= 2 && metadataSummary.front() == '{' &&
         metadataSummary.back() == '}') {
@@ -1244,6 +1422,11 @@ static void writeDrawingInfo() {
         ",\"maxDictionaryItems\":" + std::to_string(kInfoMaxDictionaryItems) +
         ",\"maxSelectionObjects\":" + std::to_string(kInfoMaxSelectionObjects) +
         ",\"maxXrefs\":" + std::to_string(kInfoMaxXrefs) +
+        ",\"maxPdfUnderlays\":" + std::to_string(kInfoMaxPdfUnderlays) +
+        ",\"pdfUnderlayScope\":\"direct_layout_space_references\"" +
+        ",\"maxDataLinks\":" + std::to_string(kInfoMaxDataLinks) +
+        ",\"maxDataLinkSources\":" + std::to_string(kInfoMaxDataLinkSources) +
+        ",\"maxDataLinkTargets\":" + std::to_string(kInfoMaxDataLinkTargets) +
         ",\"maxCustomSummary\":" + std::to_string(kInfoMaxCustomSummary) + "}";
 
     const std::string document =
@@ -1266,6 +1449,7 @@ static void writeDrawingInfo() {
         ",\"dimStyles\":" + dimStyles +
         ",\"blocks\":" + blocks +
         ",\"layouts\":" + layouts +
+        ",\"dataLinks\":" + dataLinks +
         ",\"registeredApps\":" + registeredApps + "}";
 
     const std::string variables =
@@ -1309,6 +1493,8 @@ static void writeDrawingInfo() {
             ",\"linetypes\":" + linetypes + "}" +
         ",\"registeredApps\":" + registeredApps +
         ",\"xrefs\":" + xrefs +
+        ",\"pdfUnderlays\":" + pdfUnderlays +
+        ",\"dataLinks\":" + dataLinks +
         ",\"dictionaries\":" + dictionaries +
         ",\"selection\":" + selection + "}";
 
@@ -1324,6 +1510,8 @@ static void writeDrawingInfo() {
         ",\"counts\":" + counts +
         ",\"tables\":" + tables +
         ",\"xrefs\":" + xrefs +
+        ",\"pdfUnderlays\":" + pdfUnderlays +
+        ",\"dataLinks\":" + dataLinks +
         ",\"dictionaries\":" + dictionaries +
         ",\"selection\":" + selection +
         ",\"drawing\":" + drawing +
@@ -1338,7 +1526,8 @@ static void writeDrawingInfo() {
 // AutoCAD executes sendStringToExecute asynchronously. Snapshot the watched
 // transport first so a later daemon write can never change the bytes of a job
 // that has already been queued for a document.
-static std::string snapshotJobFile(const std::string& source) {
+static std::string snapshotJobFile(const std::string& source,
+                                   const std::string& bytes) {
     const std::string snapshots = gBridgeDir + "/job-snapshots";
     mkdir(snapshots.c_str(), 0700);
     const time_t now = time(nullptr);
@@ -1362,7 +1551,6 @@ static std::string snapshotJobFile(const std::string& source) {
     snprintf(name, sizeof name, "job-%ld-%d-%lu.lsp",
              (long)now, (int)getpid(), ++sequence);
     const std::string destination = snapshots + "/" + name;
-    const std::string bytes = readAll(source);
     if (bytes.empty()) return source;
     FILE* out = fopen(destination.c_str(), "wb");
     if (!out) return source;
@@ -1379,17 +1567,30 @@ static void runJob() {
     if (acDocManager == nullptr) return;
     AcApDocument* pDoc = resolveTarget();
     if (pDoc == nullptr) { acutPrintf(L"\n[AcadBridge] Chua co ban ve mo -- bo qua job."); return; }
-    // Tu trust ~/Acad-Bridge de (load) khong bi SECURELOAD hoi/chan, roi load job.
+    const std::string jobBytes = readAll(gJobPath);
+    const bool readOnly =
+        jobBytes.rfind(kReadOnlyJobMarker, 0) == 0;
+    // Trust the snapshot only for the duration of load, then restore the exact
+    // prior value so even a read-only review leaves no persistent setting change.
     std::wstring dirW = toWide(gBridgeDir);
-    const std::string snapshotPath = snapshotJobFile(gJobPath);
+    const std::string snapshotPath = snapshotJobFile(gJobPath, jobBytes);
     std::wstring jobW = toWide(snapshotPath);
     std::wstring cmd =
-        L"(progn (setq mep:tp (getvar \"TRUSTEDPATHS\")) (if (null mep:tp) (setq mep:tp \"\")) "
+        L"((lambda (mep:tp mep:tp-changed mep:load-result) "
+        L"(if (null mep:tp) (setq mep:tp \"\")) "
         L"(if (and (null (vl-string-search \"Acad-Bridge\" mep:tp)) (null (vl-string-search \"MEP-Bridge\" mep:tp))) "
-        L"(setvar \"TRUSTEDPATHS\" (strcat mep:tp \";" + dirW + L"/...\"))) "
-        L"(load \"" + jobW + L"\") (vl-file-delete \"" + jobW + L"\")) ";
-    // Chu y thu tu tham so DUNG: (doc, str, bActivate, bWrapUpInactiveDoc, bEchoString)
-    acDocManager->sendStringToExecute(pDoc, cmd.c_str(), true, false, false);
+        L"(progn (setvar \"TRUSTEDPATHS\" (strcat mep:tp \";" + dirW + L"/...\")) "
+        L"(setq mep:tp-changed T))) "
+        L"(setq mep:load-result (vl-catch-all-apply 'load (list \"" + jobW + L"\"))) "
+        L"(if mep:tp-changed (setvar \"TRUSTEDPATHS\" mep:tp)) "
+        L"(vl-file-delete \"" + jobW + L"\") "
+        L"(if (vl-catch-all-error-p mep:load-result) "
+        L"(princ (strcat \"\\n[AcadBridge] Job load failed: \" "
+        L"(vl-catch-all-error-message mep:load-result)))) (princ)) "
+        L"(getvar \"TRUSTEDPATHS\") nil nil) ";
+    // Read-only review executes in the target context without activating its tab.
+    acDocManager->sendStringToExecute(
+        pDoc, cmd.c_str(), !readOnly, readOnly, false);
     writeDocs(); // tien the cap nhat trang thai
 }
 
@@ -2297,6 +2498,14 @@ public:
         gDirty = true;
         if (db) ++gDatabaseRevisions[db];
     }
+    void headerSysVarChanged(const AcDbDatabase* db, const ACHAR* name, bool success) override {
+        // TRUSTEDPATHS is an application preference used only while loading a
+        // queued job; it must not make a read-only drawing review look stale.
+        if (success && (!name || toUtf8(name) != "TRUSTEDPATHS")) {
+            gDirty = true;
+            if (db) ++gDatabaseRevisions[db];
+        }
+    }
 };
 static MepDocReactor gDocReactor;
 static MepEdReactor  gEdReactor;
@@ -2464,7 +2673,7 @@ acrxEntryPoint(AcRx::AppMsgCode msg, void* pkt) {
         startReactors();
         writeDocs();   // heartbeat dau tien
         emitEvent("pluginLoaded", std::string("AcadBridge ") + kPluginVersion);
-        acutPrintf(L"\n[AcadBridge 1.5.0] Da nap. Drawing-info + selection control + Raw ObjectARX."
+        acutPrintf(L"\n[AcadBridge 1.6.0] Da nap. Drawing-info + PDF/DataLink inventory + selection control + Raw ObjectARX."
                    L" Lenh: MEPARX / MEPRAW / MEPDOCS / MEPWATCH / MEPUNWATCH.");
         break;
     case AcRx::kUnloadAppMsg:

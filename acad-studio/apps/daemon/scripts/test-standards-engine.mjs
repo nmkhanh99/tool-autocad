@@ -115,6 +115,11 @@ const lisp = buildStandardsScanLisp(profile, "/tmp/scan output.tsv", 123.9);
 assert.match(standardsLibPath(), /standards_lib\.lsp$/);
 assert.match(lisp, /\(defun acadstd:scan /);
 assert.match(lisp, /\(acadstd:scan acadstd:scan-output acadstd:scan-mappings 123\)/);
+assert.match(
+  lisp,
+  /\(acadstd:scan-map\s+stream mapping allSelection \(- maxItems count\)\)/,
+  "mapping scans share one global object budget",
+);
 assert.ok(lisp.includes('"FRAME*,TITLE*"'));
 assert.ok(lisp.includes('"Khung \\"A3\\""'));
 assert.ok(lisp.includes('"A3\\\\TITLE"'));

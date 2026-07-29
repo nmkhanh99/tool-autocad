@@ -45,6 +45,7 @@ try {
     "entity",
     "layer",
     "pid",
+    "review",
     "system",
     "view",
   ];
@@ -64,6 +65,12 @@ try {
   assert.equal(systemTool?.annotations?.readOnlyHint, false);
   const viewTool = tools.find((tool) => tool.name === "view");
   assert.equal(viewTool?.annotations?.readOnlyHint, false);
+  const reviewTool = tools.find((tool) => tool.name === "review");
+  assert.equal(reviewTool?.annotations?.readOnlyHint, true);
+  assert.equal(reviewTool?.annotations?.destructiveHint, false);
+  assert.equal(reviewTool?.annotations?.openWorldHint, false);
+  const reviewData = reviewTool?.inputSchema.properties?.data;
+  assert.ok("profile_id" in (reviewData?.properties ?? {}));
   const entityTool = tools.find((tool) => tool.name === "entity");
   assert.ok("side_point" in (entityTool?.inputSchema.properties ?? {}));
   assert.ok("row_dist" in (entityTool?.inputSchema.properties ?? {}));
@@ -104,7 +111,7 @@ try {
   assert.ok(text && text.type === "text");
   assert.equal(JSON.parse(text.text).ok, true);
 
-  console.log("MCP protocol test passed: 8 tools listed; system(runtime) ok.");
+  console.log("MCP protocol test passed: 9 tools listed; system(runtime) ok.");
 } catch (error) {
   if (serverStderr) {
     console.error(serverStderr);

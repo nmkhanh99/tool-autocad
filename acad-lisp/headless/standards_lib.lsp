@@ -303,7 +303,11 @@
       (acadstd:scan-dimensions stream maxItems)
       (setq allSelection (ssget "_X") count 0)
       (foreach mapping mappings
-        (setq count (+ count (acadstd:scan-map stream mapping allSelection maxItems))))
+        (if (< count maxItems)
+          (setq count
+            (+ count
+               (acadstd:scan-map
+                 stream mapping allSelection (- maxItems count))))))
       (acadstd:line stream (list "END" count))
       (close stream)
       count)))

@@ -43,6 +43,20 @@ type OpenDocument = {
   active: boolean;
 };
 
+type DrawingStandardsDependencies = {
+  acadRunning: typeof acadRunning;
+  dispatchLiveJob: typeof dispatchLiveJob;
+  listOpenDocs: typeof listOpenDocs;
+  requestDrawingInfo: typeof requestDrawingInfo;
+};
+
+const DEFAULT_DEPENDENCIES: DrawingStandardsDependencies = {
+  acadRunning,
+  dispatchLiveJob,
+  listOpenDocs,
+  requestDrawingInfo,
+};
+
 type ScanSession = {
   scanId: string;
   target: string;
@@ -316,12 +330,15 @@ function scanOutputPath(prefix: string): string {
   return join(results, `${prefix}_${randomUUID().slice(0, 12)}.tsv`);
 }
 
-async function resolveDocument(target: unknown): Promise<{
+async function resolveDocument(
+  target: unknown,
+  dependencies: DrawingStandardsDependencies,
+): Promise<{
   document: OpenDocument;
   exactTarget: string;
 }> {
-  if (!(await acadRunning())) throw new Error("AutoCAD chưa chạy");
-  const open = await listOpenDocs(4_000);
+  if (!(await dependencies.acadRunning())) throw new Error("AutoCAD chưa chạy");
+  const open = await dependencies.listOpenDocs(4_000);
   if (!open.alive) throw new Error("Plugin AcadBridge không phản hồi");
   const requested = String(target ?? "").trim();
   const selected = selectOpenDocument(open.docs, requested);
@@ -339,7 +356,7 @@ async function resolveDocument(target: unknown): Promise<{
   return { document, exactTarget };
 }
 
-export function drawingRevision(snapshot: unknown): string {
+export function drawingRevision(snapshot: unknown): string | null {
   const root = asRecord(snapshot);
   const document = asRecord(root.document);
   const instance = typeof document.instance === "string"
@@ -351,7 +368,15 @@ export function drawingRevision(snapshot: unknown): string {
   if (instance && Number.isSafeInteger(revision) && revision >= 0) {
     return `native:${JSON.stringify([instance, revision])}`;
   }
-  return `dbmod:${String(document.dbmod ?? "")}`;
+  return null;
+}
+
+export function isIncompleteSnapshotWarning(value: unknown): boolean {
+  const warning = String(value ?? "");
+  return warning.includes("truncated") ||
+    warning.includes("unavailable") ||
+    warning.endsWith("_failed") ||
+    warning.endsWith("_incomplete");
 }
 
 function cleanupScans(): void {
@@ -601,8 +626,11 @@ export function buildStandardsAction(
   }
 }
 
-export function drawingStandardsRouter(): Router {
+export function drawingStandardsRouter(
+  overrides: Partial<DrawingStandardsDependencies> = {},
+): Router {
   const router = express.Router();
+  const dependencies = { ...DEFAULT_DEPENDENCIES, ...overrides };
 
   router.get("/profiles", (_req, res) => {
     try {
@@ -657,22 +685,107 @@ export function drawingStandardsRouter(): Router {
     let output = "";
     try {
       cleanupScans();
+      const reviewOnly = req.body?.readOnly === true;
       const profile = getProfile(String(req.body?.profileId ?? ""));
       if (!profile) return res.status(404).json({ ok: false, error: "Không tìm thấy profile" });
-      const { document, exactTarget } = await resolveDocument(req.body?.target);
-      const snapshot = await requestDrawingInfo(exactTarget, 10_000);
+      const { document, exactTarget } = await resolveDocument(
+        req.body?.target,
+        dependencies,
+      );
+      if (reviewOnly && !document.active) {
+        return res.status(409).json({
+          ok: false,
+          code: "drawing_not_active",
+          error: "Review read-only chỉ quét bản vẽ đang active; hãy kích hoạt đúng tab rồi thử lại",
+        });
+      }
+      const snapshot = await dependencies.requestDrawingInfo(exactTarget, 10_000);
       if (!snapshot?.ok) throw new Error(snapshot?.error || "Không đọc được hồ sơ bản vẽ");
+      const snapshotDocument = asRecord(snapshot.document);
+      if (reviewOnly && snapshotDocument.active !== true) {
+        return res.status(409).json({
+          ok: false,
+          code: "drawing_not_active",
+          error: "Bản vẽ đích đã mất trạng thái active trước khi quét",
+        });
+      }
+      if (snapshotDocument.quiescent !== true) {
+        return res.status(409).json({
+          ok: false,
+          code: "drawing_busy",
+          error: "Bản vẽ đang thực thi lệnh; hãy đợi AutoCAD quiescent rồi quét lại",
+        });
+      }
+      const expectedDrawingRevision = drawingRevision(snapshot);
+      if (!expectedDrawingRevision) {
+        return res.status(409).json({
+          ok: false,
+          code: "drawing_revision_unavailable",
+          error: "AcadBridge không cung cấp document instance/revision hợp lệ; hãy build và nạp lại plugin",
+        });
+      }
 
       output = scanOutputPath("standards_scan");
       const lisp = buildStandardsScanLisp(profile, output, MAX_SCAN_ITEMS);
-      const job = await dispatchLiveJob(lisp, exactTarget, 25_000);
+      const job = await dependencies.dispatchLiveJob(lisp, exactTarget, 25_000, {
+        readOnly: reviewOnly,
+      });
       if (job.state !== "done" || job.result?.status !== "ok") {
         throw new Error(job.result?.message || `Quét AutoCAD chưa hoàn tất (${job.state})`);
       }
       if (!existsSync(output)) throw new Error("AutoCAD không ghi file kết quả quét");
+      const verifiedSnapshot = await dependencies.requestDrawingInfo(
+        exactTarget,
+        10_000,
+      );
+      if (!verifiedSnapshot?.ok) {
+        throw new Error("Không đọc được trạng thái bản vẽ sau khi quét");
+      }
+      const verifiedDocument = asRecord(verifiedSnapshot.document);
+      if (reviewOnly && verifiedDocument.active !== true) {
+        return res.status(409).json({
+          ok: false,
+          code: "drawing_not_active",
+          error: "Bản vẽ đích đã mất trạng thái active trong lúc quét; kết quả bị loại bỏ",
+        });
+      }
+      if (verifiedDocument.quiescent !== true) {
+        return res.status(409).json({
+          ok: false,
+          code: "drawing_busy",
+          error: "Bản vẽ chưa quiescent sau khi quét; kết quả bị loại bỏ",
+        });
+      }
+      const verifiedDrawingRevision = drawingRevision(verifiedSnapshot);
+      if (!verifiedDrawingRevision) {
+        return res.status(409).json({
+          ok: false,
+          code: "drawing_revision_unavailable",
+          error: "Không xác minh được document instance/revision sau khi quét",
+        });
+      }
+      if (verifiedDrawingRevision !== expectedDrawingRevision) {
+        return res.status(409).json({
+          ok: false,
+          code: "drawing_stale",
+          error: "Bản vẽ đã thay đổi trong lúc quét; kết quả bị loại bỏ",
+        });
+      }
       const parsed: StandardsScan = parseStandardsScanTsv(readFileSync(output, "utf8"));
+      const collectedObjectCount = parsed.objects.length;
       parsed.objects = filterObjectsByMappingBounds(profile, parsed.objects, parsed.settings);
       const issues = auditStandards(profile, snapshot, parsed);
+      const snapshotWarnings = Array.isArray(snapshot.warnings)
+        ? snapshot.warnings.map(String)
+        : [];
+      const incompleteReasons = snapshotWarnings.filter(isIncompleteSnapshotWarning);
+      if (collectedObjectCount >= MAX_SCAN_ITEMS) {
+        incompleteReasons.push("standards_objects_truncated");
+      }
+      if (parsed.dimensions.length >= MAX_SCAN_ITEMS) {
+        incompleteReasons.push("standards_dimensions_truncated");
+      }
+      const uniqueIncompleteReasons = [...new Set(incompleteReasons)];
       const scanId = randomUUID();
       const scannedAt = new Date().toISOString();
       const session: ScanSession = {
@@ -681,7 +794,7 @@ export function drawingStandardsRouter(): Router {
         exactTarget,
         profileId: profile.id,
         profileRevision: profile.revision,
-        drawingRevision: drawingRevision(snapshot),
+        drawingRevision: expectedDrawingRevision,
         scannedAt,
         settings: parsed.settings,
         dimensions: parsed.dimensions,
@@ -699,6 +812,26 @@ export function drawingStandardsRouter(): Router {
         current: {
           settings: parsed.settings,
           document: snapshot.document,
+        },
+        evidence: {
+          source: snapshot.source,
+          drawingRevision: expectedDrawingRevision,
+          snapshotLimits: snapshot.limits,
+          snapshotWarnings,
+          snapshotCounts: snapshot.counts ?? asRecord(snapshot.drawing).counts,
+          completeness: {
+            complete: uniqueIncompleteReasons.length === 0,
+            reasons: uniqueIncompleteReasons,
+          },
+          standardsScan: {
+            maxObjects: MAX_SCAN_ITEMS,
+            maxDimensions: MAX_SCAN_ITEMS,
+            collectedObjectCount,
+            objectCount: parsed.objects.length,
+            dimensionCount: parsed.dimensions.length,
+            objectsTruncated: collectedObjectCount >= MAX_SCAN_ITEMS,
+            dimensionsTruncated: parsed.dimensions.length >= MAX_SCAN_ITEMS,
+          },
         },
         issues,
         objects: parsed.objects,
@@ -739,11 +872,17 @@ export function drawingStandardsRouter(): Router {
           error: "Mẫu quy chuẩn đã đổi; hãy quét lại",
         });
       }
-      const { exactTarget } = await resolveDocument(session.exactTarget);
+      const { exactTarget } = await resolveDocument(
+        session.exactTarget,
+        dependencies,
+      );
       if (exactTarget !== session.exactTarget) {
         throw new Error("Bản vẽ đích không còn khớp lần quét");
       }
-      const currentSnapshot = await requestDrawingInfo(exactTarget, 10_000);
+      const currentSnapshot = await dependencies.requestDrawingInfo(
+        exactTarget,
+        10_000,
+      );
       if (!currentSnapshot?.ok) throw new Error("Không đọc được trạng thái bản vẽ trước khi sửa");
       if (drawingRevision(currentSnapshot) !== session.drawingRevision) {
         return res.status(409).json({
@@ -817,7 +956,7 @@ export function drawingStandardsRouter(): Router {
         `(progn ${programs.join("\n")} ${programs.length})`,
         { mutates: true },
       );
-      const job = await dispatchLiveJob(lisp, exactTarget, 30_000);
+      const job = await dependencies.dispatchLiveJob(lisp, exactTarget, 30_000);
       if (job.state !== "done" || job.result?.status !== "ok") {
         throw new Error(job.result?.message || `Áp dụng chưa hoàn tất (${job.state})`);
       }
@@ -838,7 +977,7 @@ export function drawingStandardsRouter(): Router {
     let areaPath = "";
     try {
       const target = String(req.body?.target ?? "");
-      const { exactTarget } = await resolveDocument(target);
+      const { exactTarget } = await resolveDocument(target, dependencies);
       const action = String(req.body?.action ?? "").trim();
       if (action === "select" || action === "layer") {
         return res.status(409).json({
@@ -855,7 +994,11 @@ export function drawingStandardsRouter(): Router {
       }
       if (action === "area") areaPath = scanOutputPath("standards_area");
       const program = buildStandardsAction(action, handles, params, target, areaPath || undefined);
-      const job = await dispatchLiveJob(program.lisp, exactTarget, action === "area" ? 25_000 : 30_000);
+      const job = await dependencies.dispatchLiveJob(
+        program.lisp,
+        exactTarget,
+        action === "area" ? 25_000 : 30_000,
+      );
       if (job.state !== "done" || job.result?.status !== "ok") {
         throw new Error(job.result?.message || `Thao tác chưa hoàn tất (${job.state})`);
       }
@@ -866,7 +1009,7 @@ export function drawingStandardsRouter(): Router {
       if (action === "area") {
         if (!existsSync(areaPath)) throw new Error("AutoCAD không ghi kết quả diện tích");
         const area = parseAreaTsv(readFileSync(areaPath, "utf8"));
-        const snapshot = await requestDrawingInfo(exactTarget, 8_000);
+        const snapshot = await dependencies.requestDrawingInfo(exactTarget, 8_000);
         const settings = asRecord(asRecord(snapshot?.drawing).settings);
         const factor = metersPerUnit(settings.INSUNITS);
         return res.json({

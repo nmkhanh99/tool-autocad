@@ -461,16 +461,23 @@ function drawingInfoRuntime(
 
 /** Escape chuỗi cho AutoLISP. */
 const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+export const READ_ONLY_JOB_MARKER = ";;; ACAD_BRIDGE_READ_ONLY";
 
 /**
  * Bọc payload LISP: đánh dấu running, bẫy lỗi, ghi result file có sentinel.
  * Uses acad:write-result (primary) with mep:write-result alias for older jobs.
  */
-export function wrapJob(jobId: string, lisp: string, resultsDir?: string): string {
+export function wrapJob(
+  jobId: string,
+  lisp: string,
+  resultsDir?: string,
+  options: { readOnly?: boolean } = {},
+): string {
   resultsDir = resultsDir ?? getResultsDir();
   const res = esc(join(resultsDir, `${jobId}.txt`));
   const run = esc(join(resultsDir, `${jobId}.running`));
-  return `;;; Acad job ${jobId} — AutoCAD Toolkit daemon
+  const marker = options.readOnly ? `${READ_ONLY_JOB_MARKER}\n` : "";
+  return `${marker};;; Acad job ${jobId} — AutoCAD Toolkit daemon
 (setq acad:resfile "${res}")
 (setq mep:resfile acad:resfile)
 (defun acad:write-result (status msg / f)
@@ -580,6 +587,7 @@ export async function dispatchLiveJob(
   lisp: string,
   target: string | undefined,
   wait: number,
+  options: { readOnly?: boolean } = {},
 ) {
   const release = await acquireLiveJobLock();
   let backgroundOwnsRelease = false;
@@ -587,7 +595,7 @@ export async function dispatchLiveJob(
     const jobId = randomUUID().slice(0, 8);
     ensureBridgeDirs();
     writeFileSync(join(getBridgeDir(), "job_target.txt"), target ? String(target) : "", "utf8");
-    atomicWrite(getJobLsp(), wrapJob(jobId, lisp));
+    atomicWrite(getJobLsp(), wrapJob(jobId, lisp, undefined, options));
     const job: JobRecord = { jobId, state: "sent", createdAt: Date.now() };
     activeJob = job;
     const state = await pollResult(job, wait);

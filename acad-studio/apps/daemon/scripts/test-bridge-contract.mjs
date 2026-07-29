@@ -105,6 +105,12 @@ assert(jobPath.endsWith("job.lsp"), "job path ends with job.lsp");
 assert(!jobPath.includes("mep_job"), "primary job path is not mep_job.lsp");
 
 const body = bridge.wrapJob("t1", '(princ "hello")', results);
+const readOnlyBody = bridge.wrapJob(
+  "t2",
+  '(princ "review")',
+  results,
+  { readOnly: true },
+);
 assert(body.includes("acad:write-result"), "wrapJob uses acad:write-result");
 assert(body.includes("acad:resfile"), "wrapJob sets acad:resfile");
 assert(body.includes("==end=="), "wrapJob includes sentinel");
@@ -120,6 +126,11 @@ assert(
 );
 assert(restoredError > payload, "wrapJob restores the caller handler after success");
 assert(!body.includes("(setq *error* nil)"), "wrapJob does not discard the caller error handler");
+assert(
+  !body.startsWith(bridge.READ_ONLY_JOB_MARKER) &&
+    readOnlyBody.startsWith(bridge.READ_ONLY_JOB_MARKER),
+  "wrapJob marks only explicitly read-only jobs",
+);
 
 contract.atomicWriteFile(jobPath, body);
 assert(existsSync(jobPath), "atomicWriteFile creates job.lsp");
@@ -687,6 +698,26 @@ assert(
 );
 assert(arxCpp.includes("snapshotJobFile"), "plugin snapshots queued job bytes before async execution");
 assert(arxCpp.includes("/job-snapshots"), "plugin stores async job snapshots under bridge");
+const runJobBlock = arxCpp.slice(
+  arxCpp.indexOf("static void runJob()"),
+  arxCpp.indexOf("// ============================ FSEvents watcher"),
+);
+assert(
+  runJobBlock.includes("kReadOnlyJobMarker") &&
+    runJobBlock.includes("!readOnly, readOnly, false"),
+  "read-only jobs execute in the target context without activating its tab",
+);
+assert(
+  runJobBlock.includes("vl-catch-all-apply") &&
+    runJobBlock.indexOf('setvar \\"TRUSTEDPATHS\\" mep:tp') >
+      runJobBlock.indexOf("vl-catch-all-apply"),
+  "job loader restores TRUSTEDPATHS even when load fails",
+);
+assert(
+  arxCpp.includes("headerSysVarChanged") &&
+    arxCpp.includes("++gDatabaseRevisions[db]"),
+  "native drawing revision tracks successful header system-variable changes",
+);
 const drawingInfoBlock = arxCpp.slice(
   arxCpp.indexOf("// ============================ drawing-info: snapshot read-only"),
   arxCpp.indexOf("// ============================ chay job"),
@@ -694,6 +725,30 @@ const drawingInfoBlock = arxCpp.slice(
 assert(drawingInfoBlock.length > 0, "drawing-info native snapshot block found");
 assert(!drawingInfoBlock.includes("kForWrite"), "drawing-info snapshot opens no database object for write");
 assert(drawingInfoBlock.includes("pluginVersion"), "drawing-info reports plugin version");
+assert(
+  drawingInfoBlock.includes("AcDbPdfReference::cast") &&
+    drawingInfoBlock.includes("pdfUnderlays") &&
+    drawingInfoBlock.includes("direct_layout_space_references"),
+  "drawing-info inventories direct layout-space PDF underlays through ObjectARX",
+);
+assert(
+  drawingInfoBlock.includes("getDataLinkManager") &&
+    drawingInfoBlock.includes("dataLinks"),
+  "drawing-info inventories native table data links",
+);
+assert(
+  drawingInfoBlock.includes("kUpdateOptionAllowSourceUpdate") &&
+    drawingInfoBlock.includes("sourceUpdateAllowed"),
+  "drawing-info reports the stored data-link source-update permission",
+);
+assert(
+  !drawingInfoBlock.includes("setUpdateOption("),
+  "drawing-info never changes data-link update permissions",
+);
+assert(
+  !drawingInfoBlock.includes("connectionString()"),
+  "drawing-info does not expose raw data-link connection strings",
+);
 assert(arxCpp.includes("AcadBridge"), "plugin product AcadBridge");
 assert(arxCpp.includes("ACADARX"), "plugin registers ACADARX");
 for (const lispFile of ["core.lsp", "mep.lsp"]) {

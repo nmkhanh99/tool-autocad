@@ -1,6 +1,6 @@
 # AutoCAD MCP
 
-`apps/mcp` exposes the reference project's eight consolidated MCP tools while
+`apps/mcp` exposes nine consolidated MCP tools while
 reusing Acad Studio's existing macOS control plane:
 
 ```text
@@ -47,8 +47,8 @@ The adapter can start a detached loopback daemon when none is running. Set
 
 ## Base contract
 
-The server registers exactly eight tools and retains all 72 reference operation
-names.
+The server registers nine tools and retains all 72 reference operation names,
+plus four read-only review operations.
 
 | Tool | Operations |
 |---|---:|
@@ -59,10 +59,11 @@ names.
 | `annotation` | 6 |
 | `pid` | 12 |
 | `view` | 3 |
+| `review` | 4 |
 | `system` | 6 |
 
-The adapter implements all 72 names. `drawing.plot_pdf` uses a strict native
-contract instead of guessing a plot profile:
+The adapter implements all 76 public operation names. `drawing.plot_pdf` uses a
+strict native contract instead of guessing a plot profile:
 
 ```json
 {
@@ -127,6 +128,63 @@ running MCP may need Screen & System Audio Recording permission.
 P&ID insert operations currently create clearly labelled generic geometry.
 Their built-in catalog is a fallback, not a claim that CTO blocks are installed.
 
+## Evidence-first AI review
+
+`review` is read-only and has four operations:
+
+- `capabilities` reports what this build actually exposes for AI review, PDF,
+  and Excel Data Link.
+- `snapshot` returns the bounded, exact-target ObjectARX drawing snapshot.
+- `profiles` lists deterministic standards profiles.
+- `run_standards` runs one explicitly selected profile and returns findings,
+  severity/scope summaries, and evidence provenance.
+
+Typical flow:
+
+```json
+{"operation":"profiles"}
+```
+
+```json
+{
+  "operation": "snapshot",
+  "target": "/absolute/path/drawing.dwg",
+  "include_screenshot": true
+}
+```
+
+```json
+{
+  "operation": "run_standards",
+  "target": "/absolute/path/drawing.dwg",
+  "data": {"profile_id": "default-a3-mm"}
+}
+```
+
+The MCP client model is the reasoning provider; the daemon does not call a
+second AI service. Review never exposes the standards `scanId`, `/apply`, or
+`/action` path. `run_standards` requires the exact target tab to already be
+active and quiescent. Its native job is marked read-only, does not activate
+another tab, and restores the prior `TRUSTEDPATHS` value after loading. The
+scan uses one global 2,000-object evidence budget, requires a native document
+instance/revision, rechecks quiescence, and rejects results if the revision
+changes. Truncation and unavailable-evidence warnings make
+`evidence.completeness.complete` false, so a model must not claim a complete
+pass when the snapshot is incomplete.
+
+AcadBridge 1.6 adds bounded `pdfUnderlays` and `dataLinks` inventories to the
+snapshot using `AcDbPdfReference`/`AcDbPdfDefinition` and
+`AcDbDataLinkManager`/`AcDbDataLink`. It does not expose raw Data Link
+connection strings or workbook cell contents. `sourceUpdateAllowed` reports
+the stored ObjectARX permission bit; it neither writes the workbook nor proves
+that the current source is writable. PDF inventory scope is reported as
+`direct_layout_space_references`; references nested inside block definitions
+are outside this minimal snapshot contract. Native two-way Excel update is
+available in AutoCAD but is not yet exposed as an MCP mutation; it needs
+explicit source-write guards. PDF plot is implemented, while PDF import,
+multi-sheet publish, merge/split, OCR, digital signatures, storage, and
+realtime collaboration are outside this review contract.
+
 ## Safe routing
 
 - Every live mutation requires `target`.
@@ -159,7 +217,7 @@ per-operation capability matrix.
 ```bash
 cd /Users/khanhnm/Desktop/tool-autocad/acad-studio
 
-# TypeScript, AutoLISP builders, plot/backend guards, and real MCP stdio handshake
+# TypeScript, AutoLISP builders, plot/review guards, and real MCP stdio handshake
 pnpm test:mcp
 
 # Real AutoCAD 2027 + AcadBridge test on a new ignored .work DWG

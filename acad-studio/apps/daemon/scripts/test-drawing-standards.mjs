@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +10,7 @@ const {
   buildStandardsAction,
   drawingRevision,
   drawingStandardsRouter,
+  isIncompleteSnapshotWarning,
 } = await import("../src/drawingStandards.ts");
 const { DEFAULT_PROFILE } = await import("../src/standardsProfile.ts");
 
@@ -102,19 +104,20 @@ assert.notEqual(
   firstRevision,
   drawingRevision({ document: { instance: "doc-2", revision: 7, dbmod: 0 } }),
 );
-assert.equal(drawingRevision({ document: { dbmod: 4 } }), "dbmod:4");
-assert.equal(
-  drawingRevision({ document: { instance: "doc-1", dbmod: 4 } }),
-  "dbmod:4",
-);
-assert.equal(
-  drawingRevision({ document: { revision: 7, dbmod: 4 } }),
-  "dbmod:4",
-);
-assert.notEqual(
-  drawingRevision({ document: { dbmod: 4 } }),
-  drawingRevision({ document: { dbmod: 5 } }),
-);
+assert.equal(drawingRevision({ document: { dbmod: 4 } }), null);
+assert.equal(drawingRevision({ document: { instance: "doc-1", dbmod: 4 } }), null);
+assert.equal(drawingRevision({ document: { revision: 7, dbmod: 4 } }), null);
+assert.equal(drawingRevision({ document: {} }), null);
+for (const warning of [
+  "entity_scan_truncated",
+  "entity_iterator_unavailable",
+  "layers_unavailable",
+  "data_link_open_failed",
+  "application_system_variables_incomplete",
+]) {
+  assert.equal(isIncompleteSnapshotWarning(warning), true, warning);
+}
+assert.equal(isIncompleteSnapshotWarning("document_not_quiescent"), false);
 
 const router = drawingStandardsRouter();
 assert.equal(typeof router, "function");
@@ -124,5 +127,218 @@ const routePaths = router.stack
 for (const path of ["/profiles", "/scan", "/apply", "/action"]) {
   assert.ok(routePaths.includes(path), `router includes ${path}`);
 }
+
+async function invokeRoute(testRouter, path, body) {
+  const layer = testRouter.stack.find((item) => item.route?.path === path);
+  const handler = layer?.route?.stack?.[0]?.handle;
+  assert.equal(typeof handler, "function", `handler exists for ${path}`);
+  let status = 200;
+  let payload;
+  const response = {
+    status(code) {
+      status = code;
+      return this;
+    },
+    json(value) {
+      payload = value;
+      return this;
+    },
+  };
+  await handler({
+    body,
+    params: {},
+    get: () => undefined,
+  }, response);
+  return { status, payload };
+}
+
+const activeDocument = {
+  title: "Review.dwg",
+  file: "/tmp/Review.dwg",
+  active: true,
+};
+const baseDependencies = {
+  acadRunning: async () => true,
+  listOpenDocs: async () => ({
+    running: true,
+    alive: true,
+    docs: [activeDocument],
+  }),
+};
+const snapshot = (revision, warnings = []) => ({
+  ok: true,
+  source: { channel: "objectarx", pluginVersion: "1.6.0" },
+  document: {
+    ...activeDocument,
+    quiescent: true,
+    instance: "review-document",
+    revision,
+  },
+  settings: {},
+  tables: { layers: [] },
+  warnings,
+});
+const writeScanResult = (lisp) => {
+  const match = lisp.match(/\(setq acadstd:scan-output "([^"]+)"\)/);
+  assert.ok(match, "standards scan output path is present");
+  writeFileSync(
+    match[1],
+    [
+      "ACAD_STANDARDS\t1",
+      "SETTING\tINSUNITS\t4",
+      "SETTING\tLUNITS\t2",
+      "SETTING\tLUPREC\t0",
+      "END\t0",
+    ].join("\n"),
+    "utf8",
+  );
+};
+
+let rejectedDispatches = 0;
+const inactiveResult = await invokeRoute(
+  drawingStandardsRouter({
+    ...baseDependencies,
+    listOpenDocs: async () => ({
+      running: true,
+      alive: true,
+      docs: [{ ...activeDocument, active: false }],
+    }),
+    requestDrawingInfo: async () => {
+      throw new Error("inactive scan must not request a snapshot");
+    },
+    dispatchLiveJob: async () => {
+      rejectedDispatches++;
+      throw new Error("inactive scan must not dispatch");
+    },
+  }),
+  "/scan",
+  {
+    target: activeDocument.file,
+    profileId: DEFAULT_PROFILE.id,
+    readOnly: true,
+  },
+);
+assert.equal(inactiveResult.status, 409);
+assert.equal(inactiveResult.payload.code, "drawing_not_active");
+
+const busyResult = await invokeRoute(
+  drawingStandardsRouter({
+    ...baseDependencies,
+    requestDrawingInfo: async () => ({
+      ...snapshot(1),
+      document: { ...snapshot(1).document, quiescent: false },
+    }),
+    dispatchLiveJob: async () => {
+      rejectedDispatches++;
+      throw new Error("busy scan must not dispatch");
+    },
+  }),
+  "/scan",
+  {
+    target: activeDocument.file,
+    profileId: DEFAULT_PROFILE.id,
+    readOnly: true,
+  },
+);
+assert.equal(busyResult.status, 409);
+assert.equal(busyResult.payload.code, "drawing_busy");
+
+const missingRevisionResult = await invokeRoute(
+  drawingStandardsRouter({
+    ...baseDependencies,
+    requestDrawingInfo: async () => ({
+      ...snapshot(1),
+      document: {
+        ...activeDocument,
+        quiescent: true,
+      },
+    }),
+    dispatchLiveJob: async () => {
+      rejectedDispatches++;
+      throw new Error("revision-less scan must not dispatch");
+    },
+  }),
+  "/scan",
+  {
+    target: activeDocument.file,
+    profileId: DEFAULT_PROFILE.id,
+    readOnly: true,
+  },
+);
+assert.equal(missingRevisionResult.status, 409);
+assert.equal(
+  missingRevisionResult.payload.code,
+  "drawing_revision_unavailable",
+);
+assert.equal(rejectedDispatches, 0);
+
+let staleSnapshotIndex = 0;
+const staleSnapshots = [snapshot(7), snapshot(8)];
+const staleResult = await invokeRoute(
+  drawingStandardsRouter({
+    ...baseDependencies,
+    requestDrawingInfo: async () =>
+      staleSnapshots[Math.min(staleSnapshotIndex++, staleSnapshots.length - 1)],
+    dispatchLiveJob: async (lisp, _target, _wait, options) => {
+      assert.equal(options?.readOnly, true);
+      writeScanResult(lisp);
+      return { state: "done", result: { status: "ok" } };
+    },
+  }),
+  "/scan",
+  {
+    target: activeDocument.file,
+    profileId: DEFAULT_PROFILE.id,
+    readOnly: true,
+  },
+);
+assert.equal(staleResult.status, 409);
+assert.equal(staleResult.payload.code, "drawing_stale");
+
+let incompleteSnapshotIndex = 0;
+const incompleteSnapshots = [
+  snapshot(9, ["layers_unavailable"]),
+  snapshot(9, ["layers_unavailable"]),
+];
+const incompleteResult = await invokeRoute(
+  drawingStandardsRouter({
+    ...baseDependencies,
+    requestDrawingInfo: async () =>
+      incompleteSnapshots[
+        Math.min(incompleteSnapshotIndex++, incompleteSnapshots.length - 1)
+      ],
+    dispatchLiveJob: async (lisp, _target, _wait, options) => {
+      assert.equal(options?.readOnly, true);
+      writeScanResult(lisp);
+      return { state: "done", result: { status: "ok" } };
+    },
+  }),
+  "/scan",
+  {
+    target: activeDocument.file,
+    profileId: DEFAULT_PROFILE.id,
+    readOnly: true,
+  },
+);
+assert.equal(incompleteResult.status, 200, JSON.stringify(incompleteResult));
+assert.equal(incompleteResult.payload.evidence.completeness.complete, false);
+assert.ok(
+  incompleteResult.payload.evidence.completeness.reasons.includes(
+    "layers_unavailable",
+  ),
+);
+
+const routerSource = readFileSync(
+  fileURLToPath(new URL("../src/drawingStandards.ts", import.meta.url)),
+  "utf8",
+);
+assert.match(routerSource, /snapshotDocument\.quiescent !== true/);
+assert.match(routerSource, /drawing_revision_unavailable/);
+assert.match(routerSource, /reviewOnly/);
+assert.match(
+  routerSource,
+  /verifiedDrawingRevision !== expectedDrawingRevision/,
+);
+assert.match(routerSource, /completeness:\s*\{/);
 
 console.log("✓ drawing standards router: typed actions and routes");
