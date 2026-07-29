@@ -4,7 +4,14 @@
  *
  * Run: cd acad-studio/apps/daemon && npx tsx scripts/test-headless-layer.mjs
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -52,6 +59,8 @@ if (!src) {
 const dwg = join(work, "in.dwg");
 const out = join(work, "out.dwg");
 const layersAfter = join(work, "layers-after.csv");
+rmSync(out, { force: true });
+rmSync(layersAfter, { force: true });
 copyFileSync(src, dwg);
 
 // Prefer absolute mep_lib.lsp (has mep:layers). acad_lib is thin wrapper that may
@@ -73,8 +82,21 @@ const body1 = `(setvar "FILEDIA" 0)(setvar "CMDDIA" 0)
 (princ "\\nACAD_HEADLESS_LAYER_OK\\n")
 `;
 const r1 = await bridge.runHeadless(core, dwg, body1, 120_000);
-assert(r1.stdout.includes("ACAD_HEADLESS_LAYER_OK") || existsSync(out), "headless create layer ran");
+assert(r1.ok, `headless create layer exited cleanly (exit=${String(r1.exit)})`);
+assert(r1.stdout.includes("ACAD_HEADLESS_LAYER_OK"), "headless create layer marker present");
 assert(existsSync(out), "SAVEAS produced out.dwg");
+if (!r1.ok || !existsSync(out)) {
+  writeFileSync(
+    logPath,
+    [
+      "HEADLESS CREATE FAIL",
+      `r1.ok=${r1.ok} exit=${String(r1.exit)}`,
+      `tail=${r1.stdout.slice(-2000)}`,
+    ].join("\n") + "\n",
+    "utf8",
+  );
+  process.exit(1);
+}
 
 // 2) Re-read layers from OUT via shipped helper mep:layers
 const body2 = `(setvar "FILEDIA" 0)(setvar "CMDDIA" 0)
@@ -83,6 +105,7 @@ const body2 = `(setvar "FILEDIA" 0)(setvar "CMDDIA" 0)
 (princ "\\nACAD_HEADLESS_VERIFY_OK\\n")
 `;
 const r2 = await bridge.runHeadless(core, out, body2, 120_000);
+assert(r2.ok, `headless layer verification exited cleanly (exit=${String(r2.exit)})`);
 assert(
   existsSync(layersAfter) || (r2.stdout || "").includes("ACAD_HEADLESS_VERIFY_OK"),
   "layers-after.csv written or verify marker present",
@@ -112,7 +135,10 @@ const summary = [
   `out=${out}`,
   `lib=${libLoad}`,
   `layer line: ${csv.split("\n").find((l) => l.includes(layerName))}`,
-  `r1.ok=${r1.ok} r2.ok=${r2.ok}`,
+  `r1.ok=${r1.ok} exit=${String(r1.exit)}`,
+  `r2.ok=${r2.ok} exit=${String(r2.exit)}`,
+  `r1.tail=${r1.stdout.slice(-1000)}`,
+  `r2.tail=${r2.stdout.slice(-1000)}`,
 ].join("\n");
 writeFileSync(logPath, summary + "\n", "utf8");
 console.log(summary);

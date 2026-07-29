@@ -4,8 +4,8 @@ Domain-agnostic toolkit for reading, analyzing, and editing AutoCAD drawings on 
 
 ```
                     ┌─────────────────────────────┐
-                    │  UI / Agent / CLI (shell)    │
-                    │  acad-studio · cli · chat     │
+                    │ UI / Agent / CLI / MCP        │
+                    │ acad-studio · cli · MCP tools │
                     └──────────────┬──────────────┘
                                    │
               ┌────────────────────┼────────────────────┐
@@ -61,6 +61,9 @@ cd app && python3 cli.py info /path/to/drawing.dwg
 cd acad-studio && pnpm install
 cd apps/daemon && pnpm start   # http://127.0.0.1:8788/api/acad/*
 
+# MCP stdio adapter (reuses the daemon + exact-document routing)
+cd acad-studio && pnpm mcp
+
 # Build ObjectARX plugin (needs ObjectARX 2027 Mac SDK + AutoCAD 2027)
 cd objectarx && bash build.sh
 # → ApplicationPlugins/Acad-Bridge.bundle  (APPLOAD path printed)
@@ -112,6 +115,8 @@ Support Path. The loopback daemon rejects browser origins outside the packaged/d
 ## Docs
 
 - [ACAD Control](acad-studio/ACAD-CONTROL.md) — headless / batch / live
+- [MCP adapter](acad-studio/MCP.md) — 8 tools / 72 base names; 71 implemented,
+  PDF plot fails closed pending a native page-setup contract
 - [ObjectARX capabilities](acad-studio/OBJECTARX-CAPABILITIES.md)
 - [Bridge LISP](acad-lisp/BRIDGE.md)
 - [ObjectARX NOTES](objectarx/NOTES.md) — SDK install + build
@@ -135,4 +140,5 @@ Bridge and plugin names are **Acad-Bridge / AcadBridge**, not MEP.
 
 **Removed from product tree (not toolkit columns):** vendored `open-design-main/`, BIM installer `.exe`, unrelated root notes/media.
 
-Shell packages: `@acad/daemon`, `@acad/web`, `@acad/desktop` (product **Acad Studio**).
+Shell packages: `@acad/daemon`, `@acad/web`, `@acad/desktop`, `@acad/mcp`
+(product **Acad Studio**).

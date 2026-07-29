@@ -11,6 +11,7 @@ gọi `/api/acad/*`, `app/cli.py`, và bridge `~/Acad-Bridge/` — domain-agnost
 | Frontend | **Next.js 16 App Router + React 19 + TS** | `apps/web` |
 | Daemon | **Node 24 · Express · SSE streaming · SQLite** (`node:sqlite`) | `apps/daemon` |
 | Desktop | **Electron 33** shell nạp UI web, quản lý vòng đời | `apps/desktop` |
+| MCP | **SDK v2 · stdio · 8 tools / 72 names (71 implemented)** | `apps/mcp` |
 | Lifecycle | **1 entrypoint** `pnpm tools-dev` | `scripts/tools-dev.mjs` |
 
 > Ghi chú: bảng gốc Open Design ghi `better-sqlite3`; ở đây dùng **`node:sqlite`** built-in của
@@ -26,6 +27,8 @@ pnpm tools-dev        # dựng daemon + web + mở cửa sổ app
 
 - `pnpm tools-dev` — full app desktop (cửa sổ Electron).
 - `pnpm tools-dev web` — chỉ daemon + web, mở trong trình duyệt (không cần Electron).
+- `pnpm mcp` — MCP stdio adapter; cấu hình client và capability matrix tại
+  [`MCP.md`](MCP.md).
 - Đóng cửa sổ hoặc Ctrl+C ở terminal → tắt sạch cả 3 tiến trình.
 
 Yêu cầu: có ít nhất một CLI agent trên PATH — `claude`, `codex`, hoặc `grok`.

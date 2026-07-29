@@ -1052,15 +1052,13 @@ export function acadBridgeRouter(): Router {
       if (!existsSync(scratch)) {
         const bin = findCoreConsole();
         if (bin) {
-          const scr = join(tmpdir(), `mep_new_${randomUUID().slice(0, 6)}.scr`);
-          writeFileSync(scr,
-            `(setvar "FILEDIA" 0)(setvar "CMDDIA" 0)\n(command "_.SAVEAS" "2018" "${scratch.replace(/\\/g, "\\\\")}")\n(princ)\n`,
-            "utf8");
-          await new Promise<void>((resolve) =>
-            execFile(bin, ["/s", scr, "/l", "en-US"], { timeout: 45000 }, () => {
-              try { rmSync(scr, { force: true }); } catch { /* */ }
-              resolve();
-            }));
+          await runHeadless(
+            bin,
+            null,
+            `(setvar "FILEDIA" 0)(setvar "CMDDIA" 0)\n` +
+              `(command "_.SAVEAS" "2018" "${scratch.replace(/\\/g, "\\\\")}")\n(princ)\n`,
+            45_000,
+          );
         }
       }
       const pathToOpen = existsSync(scratch) ? scratch : undefined;
@@ -1090,13 +1088,13 @@ export function acadBridgeRouter(): Router {
     const bin = findCoreConsole();
     if (!bin) return res.status(400).json({ error: "Không thấy AcCoreConsole (cần AutoCAD 2027)" });
     if (!script) return res.status(400).json({ error: "Thiếu 'script' (nội dung .scr)" });
-    const scr = join(tmpdir(), `mep_${randomUUID().slice(0, 8)}.scr`);
-    writeFileSync(scr, script.endsWith("\n") ? script : script + "\n", "utf8");
-    const args = [...(dwg ? ["/i", dwg] : []), "/s", scr, "/l", "en-US"];
-    execFile(bin, args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
-      const out = (stdout || "") + (stderr || "");
-      res.json({ ok: !err, exit: err ? ((err as any).code ?? "killed") : 0, output: out.slice(-4000) });
-    });
+    const run = await runHeadless(
+      bin,
+      dwg ? String(dwg) : null,
+      String(script),
+      Number(timeoutMs) || 120_000,
+    );
+    res.json({ ok: run.ok, exit: run.exit, output: run.stdout.slice(-4000) });
   });
 
   // Kênh 1b — batch: chạy CÙNG một script trên NHIỀU file DWG (headless, tuần tự).
@@ -1106,17 +1104,15 @@ export function acadBridgeRouter(): Router {
     if (!bin) return res.status(400).json({ error: "Không thấy AcCoreConsole" });
     if (!script || !Array.isArray(dwgs) || !dwgs.length)
       return res.status(400).json({ error: "Cần 'script' và mảng 'dwgs'" });
-    const scr = join(tmpdir(), `mep_batch_${randomUUID().slice(0, 8)}.scr`);
-    writeFileSync(scr, script.endsWith("\n") ? script : script + "\n", "utf8");
     const results: any[] = [];
     for (const dwg of dwgs) {
-      const out = await new Promise<any>((resolve) =>
-        execFile(bin, ["/i", dwg, "/s", scr, "/l", "en-US"],
-          { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
-          (err, stdout, stderr) =>
-            resolve({ dwg, ok: !err, exit: err ? ((err as any).code ?? "killed") : 0,
-              tail: ((stdout || "") + (stderr || "")).slice(-500) })));
-      results.push(out);
+      const run = await runHeadless(bin, String(dwg), String(script), Number(timeoutMs) || 120_000);
+      results.push({
+        dwg,
+        ok: run.ok,
+        exit: run.exit,
+        tail: run.stdout.slice(-500),
+      });
     }
     res.json({ count: results.length, ok: results.filter((x) => x.ok).length, results });
   });
@@ -1266,17 +1262,14 @@ end tell`;
       if (!existsSync(scratch)) {
         const bin = findCoreConsole();
         if (bin) {
-          const scr = join(tmpdir(), `mep_new_${randomUUID().slice(0, 6)}.scr`);
           const escPath = scratch.replace(/\\/g, "\\\\");
-          writeFileSync(scr,
+          await runHeadless(
+            bin,
+            null,
             `(setvar "FILEDIA" 0)(setvar "CMDDIA" 0)\n` +
-            `(command "_.SAVEAS" "2018" "${escPath}")\n(princ)\n`, "utf8");
-          await new Promise<void>((resolve) => {
-            execFile(bin, ["/s", scr, "/l", "en-US"], { timeout: 45000 }, () => {
-              try { rmSync(scr, { force: true }); } catch { /* */ }
-              resolve();
-            });
-          });
+              `(command "_.SAVEAS" "2018" "${escPath}")\n(princ)\n`,
+            45_000,
+          );
         }
       }
       if (existsSync(scratch)) {

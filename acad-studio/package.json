@@ -8,6 +8,9 @@
     "daemon": "pnpm --filter @acad/daemon dev",
     "web": "pnpm --filter @acad/web dev",
     "desktop": "pnpm --filter @acad/desktop dev",
+    "mcp": "pnpm --filter @acad/mcp start",
+    "test:mcp": "pnpm --filter @acad/mcp test",
+    "test:mcp:live": "pnpm --filter @acad/mcp test:live",
     "tools-dev": "node scripts/tools-dev.mjs",
     "package": "node scripts/package.mjs"
   },
