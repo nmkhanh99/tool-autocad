@@ -61,12 +61,46 @@ names.
 | `view` | 3 |
 | `system` | 6 |
 
-The adapter implements 71 of the 72 names. `drawing.plot_pdf` remains an
-explicit `supported: false`: a trustworthy live plot needs an exact layout,
-named page setup, installed PDF device/media, serialized native plot engine,
-temporary output, and PDF postcondition. The reference project's macOS backend
-also leaves this operation unsupported; its alternate IPC recipe hard-codes a
-Windows plot profile and does not check that a PDF was created.
+The adapter implements all 72 names. `drawing.plot_pdf` uses a strict native
+contract instead of guessing a plot profile:
+
+```json
+{
+  "operation": "plot_pdf",
+  "target": "/absolute/path/drawing.dwg",
+  "data": {
+    "path": "/absolute/path/output.pdf",
+    "layout": "Layout1",
+    "page_setup": "PDF A3",
+    "overwrite": false
+  }
+}
+```
+
+`target`, an absolute `.pdf` `data.path`, and an exact `data.layout` are
+required. Choose exactly one configuration mode:
+
+- `data.page_setup`: an exact, non-empty named page setup; or
+- `data.device` plus `data.media`: an ephemeral override. It cannot be mixed
+  with `page_setup`.
+
+In device/media mode, optional plot-setting fields are `plot_type:
+"extents" | "layout"` (default `"extents"`), `scale: "fit" | "1:1"`
+(default `"fit"`), `rotation: 0 | 90 | 180 | 270` (default `0`), `centered`
+(default `true`), and `style_sheet`. `plot_type: "layout"` is valid only for a
+paper-space layout and requires `scale: "1:1"`. Named page setups already
+contain these settings, so combining them with any of those overrides is
+rejected instead of silently ignoring input.
+
+Publication controls in either mode are `overwrite` (default `false`) and
+`timeout_ms` from 500 through 600000 (default 120000). `timeout_ms` is a hard
+native completion deadline, not a cancellation guarantee: a timed-out job is
+reported as `uncertain`, keeps its temporary path for diagnosis, and is not
+automatically published or reconciled. Do not retry that output until AutoCAD
+is no longer plotting and the job/temp state has been inspected. Existing
+output is rejected unless overwrite is explicitly enabled. The daemon plots to
+temporary output and reports success only after the PDF postcondition is
+verified.
 
 The formerly ambiguous operations use bounded, deterministic extensions:
 
@@ -107,6 +141,9 @@ Their built-in catalog is a fallback, not a claim that CTO blocks are installed.
 - `drawing.open` and `drawing.create(open=true)` return success only after
   AcadBridge reports the exact full path in the open-document list; a successful
   LaunchServices handoff alone is not treated as proof.
+- `drawing.plot_pdf` sends both the canonical target path and its document
+  instance guard. Invalid/mixed plot configuration and implicit overwrite fail
+  before native plotting starts.
 - A live job that exceeds the synchronous wait is returned as
   `ok: true, payload.completed: false` with its `jobId`, because AutoCAD may
   still apply it. Do not retry it. Reconcile with
@@ -122,7 +159,7 @@ per-operation capability matrix.
 ```bash
 cd /Users/khanhnm/Desktop/tool-autocad/acad-studio
 
-# TypeScript, AutoLISP builders, backend guards, and real MCP stdio handshake
+# TypeScript, AutoLISP builders, plot/backend guards, and real MCP stdio handshake
 pnpm test:mcp
 
 # Real AutoCAD 2027 + AcadBridge test on a new ignored .work DWG

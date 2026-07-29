@@ -64,7 +64,7 @@ static struct timespec  gDrawingInfoReqMtime = {0, 0};
 static std::string      gHiLayer;   // layer dang duoc highlight (de unhighlight khi doi)
 
 static const ACHAR* kGroup = L"ACAD_BRIDGE";
-static const char*  kPluginVersion = "1.4.0";
+static const char*  kPluginVersion = "1.5.0";
 static const uint64_t gDocumentNonce =
     (static_cast<uint64_t>(arc4random()) << 32) | arc4random();
 static uint64_t gNextDocumentInstance = 1;
@@ -2464,7 +2464,7 @@ acrxEntryPoint(AcRx::AppMsgCode msg, void* pkt) {
         startReactors();
         writeDocs();   // heartbeat dau tien
         emitEvent("pluginLoaded", std::string("AcadBridge ") + kPluginVersion);
-        acutPrintf(L"\n[AcadBridge 1.4.0] Da nap. Drawing-info + selection control + Raw ObjectARX."
+        acutPrintf(L"\n[AcadBridge 1.5.0] Da nap. Drawing-info + selection control + Raw ObjectARX."
                    L" Lenh: MEPARX / MEPRAW / MEPDOCS / MEPWATCH / MEPUNWATCH.");
         break;
     case AcRx::kUnloadAppMsg:

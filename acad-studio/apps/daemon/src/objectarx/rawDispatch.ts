@@ -104,6 +104,36 @@ export type InvokeOptions = {
 };
 
 /**
+ * Correlate a single-slot raw.done response with the request that owns it.
+ * Capability id alone is insufficient for repeated ui.plot calls, so callers
+ * may include a job_id which the native final result must echo.
+ */
+export function rawResultMatchesRequest(
+  result: RawResult,
+  id: string,
+  params: RawParams,
+): boolean {
+  if (result.id !== id && result.id !== "*") return false;
+
+  const expectedJobId = String(params.job_id ?? "").trim();
+  if (
+    expectedJobId &&
+    result.payload?.job_id !== expectedJobId
+  ) {
+    return false;
+  }
+
+  if (id === "ed.selection_control") {
+    return (
+      result.id === id &&
+      result.payload?.token === String(params.token ?? "") &&
+      result.payload?.action === String(params.action ?? "")
+    );
+  }
+  return true;
+}
+
+/**
  * Invoke a raw capability. Real path:
  *  1. Catalog validation (disabled → structured blocked)
  *  2. Build raw.job via shipped builder
@@ -175,14 +205,7 @@ export async function invokeRaw(
           // Ignore stale results and the command-context acknowledgement; an
           // interactive command writes a second, final result after it runs.
           if (result.id === id || result.id === "*") {
-            const selectionResponseMatches =
-              id !== "ed.selection_control" ||
-              (
-                result.id === id &&
-                result.payload?.token === String(params.token ?? "") &&
-                result.payload?.action === String(params.action ?? "")
-              );
-            if (!selectionResponseMatches) {
+            if (!rawResultMatchesRequest(result, id, params)) {
               await new Promise((r) => setTimeout(r, 20));
               continue;
             }
@@ -208,7 +231,11 @@ export async function invokeRaw(
         : `Plugin không phản hồi raw.done — khởi động lại AutoCAD để nạp plugin raw, hoặc kiểm tra ${PRODUCT.plugin}.`,
       diagnostic: "plugin_timeout",
       jobBody,
-      payload: { name: cap!.name, api: cap!.api },
+      payload: {
+        name: cap!.name,
+        api: cap!.api,
+        ...(params.job_id ? { job_id: String(params.job_id) } : {}),
+      },
     };
   });
 }

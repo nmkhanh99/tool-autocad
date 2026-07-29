@@ -189,6 +189,67 @@ assert(noAcad.diagnostic === "autocad_not_running", "diagnostic autocad_not_runn
   else process.env.ACAD_BRIDGE_DIR = previousBridgeDir;
 }
 
+assert(
+  rawDispatch.rawResultMatchesRequest(
+    { ok: true, id: "ui.plot", payload: { job_id: "plot-a" } },
+    "ui.plot",
+    { job_id: "plot-a" },
+  ),
+  "ui.plot final result correlates by job_id",
+);
+assert(
+  !rawDispatch.rawResultMatchesRequest(
+    { ok: true, id: "ui.plot", payload: { job_id: "plot-old" } },
+    "ui.plot",
+    { job_id: "plot-new" },
+  ),
+  "ui.plot rejects a stale same-capability result with another job_id",
+);
+
+// Repeated ui.plot calls share one raw.done file. The new request must ignore
+// a fresh same-id result left by another job until its own job_id appears.
+{
+  const previousBridgeDir = process.env.ACAD_BRIDGE_DIR;
+  const pollingBridgeDir = join(SCRATCH, "raw-plot-correlation");
+  mkdirSync(pollingBridgeDir, { recursive: true });
+  process.env.ACAD_BRIDGE_DIR = pollingBridgeDir;
+  const donePath = join(pollingBridgeDir, "raw.done");
+  const pending = rawDispatch.invokeRaw(
+    {
+      id: "ui.plot",
+      target: "/tmp/Drawing1.dwg",
+      params: {
+        job_id: "plot-new",
+        document_instance: "doc-1",
+        output_path: "/tmp/.plot-new.tmp.pdf",
+      },
+    },
+    { acadRunning: true, waitMs: 1_000 },
+  );
+  setTimeout(() => {
+    writeFileSync(donePath, JSON.stringify({
+      ok: true,
+      id: "ui.plot",
+      payload: { job_id: "plot-old", output_path: "/tmp/old.pdf" },
+    }), "utf8");
+  }, 40);
+  setTimeout(() => {
+    writeFileSync(donePath, JSON.stringify({
+      ok: true,
+      id: "ui.plot",
+      payload: { job_id: "plot-new", output_path: "/tmp/.plot-new.tmp.pdf" },
+    }), "utf8");
+  }, 90);
+  const polled = await pending;
+  assert(
+    polled.ok === true &&
+      polled.payload?.job_id === "plot-new",
+    "invokeRaw waits for the matching ui.plot job_id",
+  );
+  if (previousBridgeDir === undefined) delete process.env.ACAD_BRIDGE_DIR;
+  else process.env.ACAD_BRIDGE_DIR = previousBridgeDir;
+}
+
 // ── 5. Catalog export shape ──
 const exp = rawDispatch.exportRawCatalog();
 assert(exp.ok === true, "exportRawCatalog ok");

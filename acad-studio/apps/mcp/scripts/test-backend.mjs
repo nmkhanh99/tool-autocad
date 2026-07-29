@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -41,7 +44,7 @@ const runtime = await backend.call("system", { operation: "runtime" });
 assert.equal(runtime.ok, true);
 assert.equal(runtime.payload.adapter.transport, "stdio");
 assert.equal(runtime.payload.adapter.autostartDaemon, false);
-assert.equal(runtime.payload.capabilities.drawing.plot_pdf.supported, false);
+assert.equal(runtime.payload.capabilities.drawing.plot_pdf.supported, true);
 assert.equal(runtime.payload.capabilities.entity.offset.supported, true);
 assert.equal(runtime.payload.capabilities.entity.array.supported, true);
 assert.equal(runtime.payload.capabilities.block.define.supported, true);
@@ -78,10 +81,21 @@ let documents = [];
 const healthPayload = { ok: false, error: "mock health failure" };
 let openPayload = { ok: false, error: "mock open failure" };
 const jobBodies = [];
+const plotBodies = [];
 let jobPayload = {
   jobId: "a1b2c3d4",
   state: "done",
   result: { status: "ok", message: "entity_id=AA" },
+};
+let plotPayload = {
+  ok: true,
+  jobId: "b1c2d3e4",
+  state: "done",
+  result: {
+    path: "/tmp/mock-output.pdf",
+    bytes: 1024,
+    verified: true,
+  },
 };
 
 const mockDaemon = createServer(async (request, response) => {
@@ -110,6 +124,9 @@ const mockDaemon = createServer(async (request, response) => {
   } else if (request.url === "/api/acad/job") {
     jobBodies.push(body);
     payload = jobPayload;
+  } else if (request.url === "/api/acad/plot-pdf") {
+    plotBodies.push(body);
+    payload = plotPayload;
   } else {
     response.statusCode = 404;
     payload = { error: `Unhandled mock route: ${request.url}` };
@@ -119,6 +136,7 @@ const mockDaemon = createServer(async (request, response) => {
 });
 
 await new Promise((resolve) => mockDaemon.listen(0, "127.0.0.1", resolve));
+const plotTestDir = mkdtempSync(join(tmpdir(), "acad-mcp-plot-"));
 try {
   const address = mockDaemon.address();
   assert.ok(address && typeof address === "object");
@@ -186,8 +204,286 @@ try {
   assert.equal(missing.code, "target_not_found");
 
   documents = [
-    { title: "one.dwg", file: "/tmp/canonical/one.dwg", active: true },
+    {
+      title: "one.dwg",
+      file: "/tmp/canonical/one.dwg",
+      active: true,
+      instance: "document-instance-one",
+    },
   ];
+
+  const plotPath = join(plotTestDir, "page-setup.pdf");
+  const pageSetupPlot = {
+    path: plotPath,
+    layout: "Layout 1",
+    page_setup: "PDF A3",
+  };
+  const missingPlotTarget = await routedBackend.call("drawing", {
+    operation: "plot_pdf",
+    data: pageSetupPlot,
+  });
+  assert.equal(missingPlotTarget.ok, false);
+  assert.equal(missingPlotTarget.code, "target_required");
+
+  const invalidPlotCases = [
+    {
+      data: { ...pageSetupPlot, path: "relative.pdf" },
+      message: /đường dẫn tuyệt đối/i,
+    },
+    {
+      data: { ...pageSetupPlot, path: join(plotTestDir, "output.txt") },
+      message: /\.pdf/i,
+    },
+    {
+      data: { path: plotPath, page_setup: "PDF A3" },
+      message: /layout/i,
+    },
+    {
+      data: { path: plotPath, layout: "Layout 1" },
+      message: /đúng một chế độ/i,
+    },
+    {
+      data: {
+        ...pageSetupPlot,
+        device: "AutoCAD PDF.pc3",
+        media: "ISO_A3",
+      },
+      message: /không được kết hợp/i,
+    },
+    {
+      data: {
+        path: plotPath,
+        layout: "Layout 1",
+        device: "AutoCAD PDF.pc3",
+      },
+      message: /đồng thời device và media/i,
+    },
+    {
+      data: {
+        path: plotPath,
+        layout: "Layout 1",
+        device: "AutoCAD PDF.pc3",
+        media: "ISO_A3",
+        rotation: 45,
+      },
+      message: /rotation/i,
+    },
+    {
+      data: {
+        path: plotPath,
+        layout: "Layout 1",
+        device: "AutoCAD PDF.pc3",
+        media: "ISO_A3",
+        centered: null,
+      },
+      message: /centered/i,
+    },
+    {
+      data: { ...pageSetupPlot, rotation: 90 },
+      message: /page_setup/i,
+    },
+    {
+      data: {
+        path: plotPath,
+        layout: "Layout 1",
+        device: "AutoCAD PDF.pc3",
+        media: "ISO_A3",
+        plot_type: "layout",
+      },
+      message: /1:1/i,
+    },
+    {
+      data: { ...pageSetupPlot, overwrite: "false" },
+      message: /overwrite/i,
+    },
+    {
+      data: { ...pageSetupPlot, timeout_ms: 499 },
+      message: /timeout_ms/i,
+    },
+  ];
+  for (const testCase of invalidPlotCases) {
+    const invalidPlot = await routedBackend.call("drawing", {
+      operation: "plot_pdf",
+      target: "/tmp/canonical/one.dwg",
+      data: testCase.data,
+    });
+    assert.equal(invalidPlot.ok, false);
+    assert.equal(invalidPlot.supported, true);
+    assert.equal(invalidPlot.code, "invalid_input");
+    assert.match(invalidPlot.error, testCase.message);
+  }
+
+  plotPayload = {
+    ok: true,
+    jobId: "b1c2d3e4",
+    state: "done",
+    result: {
+      path: plotPath,
+      bytes: 2048,
+      verified: true,
+    },
+  };
+  const plotted = await routedBackend.call("drawing", {
+    operation: "plot_pdf",
+    target: "one.dwg",
+    data: pageSetupPlot,
+  });
+  assert.equal(plotted.ok, true);
+  assert.equal(plotted.payload.accepted, true);
+  assert.equal(plotted.payload.completed, true);
+  assert.equal(plotted.payload.result.verified, true);
+  assert.deepEqual(plotBodies.at(-1), {
+    target: "/tmp/canonical/one.dwg",
+    documentInstance: "document-instance-one",
+    path: plotPath,
+    layout: "Layout 1",
+    page_setup: "PDF A3",
+    overwrite: false,
+    timeout_ms: 120_000,
+  });
+
+  const explicitPath = join(plotTestDir, "explicit.pdf");
+  plotPayload = {
+    ok: true,
+    jobId: "b1c2d3e5",
+    state: "done",
+    result: {
+      path: explicitPath,
+      bytes: 4096,
+      verified: true,
+    },
+  };
+  const explicitPlot = await routedBackend.call("drawing", {
+    operation: "plot_pdf",
+    target: "/tmp/canonical/one.dwg",
+    data: {
+      path: explicitPath,
+      layout: "Layout 2",
+      device: "AutoCAD PDF.pc3",
+      media: "ISO_A3",
+      plot_type: "layout",
+      scale: "1:1",
+      rotation: 90,
+      centered: false,
+      style_sheet: "monochrome.ctb",
+      overwrite: true,
+      timeout_ms: 500,
+      future_daemon_option: "preserved-by-schema-only",
+    },
+  });
+  assert.equal(explicitPlot.ok, true);
+  assert.deepEqual(plotBodies.at(-1), {
+    target: "/tmp/canonical/one.dwg",
+    documentInstance: "document-instance-one",
+    path: explicitPath,
+    layout: "Layout 2",
+    device: "AutoCAD PDF.pc3",
+    media: "ISO_A3",
+    plot_type: "layout",
+    scale: "1:1",
+    rotation: 90,
+    centered: false,
+    style_sheet: "monochrome.ctb",
+    overwrite: true,
+    timeout_ms: 500,
+  });
+
+  const existingPath = join(plotTestDir, "existing.pdf");
+  writeFileSync(existingPath, "%PDF-1.7\nold\n%%EOF\n");
+  const plotCallsBeforeExisting = plotBodies.length;
+  const existingPlot = await routedBackend.call("drawing", {
+    operation: "plot_pdf",
+    target: "/tmp/canonical/one.dwg",
+    data: {
+      ...pageSetupPlot,
+      path: existingPath,
+    },
+  });
+  assert.equal(existingPlot.ok, false);
+  assert.equal(existingPlot.code, "file_exists");
+  assert.equal(plotBodies.length, plotCallsBeforeExisting);
+
+  plotPayload = {
+    ok: true,
+    jobId: "b1c2d3e6",
+    state: "sent",
+    result: null,
+  };
+  const pendingPlot = await routedBackend.call("drawing", {
+    operation: "plot_pdf",
+    target: "/tmp/canonical/one.dwg",
+    data: pageSetupPlot,
+    include_screenshot: true,
+  });
+  assert.equal(pendingPlot.ok, true);
+  assert.equal(pendingPlot.payload.accepted, true);
+  assert.equal(pendingPlot.payload.completed, false);
+  assert.equal(pendingPlot.payload.screenshot, undefined);
+  assert.match(pendingPlot.warnings.join("\n"), /không gửi lại operation/i);
+
+  plotPayload = {
+    ok: false,
+    jobId: "b1c2d3e7",
+    state: "error",
+    result: {
+      status: "error",
+      code: "plot_configuration_invalid",
+      message: "Named page setup does not exist",
+    },
+  };
+  const failedPlot = await routedBackend.call("drawing", {
+    operation: "plot_pdf",
+    target: "/tmp/canonical/one.dwg",
+    data: pageSetupPlot,
+  });
+  assert.equal(failedPlot.ok, false);
+  assert.equal(failedPlot.supported, true);
+  assert.equal(failedPlot.code, "plot_configuration_invalid");
+  assert.match(failedPlot.error, /page setup/i);
+  assert.equal(failedPlot.payload.jobId, "b1c2d3e7");
+
+  plotPayload = {
+    ok: false,
+    jobId: "b1c2d3e8",
+    state: "timeout",
+    uncertain: true,
+    path: plotPath,
+    result: {
+      status: "timeout",
+      code: "plot_timeout_uncertain",
+      message: "Plugin may still be writing the temporary PDF",
+      payload: {
+        temp_path: join(plotTestDir, ".page-setup.pdf.b1c2d3e8.tmp.pdf"),
+      },
+    },
+  };
+  const timedOutPlot = await routedBackend.call("drawing", {
+    operation: "plot_pdf",
+    target: "/tmp/canonical/one.dwg",
+    data: pageSetupPlot,
+  });
+  assert.equal(timedOutPlot.ok, false);
+  assert.equal(timedOutPlot.code, "plot_timeout_uncertain");
+  assert.equal(timedOutPlot.payload.jobId, "b1c2d3e8");
+  assert.equal(timedOutPlot.payload.uncertain, true);
+  assert.match(
+    timedOutPlot.payload.result.payload.temp_path,
+    /\.tmp\.pdf$/,
+  );
+
+  const missingInstanceDocuments = documents;
+  documents = [
+    { title: "legacy.dwg", file: "/tmp/canonical/legacy.dwg", active: true },
+  ];
+  const missingInstance = await routedBackend.call("drawing", {
+    operation: "plot_pdf",
+    target: "/tmp/canonical/legacy.dwg",
+    data: pageSetupPlot,
+  });
+  assert.equal(missingInstance.ok, false);
+  assert.equal(missingInstance.code, "target_instance_unavailable");
+  documents = missingInstanceDocuments;
+
   const routed = await routedBackend.call("entity", {
     operation: "create_line",
     target: "  one.dwg  ",
@@ -269,6 +565,7 @@ try {
 } finally {
   await new Promise((resolve, reject) =>
     mockDaemon.close((error) => error ? reject(error) : resolve()));
+  rmSync(plotTestDir, { recursive: true, force: true });
 }
 
 const windows = [

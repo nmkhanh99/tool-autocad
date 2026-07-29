@@ -10,6 +10,9 @@
 #include <map>
 #include <sys/stat.h>
 #include <cstdint>
+#include <cerrno>
+#include <algorithm>
+#include <cctype>
 
 #include "windef.h"
 #include <aced.h>
@@ -55,6 +58,14 @@ class AcApStatusBar;
 #include <AcEdInplaceTextEditor.h>
 #include <AcPlPlotFactory.h>
 #include <AcPlPlotEngine.h>
+#include <AcPlPlotInfo.h>
+#include <AcPlPlotInfoValidator.h>
+#include <AcPlPlotConfig.h>
+#include <AcPlPlotProgress.h>
+#include <AcDbLMgr.h>
+#include <dbapserv.h>
+#include <dbplotsettings.h>
+#include <dbplotsetval.h>
 #include <acgi.h>
 #include <dbproxy.h>
 #include <AcCmColor.h>
@@ -1139,6 +1150,668 @@ public:
     const ACHAR* tooltipString() const override { return L"MEP raw osnap"; }
 };
 
+class RawPlotProgress : public AcPlPlotProgress {
+    PlotCancelStatus plotCancel_ = kPlotContinue;
+    SheetCancelStatus sheetCancel_ = kSheetContinue;
+    int plotLower_ = 0;
+    int plotUpper_ = 100;
+    int plotPosition_ = 0;
+    int sheetLower_ = 0;
+    int sheetUpper_ = 100;
+    int sheetPosition_ = 0;
+    bool visible_ = false;
+    AcString status_;
+
+public:
+    bool isPlotCancelled() const override {
+        return plotCancel_ != kPlotContinue;
+    }
+    void setPlotCancelStatus(PlotCancelStatus status) override {
+        plotCancel_ = status;
+    }
+    PlotCancelStatus plotCancelStatus() const override {
+        return plotCancel_;
+    }
+    void setPlotProgressRange(int lower, int upper) override {
+        plotLower_ = lower;
+        plotUpper_ = upper;
+    }
+    void getPlotProgressRange(int& lower, int& upper) const override {
+        lower = plotLower_;
+        upper = plotUpper_;
+    }
+    void setPlotProgressPos(int position) override {
+        plotPosition_ = position;
+    }
+    int plotProgressPos() const override {
+        return plotPosition_;
+    }
+    bool isSheetCancelled() const override {
+        return sheetCancel_ != kSheetContinue;
+    }
+    void setSheetCancelStatus(SheetCancelStatus status) override {
+        sheetCancel_ = status;
+    }
+    SheetCancelStatus sheetCancelStatus() const override {
+        return sheetCancel_;
+    }
+    void setSheetProgressRange(int lower, int upper) override {
+        sheetLower_ = lower;
+        sheetUpper_ = upper;
+    }
+    void getSheetProgressRange(int& lower, int& upper) const override {
+        lower = sheetLower_;
+        upper = sheetUpper_;
+    }
+    void setSheetProgressPos(int position) override {
+        sheetPosition_ = position;
+    }
+    int sheetProgressPos() const override {
+        return sheetPosition_;
+    }
+    bool setIsVisible(bool visible) override {
+        visible_ = visible;
+        return true;
+    }
+    bool isVisible() const override {
+        return visible_;
+    }
+    bool setStatusMsgString(const ACHAR* message) override {
+        status_ = message ? message : L"";
+        return true;
+    }
+    bool getStatusMsgString(AcString& message) const override {
+        message = status_;
+        return true;
+    }
+    void heartbeat() override {}
+};
+
+static std::string lowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
+}
+
+static bool parseRawBool(const std::string& value, bool& result) {
+    const std::string normalized = lowerAscii(value);
+    if (normalized == "true" || normalized == "1") {
+        result = true;
+        return true;
+    }
+    if (normalized == "false" || normalized == "0") {
+        result = false;
+        return true;
+    }
+    return false;
+}
+
+static bool isHexJobId(const std::string& value) {
+    if (value.size() != 8) return false;
+    for (unsigned char c : value) {
+        if (!std::isxdigit(c)) return false;
+    }
+    return true;
+}
+
+static bool hasPdfExtension(const std::string& path) {
+    return path.size() > 4 &&
+           lowerAscii(path.substr(path.size() - 4)) == ".pdf";
+}
+
+static std::string plotProgressPayload(const std::string& jobId,
+                                       const std::string& stage) {
+    return "{\"job_id\":\"" + jsonEsc(jobId) +
+           "\",\"stage\":\"" + jsonEsc(stage) + "\"}";
+}
+
+static bool verifyPdfFile(const std::string& path, long long& bytes,
+                          std::string& error) {
+    bytes = 0;
+    struct stat st;
+    if (lstat(path.c_str(), &st) != 0) {
+        error = "plot output missing";
+        return false;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        error = "plot output is not a regular file";
+        return false;
+    }
+    if (st.st_size < 10) {
+        error = "plot output is too small";
+        return false;
+    }
+    FILE* file = fopen(path.c_str(), "rb");
+    if (!file) {
+        error = "cannot open plot output";
+        return false;
+    }
+    char header[5] = {};
+    const bool headerOk = fread(header, 1, sizeof header, file) == sizeof header &&
+                          memcmp(header, "%PDF-", sizeof header) == 0;
+    const off_t tailSize = st.st_size < 4096 ? st.st_size : 4096;
+    std::vector<char> tail(static_cast<size_t>(tailSize));
+    bool tailOk = false;
+    if (headerOk && fseeko(file, st.st_size - tailSize, SEEK_SET) == 0 &&
+        fread(tail.data(), 1, tail.size(), file) == tail.size()) {
+        static const char marker[] = "%%EOF";
+        tailOk = std::search(
+            tail.begin(), tail.end(), marker, marker + sizeof(marker) - 1) !=
+            tail.end();
+    }
+    fclose(file);
+    if (!headerOk) {
+        error = "plot output has no PDF header";
+        return false;
+    }
+    if (!tailOk) {
+        error = "plot output has no PDF EOF marker";
+        return false;
+    }
+    bytes = static_cast<long long>(st.st_size);
+    return true;
+}
+
+static bool runPdfPlot(const std::map<std::string, std::string>& params,
+                       std::string& payload, std::string& error) {
+    const std::string jobId = pstr(params, "job_id");
+    const std::string target = pstr(params, "__target");
+    const std::string documentInstance = pstr(params, "document_instance");
+    const std::string outputPath = pstr(params, "output_path");
+    const std::string layoutName = pstr(params, "layout");
+    const std::string pageSetup = pstr(params, "page_setup");
+    const std::string device = pstr(params, "device");
+    const std::string media = pstr(params, "media");
+    const bool namedMode = !pageSetup.empty();
+    const bool explicitMode = !device.empty() || !media.empty();
+    const bool hasSettingOverride =
+        params.find("plot_type") != params.end() ||
+        params.find("scale") != params.end() ||
+        params.find("rotation") != params.end() ||
+        params.find("centered") != params.end() ||
+        params.find("style_sheet") != params.end();
+
+    auto fail = [&](const std::string& stage, const std::string& message) {
+        payload = plotProgressPayload(jobId, stage);
+        error = message;
+        return false;
+    };
+    auto failStatus = [&](const std::string& stage, Acad::ErrorStatus status) {
+        return fail(stage, stage + " es=" +
+                           std::to_string(static_cast<int>(status)));
+    };
+
+    payload = plotProgressPayload(jobId, "preflight");
+    if (!isHexJobId(jobId)) return fail("preflight", "invalid job_id");
+    if (target.empty()) return fail("preflight", "missing exact target");
+    if (documentInstance.empty()) {
+        return fail("preflight", "missing document_instance");
+    }
+    if (outputPath.empty() || outputPath.front() != '/' ||
+        !hasPdfExtension(outputPath)) {
+        return fail("preflight", "output_path must be an absolute .pdf path");
+    }
+    if (layoutName.empty()) return fail("preflight", "missing layout");
+    if (namedMode == explicitMode) {
+        return fail(
+            "preflight",
+            "provide exactly one plot configuration: page_setup or device+media");
+    }
+    if (explicitMode && (device.empty() || media.empty())) {
+        return fail("preflight", "explicit plot configuration needs device and media");
+    }
+    if (namedMode && hasSettingOverride) {
+        return fail(
+            "preflight",
+            "named page_setup cannot be combined with plot-setting overrides");
+    }
+    struct stat existing;
+    errno = 0;
+    if (lstat(outputPath.c_str(), &existing) == 0) {
+        return fail("preflight", "temporary plot output already exists");
+    }
+    if (errno != ENOENT) {
+        return fail("preflight", "cannot inspect temporary plot output");
+    }
+    if (acplProcessPlotState() != kNotPlotting) {
+        return fail("plot_busy", "another plot is already in progress");
+    }
+    if (!acDocManager) return fail("preflight", "document manager unavailable");
+    AcApDocument* document = acDocManager->mdiActiveDocument();
+    if (!document || document != acDocManager->curDocument()) {
+        return fail("target_check", "active/current document mismatch");
+    }
+    if (toUtf8(document->docTitle()) != target &&
+        toUtf8(document->fileName()) != target) {
+        return fail("target_check", "active document is not the exact target");
+    }
+    if (acadDocumentInstanceToken(document) != documentInstance) {
+        return fail("target_check", "document_stale: instance changed");
+    }
+    AcDbDatabase* database = document->database();
+    if (!database) return fail("preflight", "target database unavailable");
+
+    AcDbLayoutManager* layoutManager =
+        acdbHostApplicationServices()
+            ? acdbHostApplicationServices()->layoutManager()
+            : nullptr;
+    AcDbPlotSettingsValidator* settingsValidator =
+        acdbHostApplicationServices()
+            ? acdbHostApplicationServices()->plotSettingsValidator()
+            : nullptr;
+    if (!layoutManager || !settingsValidator) {
+        return fail("preflight", "plot services unavailable");
+    }
+    const std::wstring wideLayout = toWide(layoutName);
+    AcDbObjectId layoutId =
+        layoutManager->findLayoutNamed(wideLayout.c_str(), database);
+    if (layoutId.isNull()) return fail("layout", "layout not found");
+
+    AcDbLayout* layout = nullptr;
+    Acad::ErrorStatus status =
+        acdbOpenObject(layout, layoutId, AcDb::kForRead);
+    if (status != Acad::eOk || !layout) return failStatus("open_layout", status);
+    const bool modelType = layout->modelType();
+    AcDbPlotSettings overrides(modelType);
+    status = overrides.copyFrom(layout);
+    layout->close();
+    layout = nullptr;
+    if (status != Acad::eOk) return failStatus("copy_layout_settings", status);
+
+    if (namedMode) {
+        AcDbDictionary* dictionary = nullptr;
+        status = database->getPlotSettingsDictionary(
+            dictionary, AcDb::kForRead);
+        if (status != Acad::eOk || !dictionary) {
+            return failStatus("open_page_setup_dictionary", status);
+        }
+        AcDbObjectId pageSetupId;
+        status = dictionary->getAt(toWide(pageSetup).c_str(), pageSetupId);
+        dictionary->close();
+        if (status != Acad::eOk || pageSetupId.isNull()) {
+            return fail("page_setup", "named page setup not found");
+        }
+        AcDbPlotSettings* storedSettings = nullptr;
+        status = acdbOpenObject(
+            storedSettings, pageSetupId, AcDb::kForRead);
+        if (status != Acad::eOk || !storedSettings) {
+            return failStatus("open_page_setup", status);
+        }
+        if (storedSettings->modelType() != modelType) {
+            storedSettings->close();
+            return fail(
+                "page_setup",
+                "named page setup model/paper type does not match layout");
+        }
+        status = overrides.copyFrom(storedSettings);
+        storedSettings->close();
+        if (status != Acad::eOk) {
+            return failStatus("copy_page_setup", status);
+        }
+    } else {
+        const std::string plotType = lowerAscii(pstr(params, "plot_type", "extents"));
+        const std::string scale = lowerAscii(pstr(params, "scale", "fit"));
+        const std::string rotation = pstr(params, "rotation", "0");
+        bool centered = true;
+        if (!parseRawBool(pstr(params, "centered", "true"), centered)) {
+            return fail("plot_settings", "centered must be true or false");
+        }
+        if (plotType != "extents" && plotType != "layout") {
+            return fail("plot_settings", "plot_type must be extents or layout");
+        }
+        if (scale != "fit" && scale != "1:1") {
+            return fail("plot_settings", "scale must be fit or 1:1");
+        }
+        if (rotation != "0" && rotation != "90" &&
+            rotation != "180" && rotation != "270") {
+            return fail("plot_settings", "rotation must be 0, 90, 180, or 270");
+        }
+        if (plotType == "layout" && scale != "1:1") {
+            return fail("plot_settings", "layout plot_type requires 1:1 scale");
+        }
+        if (plotType == "layout" && modelType) {
+            return fail(
+                "plot_settings",
+                "layout plot_type is only valid for a paper-space layout");
+        }
+
+        settingsValidator->refreshLists(&overrides);
+        status = settingsValidator->setPlotCfgName(
+            &overrides, toWide(device).c_str());
+        if (status != Acad::eOk) return failStatus("set_device", status);
+        settingsValidator->refreshLists(&overrides);
+        AcArray<const ACHAR*> canonicalMedia;
+        status = settingsValidator->canonicalMediaNameList(
+            &overrides, canonicalMedia);
+        if (status != Acad::eOk) {
+            return failStatus("list_canonical_media", status);
+        }
+        bool exactMediaFound = false;
+        std::string mediaHint;
+        for (int index = 0; index < canonicalMedia.length(); ++index) {
+            const std::string candidate =
+                canonicalMedia[index] ? toUtf8(canonicalMedia[index]) : "";
+            if (candidate == media) exactMediaFound = true;
+            if (index < 8 && !candidate.empty()) {
+                if (!mediaHint.empty()) mediaHint += ",";
+                mediaHint += candidate;
+            }
+        }
+        if (!exactMediaFound) {
+            return fail(
+                "set_media",
+                "canonical media is not available for the exact device; "
+                "available=" + mediaHint);
+        }
+        status = settingsValidator->setCanonicalMediaName(
+            &overrides, toWide(media).c_str());
+        if (status != Acad::eOk) return failStatus("set_media", status);
+        status = settingsValidator->setPlotType(
+            &overrides,
+            plotType == "layout"
+                ? AcDbPlotSettings::kLayout
+                : AcDbPlotSettings::kExtents);
+        if (status != Acad::eOk) return failStatus("set_plot_type", status);
+        status = settingsValidator->setUseStandardScale(&overrides, Adesk::kTrue);
+        if (status != Acad::eOk) return failStatus("set_standard_scale", status);
+        status = settingsValidator->setStdScaleType(
+            &overrides,
+            scale == "1:1"
+                ? AcDbPlotSettings::k1_1
+                : AcDbPlotSettings::kScaleToFit);
+        if (status != Acad::eOk) return failStatus("set_scale", status);
+        if (plotType != "layout") {
+            status = settingsValidator->setPlotCentered(
+                &overrides, centered ? Adesk::kTrue : Adesk::kFalse);
+            if (status != Acad::eOk) return failStatus("set_centered", status);
+        }
+        AcDbPlotSettings::PlotRotation plotRotation =
+            AcDbPlotSettings::k0degrees;
+        if (rotation == "90") plotRotation = AcDbPlotSettings::k90degrees;
+        else if (rotation == "180") plotRotation = AcDbPlotSettings::k180degrees;
+        else if (rotation == "270") plotRotation = AcDbPlotSettings::k270degrees;
+        status = settingsValidator->setPlotRotation(&overrides, plotRotation);
+        if (status != Acad::eOk) return failStatus("set_rotation", status);
+        const std::string styleSheet = pstr(params, "style_sheet");
+        if (!styleSheet.empty()) {
+            status = settingsValidator->setCurrentStyleSheet(
+                &overrides, toWide(styleSheet).c_str());
+            if (status != Acad::eOk) return failStatus("set_style_sheet", status);
+        }
+    }
+
+    AcString originalLayout;
+    status = layoutManager->getActiveLayoutName(
+        originalLayout, true, database);
+    if (status != Acad::eOk || originalLayout.isEmpty()) {
+        return failStatus("get_active_layout", status);
+    }
+    AcDbObjectId originalLayoutId =
+        layoutManager->findLayoutNamed(originalLayout.constPtr(), database);
+    if (originalLayoutId.isNull()) {
+        return fail("get_active_layout", "active layout object not found");
+    }
+    AcDbLayout* original = nullptr;
+    status = acdbOpenObject(
+        original, originalLayoutId, AcDb::kForRead);
+    if (status != Acad::eOk || !original) {
+        return failStatus("open_active_layout", status);
+    }
+    const bool originalModelType = original->modelType();
+    original->close();
+
+    resbuf oldBackground = {};
+    if (acedGetVar(L"BACKGROUNDPLOT", &oldBackground) != RTNORM) {
+        return fail("get_backgroundplot", "cannot read BACKGROUNDPLOT");
+    }
+    bool backgroundAlreadyForeground = false;
+    if (oldBackground.restype == RTSHORT) {
+        backgroundAlreadyForeground = oldBackground.resval.rint == 0;
+    } else if (oldBackground.restype == RTLONG) {
+        backgroundAlreadyForeground = oldBackground.resval.rlong == 0;
+    } else {
+        return fail(
+            "get_backgroundplot",
+            "BACKGROUNDPLOT returned an unsupported value type");
+    }
+    resbuf oldCvport = {};
+    const bool haveCvport = acedGetVar(L"CVPORT", &oldCvport) == RTNORM;
+    resbuf foreground = {};
+    foreground.restype = oldBackground.restype;
+    if (foreground.restype == RTSHORT) foreground.resval.rint = 0;
+    else foreground.resval.rlong = 0;
+    bool backgroundChanged = false;
+    bool layoutChanged = false;
+    bool executionOk = false;
+    bool restoreOk = true;
+    std::string stage = "set_backgroundplot";
+    int stageStatus = 0;
+    std::string validatedDevice;
+    std::string validatedMedia;
+    long long outputBytes = 0;
+
+    if (!backgroundAlreadyForeground) {
+        if (acedSetVar(L"BACKGROUNDPLOT", &foreground) != RTNORM) {
+            return fail("set_backgroundplot", "cannot force foreground plotting");
+        }
+        backgroundChanged = true;
+    }
+    status = layoutManager->setCurrentLayout(wideLayout.c_str(), database);
+    if (status != Acad::eOk) {
+        stage = "activate_layout";
+        stageStatus = static_cast<int>(status);
+    } else {
+        layoutChanged = true;
+        if (!modelType) {
+            status = acedPspace();
+            if (status != Acad::eOk) {
+                stage = "activate_paper_space";
+                stageStatus = static_cast<int>(status);
+            }
+        }
+    }
+
+    AcPlPlotEngine* engine = nullptr;
+    RawPlotProgress progress;
+    AcPlPlotInfo plotInfo;
+    AcPlPlotPageInfo pageInfo;
+    bool plotBegun = false;
+    bool documentBegun = false;
+    bool pageBegun = false;
+    bool graphicsBegun = false;
+    if (stageStatus == 0) {
+        plotInfo.setLayout(layoutId);
+        plotInfo.setOverrideSettings(&overrides);
+        AcPlPlotInfoValidator validator;
+        validator.setMediaMatchingPolicy(
+            AcPlPlotInfoValidator::kMatchEnabled);
+        status = validator.validate(plotInfo);
+        if (status != Acad::eOk || !plotInfo.isValidated()) {
+            stage = "validate_plot_info";
+            stageStatus = static_cast<int>(status);
+        } else {
+            const AcPlPlotConfig* config = plotInfo.validatedConfig();
+            const AcDbPlotSettings* settings = plotInfo.validatedSettings();
+            const ACHAR* extension = nullptr;
+            if (!config ||
+                config->plotToFileCapability() ==
+                    AcPlPlotConfig::kNoPlotToFile ||
+                config->getDefaultFileExtension(extension) != Acad::eOk ||
+                !extension ||
+                lowerAscii(toUtf8(extension)) != ".pdf") {
+                stage = "validate_pdf_device";
+                error = "validated plot device is not a PDF file device";
+                stageStatus = -1;
+            } else if (!settings) {
+                stage = "validate_plot_settings";
+                error = "validated plot settings unavailable";
+                stageStatus = -1;
+            } else {
+                const ACHAR* configName = nullptr;
+                AcString mediaName;
+                settings->getPlotCfgName(configName);
+                settings->getCanonicalMediaName(mediaName);
+                validatedDevice = configName ? toUtf8(configName) : "";
+                validatedMedia = toUtf8(mediaName.constPtr());
+                if (!namedMode &&
+                    (validatedDevice != device || validatedMedia != media)) {
+                    stage = "validate_exact_device_media";
+                    error =
+                        "validated device/media differs from the exact request";
+                    stageStatus = -1;
+                }
+            }
+        }
+
+        if (stageStatus == 0) {
+            status = AcPlPlotFactory::createPublishEngine(engine);
+            if (status != Acad::eOk || !engine) {
+                stage = "create_publish_engine";
+                stageStatus = static_cast<int>(status);
+            }
+        }
+        if (stageStatus == 0) {
+            progress.setPlotProgressRange(0, 100);
+            progress.setPlotProgressPos(0);
+            status = engine->beginPlot(&progress);
+            if (status == Acad::eOk) plotBegun = true;
+            else {
+                stage = "begin_plot";
+                stageStatus = static_cast<int>(status);
+            }
+        }
+        if (stageStatus == 0) {
+            const ACHAR* documentName = document->fileName();
+            if (!documentName || !*documentName) documentName = document->docTitle();
+            status = engine->beginDocument(
+                plotInfo, documentName, nullptr, 1, true,
+                toWide(outputPath).c_str());
+            if (status == Acad::eOk) documentBegun = true;
+            else {
+                stage = "begin_document";
+                stageStatus = static_cast<int>(status);
+            }
+        }
+        if (stageStatus == 0) {
+            progress.setSheetProgressRange(0, 100);
+            progress.setSheetProgressPos(0);
+            status = engine->beginPage(pageInfo, plotInfo, true);
+            if (status == Acad::eOk) pageBegun = true;
+            else {
+                stage = "begin_page";
+                stageStatus = static_cast<int>(status);
+            }
+        }
+        if (stageStatus == 0) {
+            status = engine->beginGenerateGraphics();
+            if (status == Acad::eOk) graphicsBegun = true;
+            else {
+                stage = "begin_generate_graphics";
+                stageStatus = static_cast<int>(status);
+            }
+        }
+        if (stageStatus == 0) {
+            status = engine->endGenerateGraphics();
+            graphicsBegun = false;
+            if (status != Acad::eOk) {
+                stage = "end_generate_graphics";
+                stageStatus = static_cast<int>(status);
+            }
+        }
+        if (stageStatus == 0) {
+            status = engine->endPage();
+            pageBegun = false;
+            progress.setSheetProgressPos(100);
+            if (status != Acad::eOk) {
+                stage = "end_page";
+                stageStatus = static_cast<int>(status);
+            }
+        }
+        if (stageStatus == 0) {
+            status = engine->endDocument();
+            documentBegun = false;
+            if (status != Acad::eOk) {
+                stage = "end_document";
+                stageStatus = static_cast<int>(status);
+            }
+        }
+        if (stageStatus == 0) {
+            status = engine->endPlot();
+            plotBegun = false;
+            progress.setPlotProgressPos(100);
+            if (status != Acad::eOk) {
+                stage = "end_plot";
+                stageStatus = static_cast<int>(status);
+            }
+        }
+    }
+
+    if (engine) {
+        if (graphicsBegun) engine->endGenerateGraphics();
+        if (pageBegun) engine->endPage();
+        if (documentBegun) engine->endDocument();
+        if (plotBegun) engine->endPlot();
+        engine->destroy();
+        engine = nullptr;
+    }
+    if (stageStatus == 0) {
+        std::string pdfError;
+        if (!verifyPdfFile(outputPath, outputBytes, pdfError)) {
+            stage = "verify_pdf";
+            error = pdfError;
+            stageStatus = -1;
+        } else {
+            executionOk = true;
+        }
+    } else if (error.empty()) {
+        error = stage + " es=" + std::to_string(stageStatus);
+    }
+
+    if (layoutChanged) {
+        const Acad::ErrorStatus restoreLayout =
+            layoutManager->setCurrentLayout(originalLayout.constPtr(), database);
+        if (restoreLayout != Acad::eOk) {
+            restoreOk = false;
+            error += (error.empty() ? "" : "; ") +
+                     std::string("restore layout es=") +
+                     std::to_string(static_cast<int>(restoreLayout));
+        } else if (!originalModelType && haveCvport) {
+            const Acad::ErrorStatus restoreSpace =
+                oldCvport.resval.rint > 1 ? acedMspace() : acedPspace();
+            if (restoreSpace != Acad::eOk) {
+                restoreOk = false;
+                error += (error.empty() ? "" : "; ") +
+                         std::string("restore viewport es=") +
+                         std::to_string(static_cast<int>(restoreSpace));
+            }
+        }
+    }
+    if (backgroundChanged &&
+        acedSetVar(L"BACKGROUNDPLOT", &oldBackground) != RTNORM) {
+        restoreOk = false;
+        error += (error.empty() ? "" : "; ") +
+                 std::string("restore BACKGROUNDPLOT failed");
+    }
+
+    if (!executionOk || !restoreOk) {
+        payload = plotProgressPayload(jobId, restoreOk ? stage : "restore_state");
+        if (error.empty()) error = "plot failed";
+        return false;
+    }
+    payload =
+        "{\"job_id\":\"" + jsonEsc(jobId) +
+        "\",\"stage\":\"complete\"" +
+        ",\"path\":\"" + jsonEsc(outputPath) +
+        "\",\"layout\":\"" + jsonEsc(layoutName) +
+        "\",\"page_setup\":\"" + jsonEsc(pageSetup) +
+        "\",\"device\":\"" + jsonEsc(validatedDevice) +
+        "\",\"media\":\"" + jsonEsc(validatedMedia) +
+        "\",\"bytes\":" + std::to_string(outputBytes) +
+        ",\"verified\":true}";
+    return true;
+}
+
 static void cmdSelectionControl() {
     const std::string id = gPendingInteractiveId;
     if (id != "ed.selection_control") {
@@ -1336,16 +2009,7 @@ static void cmdRawInteractive() {
             } else { if (bt) bt->close(); err = "model space"; }
         }
     } else if (id == "ui.plot") {
-        AcPlPlotEngine* eng = nullptr;
-        Acad::ErrorStatus es = AcPlPlotFactory::createPublishEngine(eng);
-        if (es == Acad::eOk && eng) {
-            eng->destroy();
-            payload = "{\"createPublishEngine\":true,\"destroy\":true}";
-            ok = true;
-        } else {
-            err = "createPublishEngine es=" + std::to_string((int)es);
-            payload = "{\"createPublishEngine\":false,\"es\":" + std::to_string((int)es) + "}";
-        }
+        ok = runPdfPlot(gPendingParams, payload, err);
     } else if (id == "ui.viewcube") {
         AcEdSteeringWheel* wheel = acedCreateSteeringWheel();
         bool wheelOk = wheel != nullptr;
@@ -1536,6 +2200,7 @@ static void execRawJob(const std::string& raw) {
         }
         gPendingInteractiveId = id;
         gPendingParams = params;
+        gPendingParams["__target"] = target;
         // Tell client we're waiting on user; command writes final result
         writeRawResult(true, id,
                        "{\"status\":\"awaiting_user\",\"command\":\"MEPRAW\"}",

@@ -12,6 +12,7 @@ import {
   rmSync,
   readdirSync,
   renameSync,
+  symlinkSync,
   utimesSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
@@ -31,6 +32,7 @@ const bridge = await import("../src/acadBridge.ts");
 const ctrl = await import("../src/acadControl.ts");
 const rawJob = await import("../src/objectarx/rawJob.ts");
 const rawDispatch = await import("../src/objectarx/rawDispatch.ts");
+const plotPdf = await import("../src/plotPdf.ts");
 
 let failed = 0;
 const lines = [];
@@ -251,6 +253,255 @@ assert(catalog.ok && catalog.capabilities?.length > 0, "exportRawCatalog has cap
 const layerCap = catalog.capabilities.find((c) => c.id === "db.layer");
 assert(layerCap, "catalog includes generic db.layer");
 
+// ── Native PDF plot request + publication helpers ──
+const plotScratch = join(SCRATCH, "plot-pdf");
+rmSync(plotScratch, { recursive: true, force: true });
+mkdirSync(plotScratch, { recursive: true });
+const plotOutput = join(plotScratch, "output.pdf");
+const validPlotRequest = plotPdf.validatePlotPdfRequest({
+  target: "/tmp/Plan.dwg",
+  documentInstance: "doc-instance-1",
+  path: plotOutput,
+  layout: "Model",
+  device: "AutoCAD PDF (General Documentation).pc3",
+  media: "ISO_A4_(210.00_x_297.00_MM)",
+  timeout_ms: 500,
+  wait_ms: 500,
+});
+assert(validPlotRequest.plotType === "extents", "plot defaults plot_type=extents");
+assert(validPlotRequest.scale === "fit", "plot defaults scale=fit");
+assert(validPlotRequest.rotation === 0, "plot defaults rotation=0");
+assert(validPlotRequest.centered === true, "plot defaults centered=true");
+assert(validPlotRequest.overwrite === false, "plot defaults overwrite=false");
+assert(validPlotRequest.config.mode === "device_media", "plot accepts exact device+media mode");
+
+const pageSetupPlot = plotPdf.validatePlotPdfRequest({
+  target: "/tmp/Plan.dwg",
+  documentInstance: "doc-instance-1",
+  path: join(plotScratch, "page-setup.pdf"),
+  layout: "Layout1",
+  page_setup: "A4 PDF",
+});
+assert(pageSetupPlot.config.mode === "page_setup", "plot accepts exact page_setup mode");
+
+function plotValidationCode(body) {
+  try {
+    plotPdf.validatePlotPdfRequest(body);
+    return "";
+  } catch (error) {
+    return error?.code || "";
+  }
+}
+assert(
+  plotValidationCode({
+    target: "/tmp/Plan.dwg",
+    documentInstance: "doc-instance-1",
+    path: plotOutput,
+    layout: "Model",
+    page_setup: "A4 PDF",
+    device: "DWG To PDF.pc3",
+    media: "ISO_A4_(210.00_x_297.00_MM)",
+  }) === "invalid_plot_config",
+  "plot rejects mixed page_setup and device+media",
+);
+assert(
+  plotValidationCode({
+    target: "/tmp/Plan.dwg",
+    documentInstance: "doc-instance-1",
+    path: plotOutput,
+    layout: "Model",
+    device: "DWG To PDF.pc3",
+  }) === "invalid_plot_config",
+  "plot requires both device and media",
+);
+assert(
+  plotValidationCode({
+    target: "/tmp/Plan.dwg",
+    documentInstance: "doc-instance-1",
+    path: "relative.pdf",
+    layout: "Model",
+    page_setup: "A4 PDF",
+  }) === "invalid_output_path",
+  "plot rejects relative PDF output",
+);
+assert(
+  plotValidationCode({
+    target: "/tmp/Plan.dwg",
+    documentInstance: "doc-instance-1",
+    path: plotOutput,
+    layout: "Model",
+    page_setup: "A4 PDF",
+    rotation: 45,
+  }) === "invalid_plot_config",
+  "plot rejects overrides mixed with a named page setup",
+);
+assert(
+  plotValidationCode({
+    target: "/tmp/Plan.dwg",
+    documentInstance: "doc-instance-1",
+    path: plotOutput,
+    layout: "Model",
+    device: "DWG To PDF.pc3",
+    media: "ISO_A4_(210.00_x_297.00_MM)",
+    rotation: 45,
+  }) === "invalid_request",
+  "plot rejects unsupported rotation in device/media mode",
+);
+assert(
+  plotValidationCode({
+    target: "/tmp/Plan.dwg",
+    documentInstance: "doc-instance-1",
+    path: plotOutput,
+    layout: "Layout1",
+    device: "DWG To PDF.pc3",
+    media: "ISO_A4_(210.00_x_297.00_MM)",
+    plot_type: "layout",
+  }) === "invalid_plot_config",
+  "layout plot type requires explicit 1:1 scale",
+);
+assert(
+  plotValidationCode({
+    target: "/tmp/Plan.dwg",
+    documentInstance: "doc-instance-1",
+    path: plotOutput,
+    layout: "Model",
+    page_setup: "A4 PDF",
+    timeout_ms: 499,
+  }) === "invalid_request",
+  "plot enforces timeout lower bound",
+);
+assert(
+  plotValidationCode({
+    target: "/tmp/Plan.dwg",
+    documentInstance: "doc-instance-1",
+    path: plotOutput,
+    layout: "Model",
+    page_setup: "A4 PDF",
+    unknown_option: true,
+  }) === "invalid_request",
+  "plot rejects unknown request fields",
+);
+
+const tempOutput = plotPdf.plotTempPath(plotOutput, "abcd1234");
+assert(tempOutput.endsWith(".pdf"), "plot sibling temp still ends with .pdf");
+assert(dirname(tempOutput) === dirname(plotOutput), "plot temp is in destination directory");
+const rawPlotParams = plotPdf.buildPlotRawParams(
+  validPlotRequest,
+  "abcd1234",
+  tempOutput,
+);
+assert(rawPlotParams.job_id === "abcd1234", "plot raw params include job_id");
+assert(
+  rawPlotParams.document_instance === "doc-instance-1",
+  "plot raw params include document_instance",
+);
+assert(rawPlotParams.output_path === tempOutput, "plot raw params use sibling temp output");
+assert(rawPlotParams.layout === "Model", "plot raw params include exact layout");
+assert(
+  rawPlotParams.device === "AutoCAD PDF (General Documentation).pc3" &&
+    rawPlotParams.media === "ISO_A4_(210.00_x_297.00_MM)",
+  "plot raw params preserve device+media",
+);
+assert(
+  plotPdf.drawingInfoLayoutNames({
+    tables: {
+      layouts: [
+        { name: "Model", model: true },
+        { name: "Layout1", model: false },
+      ],
+    },
+  }).join(",") === "Model,Layout1",
+  "plot extracts exact layout names from drawing-info",
+);
+assert(
+  plotPdf.drawingInfoLayouts({
+    tables: {
+      layouts: [
+        { name: "Model", model: true },
+        { name: "Layout1", model: false },
+      ],
+    },
+  }).find((layout) => layout.name === "Model")?.model === true,
+  "plot preserves the model/paper layout discriminator",
+);
+
+const minimalPdf = "%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n";
+plotPdf.assertPlotDestination(plotOutput, tempOutput, false);
+writeFileSync(tempOutput, minimalPdf, "latin1");
+assert(plotPdf.verifyPdfFile(tempOutput).sizeBytes > 11, "plot verifies PDF header and EOF");
+const published = plotPdf.publishPlotPdf(tempOutput, plotOutput, false);
+assert(published.sizeBytes > 11, "plot no-clobber publication verifies final PDF");
+assert(existsSync(plotOutput) && !existsSync(tempOutput), "plot no-clobber uses temp then publishes");
+
+const collisionTemp = plotPdf.plotTempPath(plotOutput, "collision");
+writeFileSync(collisionTemp, minimalPdf, "latin1");
+let collisionCode = "";
+try {
+  plotPdf.publishPlotPdf(collisionTemp, plotOutput, false);
+} catch (error) {
+  collisionCode = error?.code || "";
+}
+assert(collisionCode === "output_exists", "plot no-clobber rejects publication race");
+assert(readFileSync(plotOutput, "latin1") === minimalPdf, "plot collision preserves existing output");
+
+const overwriteTemp = plotPdf.plotTempPath(plotOutput, "overwrite");
+plotPdf.assertPlotDestination(plotOutput, overwriteTemp, true);
+writeFileSync(overwriteTemp, minimalPdf.replace("1 0 obj", "2 0 obj"), "latin1");
+plotPdf.publishPlotPdf(overwriteTemp, plotOutput, true);
+assert(
+  readFileSync(plotOutput, "latin1").includes("2 0 obj"),
+  "plot overwrite atomically replaces a regular output",
+);
+
+const danglingOutput = join(plotScratch, "dangling.pdf");
+symlinkSync(join(plotScratch, "missing-target.pdf"), danglingOutput);
+let danglingCode = "";
+try {
+  plotPdf.assertPlotDestination(
+    danglingOutput,
+    plotPdf.plotTempPath(danglingOutput, "dangling"),
+    true,
+  );
+} catch (error) {
+  danglingCode = error?.code || "";
+}
+assert(
+  danglingCode === "invalid_output_target",
+  "plot overwrite rejects a dangling destination symlink",
+);
+
+const invalidPdf = join(plotScratch, "invalid.pdf");
+writeFileSync(invalidPdf, "not a pdf", "utf8");
+let invalidPdfCode = "";
+try {
+  plotPdf.verifyPdfFile(invalidPdf);
+} catch (error) {
+  invalidPdfCode = error?.code || "";
+}
+assert(invalidPdfCode === "plot_output_invalid_pdf", "plot rejects non-PDF output");
+assert(bridge.plotJobHttpStatus("pending") === 202, "pending plot job returns HTTP 202");
+assert(bridge.plotJobHttpStatus("done") === 200, "completed plot job returns HTTP 200");
+assert(bridge.plotJobHttpStatus("error") === 200, "failed plot job preserves structured body over HTTP 200");
+assert(bridge.plotJobHttpStatus("timeout") === 200, "timed-out plot job preserves uncertain body over HTTP 200");
+const failedPlotPayload = bridge.plotJobPayload({
+  jobId: "abcd1234",
+  kind: "plot_pdf",
+  state: "timeout",
+  createdAt: Date.now(),
+  uncertain: true,
+  outputPath: plotOutput,
+  result: {
+    status: "timeout",
+    code: "plot_timeout_uncertain",
+    message: "Plugin vẫn có thể đang ghi PDF",
+  },
+});
+assert(
+  failedPlotPayload.code === "plot_timeout_uncertain" &&
+    failedPlotPayload.error === "Plugin vẫn có thể đang ghi PDF",
+  "plot job promotes structured code/error for the MCP backend",
+);
+
 // Dry-run invoke (no CAD) — shipped path
 const dry = await rawDispatch.invokeRaw(
   { id: "db.layer", params: { name: "X", aci: 1 } },
@@ -288,6 +539,61 @@ assert(typeof dry === "object" && dry.id === "db.layer", "dry invoke has id");
   assert(
     status === 409 && payload?.code === "confirmation_required",
     "public raw invoke cannot bypass selection confirmation",
+  );
+}
+
+// Generic live raw invocation must not bypass plot's guarded publication path.
+{
+  const router = bridge.acadBridgeRouter();
+  const layer = router.stack.find((item) =>
+    item.route?.path === "/raw/invoke" && item.route.methods.post);
+  let status = 200;
+  let payload;
+  const response = {
+    status(value) {
+      status = value;
+      return response;
+    },
+    json(value) {
+      payload = value;
+      return response;
+    },
+  };
+  await layer.route.stack[0].handle({
+    body: {
+      id: "ui.plot",
+      target: "/tmp/Plan.dwg",
+      params: { output_path: "/tmp/unguarded.pdf" },
+    },
+  }, response);
+  assert(
+    status === 409 && payload?.code === "dedicated_endpoint_required",
+    "public raw invoke cannot bypass guarded /plot-pdf",
+  );
+}
+
+// The dedicated route validates synchronously before touching AutoCAD.
+{
+  const router = bridge.acadBridgeRouter();
+  const layer = router.stack.find((item) =>
+    item.route?.path === "/plot-pdf" && item.route.methods.post);
+  assert(layer, "plot-pdf route exists");
+  let status = 200;
+  let payload;
+  const response = {
+    status(value) {
+      status = value;
+      return response;
+    },
+    json(value) {
+      payload = value;
+      return response;
+    },
+  };
+  await layer.route.stack[0].handle({ body: {} }, response);
+  assert(
+    status === 400 && payload?.code === "invalid_request",
+    "plot-pdf rejects invalid request before live dispatch",
   );
 }
 

@@ -51,6 +51,17 @@ import {
   resolveBridgeDir,
   resultsDir as resultsDirOf,
 } from "./bridgeContract.js";
+import {
+  PlotPdfFileError,
+  PlotPdfValidationError,
+  assertPlotDestination,
+  buildPlotRawParams,
+  drawingInfoLayouts,
+  plotTempPath,
+  publishPlotPdf,
+  validatePlotPdfRequest,
+  type PlotPdfRequest,
+} from "./plotPdf.js";
 
 /** Headless AutoLISP helper library (generic core; plumbing profile optional). */
 export function acadLib(): string {
@@ -484,11 +495,22 @@ ${lisp}
 `;
 }
 
+interface JobResult {
+  status: string;
+  message: string;
+  code?: string;
+  payload?: Record<string, unknown>;
+}
+
 interface JobRecord {
   jobId: string;
   state: "pending" | "sent" | "done" | "error" | "timeout";
   createdAt: number;
-  result?: { status: string; message: string };
+  kind?: "live" | "plot_pdf";
+  result?: JobResult;
+  uncertain?: boolean;
+  outputPath?: string;
+  tempPath?: string;
 }
 let activeJob: JobRecord | null = null;
 const history: JobRecord[] = [];
@@ -589,6 +611,209 @@ export async function dispatchLiveJob(
   } finally {
     if (!backgroundOwnsRelease) release();
   }
+}
+
+export function plotJobPayload(job: JobRecord) {
+  const completed =
+    job.state === "done" ||
+    job.state === "error" ||
+    job.state === "timeout";
+  const failed = job.state === "error" || job.state === "timeout";
+  return {
+    ok: job.state === "done" || !completed,
+    accepted: true,
+    completed,
+    jobId: job.jobId,
+    kind: "plot_pdf",
+    state: job.state,
+    uncertain: job.uncertain === true,
+    path: job.outputPath,
+    result: job.result ?? null,
+    ...(failed
+      ? {
+          code:
+            job.result?.code ||
+            (job.state === "timeout"
+              ? "plot_timeout_uncertain"
+              : "plot_failed"),
+          error:
+            job.result?.message ||
+            `Plot job kết thúc với state=${job.state}`,
+        }
+      : {}),
+  };
+}
+
+export function plotJobHttpStatus(state: JobRecord["state"]): number {
+  if (state === "pending" || state === "sent") return 202;
+  // A job already exists and must remain pollable/correlated even when native
+  // execution failed or timed out. Transport-level success preserves job_id
+  // and uncertain/temp details for the MCP client.
+  return 200;
+}
+
+function openPlotDocument(
+  documents: readonly OpenAcadDocument[],
+  request: PlotPdfRequest,
+): OpenAcadDocument {
+  const matches = documents.filter((document) => document.file === request.target);
+  if (matches.length > 1) {
+    throw new PlotPdfValidationError(
+      "target_ambiguous",
+      "Có nhiều document cùng exact file path",
+      409,
+    );
+  }
+  const document = matches[0];
+  if (!document) {
+    throw new PlotPdfValidationError(
+      "target_not_open",
+      "target không phải exact file path của một bản vẽ đang mở",
+      404,
+    );
+  }
+  if (!document.instance || document.instance !== request.documentInstance) {
+    throw new PlotPdfValidationError(
+      "document_stale",
+      "documentInstance không khớp instance hiện đang mở",
+      409,
+    );
+  }
+  return document;
+}
+
+function snapshotDocument(
+  snapshot: DrawingInfoPluginSnapshot,
+): Record<string, unknown> | null {
+  const document = snapshot.document;
+  return document && typeof document === "object" && !Array.isArray(document)
+    ? document as Record<string, unknown>
+    : null;
+}
+
+async function runPlotPdfJob(
+  job: JobRecord,
+  request: PlotPdfRequest,
+): Promise<void> {
+  const release = await acquireLiveJobLock();
+  let keepPossiblyActiveTemp = false;
+  try {
+    job.state = "sent";
+    rememberJob(job);
+
+    // Re-check immediately before touching the single-slot raw transport.
+    const current = await listOpenDocs(5_000);
+    if (!current.alive) {
+      throw new PlotPdfValidationError(
+        "plugin_unavailable",
+        "Plugin AcadBridge không phản hồi trước khi plot",
+        503,
+      );
+    }
+    openPlotDocument(current.docs, request);
+
+    const raw = await invokeRaw(
+      {
+        id: "ui.plot",
+        target: request.target,
+        params: buildPlotRawParams(request, job.jobId, job.tempPath!),
+      },
+      {
+        acadRunning: true,
+        waitMs: request.timeoutMs,
+      },
+    );
+
+    if (raw.diagnostic === "plugin_timeout") {
+      keepPossiblyActiveTemp = true;
+      job.state = "timeout";
+      job.uncertain = true;
+      job.result = {
+        status: "timeout",
+        code: "plot_timeout_uncertain",
+        message:
+          "Plugin timeout; plot có thể vẫn đang chạy. Không retry cùng output cho tới khi kiểm tra job/temp.",
+        payload: {
+          path: request.outputPath,
+          temp_path: job.tempPath!,
+          job_id: job.jobId,
+        },
+      };
+      return;
+    }
+    if (!raw.ok) {
+      throw new PlotPdfFileError(
+        raw.diagnostic || "native_plot_failed",
+        raw.error || "ObjectARX ui.plot trả về lỗi",
+      );
+    }
+
+    const verified = publishPlotPdf(
+      job.tempPath!,
+      request.outputPath,
+      request.overwrite,
+    );
+    job.state = "done";
+    job.result = {
+      status: "ok",
+      message: "PDF plotted and verified",
+      payload: {
+        path: request.outputPath,
+        size_bytes: verified.sizeBytes,
+        layout: request.layout,
+        config_mode: request.config.mode,
+        job_id: job.jobId,
+      },
+    };
+  } catch (error) {
+    const known =
+      error instanceof PlotPdfValidationError ||
+      error instanceof PlotPdfFileError;
+    const code = known ? error.code : "plot_failed";
+    const status = known ? error.status : 502;
+    job.state = "error";
+    job.result = {
+      status: "error",
+      code,
+      message: error instanceof Error ? error.message : "Plot PDF thất bại",
+      payload: {
+        path: request.outputPath,
+        temp_path: job.tempPath!,
+        job_id: job.jobId,
+        http_status: status,
+      },
+    };
+  } finally {
+    if (!keepPossiblyActiveTemp && job.state === "error" && job.tempPath) {
+      try {
+        rmSync(job.tempPath, { force: true });
+      } catch {
+        /* generated temp cleanup is best-effort */
+      }
+    }
+    rememberJob(job);
+    release();
+  }
+}
+
+async function waitForPlotJob(
+  completion: Promise<void>,
+  waitMs: number,
+): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let resolved = false;
+    const finish = (value: boolean) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(false), waitMs);
+    void completion.then(
+      () => finish(true),
+      () => finish(true),
+    );
+  });
 }
 
 export function acadBridgeRouter(): Router {
@@ -700,6 +925,15 @@ export function acadBridgeRouter(): Router {
           "Selection control phải đi qua /api/acad/selection/prepare → xác nhận → apply",
       });
     }
+    if (capabilityId === "ui.plot" && !dryRun) {
+      return res.status(409).json({
+        ok: false,
+        id: "ui.plot",
+        code: "dedicated_endpoint_required",
+        error:
+          "Live ui.plot phải đi qua POST /api/acad/plot-pdf để có target guard và hậu kiểm PDF",
+      });
+    }
     const running = await acadRunning();
     const result = await invokeRaw(
       { id: capabilityId, target: target ? String(target) : undefined, params: params || {} },
@@ -707,6 +941,132 @@ export function acadBridgeRouter(): Router {
     );
     // Always return structured body with ok + id (acceptance criterion).
     res.json(result);
+  });
+
+  r.post("/plot-pdf", async (req, res) => {
+    try {
+      const request = validatePlotPdfRequest(req.body);
+      if (!(await acadRunning())) {
+        return res.status(503).json({
+          ok: false,
+          code: "not_running",
+          error: "AutoCAD chưa chạy",
+        });
+      }
+
+      const open = await listOpenDocs(5_000);
+      if (!open.alive) {
+        return res.status(503).json({
+          ok: false,
+          code: "plugin_unavailable",
+          error: "Plugin AcadBridge không phản hồi",
+        });
+      }
+      openPlotDocument(open.docs, request);
+
+      const snapshot = await requestDrawingInfo(request.target, 10_000);
+      if (!snapshot) {
+        return res.status(504).json({
+          ok: false,
+          code: "snapshot_timeout",
+          error: "Không nhận được drawing-info để xác minh layout/document instance",
+        });
+      }
+      if (snapshot.ok === false) {
+        return res.status(409).json({
+          ok: false,
+          code: String(snapshot.code || "snapshot_failed"),
+          error: String(snapshot.error || "drawing-info từ chối target"),
+        });
+      }
+      const document = snapshotDocument(snapshot);
+      if (
+        !document ||
+        document.file !== request.target ||
+        document.instance !== request.documentInstance
+      ) {
+        return res.status(409).json({
+          ok: false,
+          code: "document_stale",
+          error: "drawing-info không còn khớp exact target/documentInstance",
+        });
+      }
+      if (document.quiescent !== true) {
+        return res.status(409).json({
+          ok: false,
+          code: "target_busy",
+          error: "Bản vẽ đang chạy command; từ chối queue plot có thể vượt timeout",
+        });
+      }
+      const layoutRows = drawingInfoLayouts(snapshot);
+      const layouts = layoutRows.map((layout) => layout.name);
+      if (!layouts.length) {
+        return res.status(502).json({
+          ok: false,
+          code: "layout_snapshot_unavailable",
+          error: "Plugin không trả danh sách layout để xác minh exact layout",
+        });
+      }
+      if (!layouts.includes(request.layout)) {
+        return res.status(404).json({
+          ok: false,
+          code: "layout_not_found",
+          error: `Không thấy exact layout: ${request.layout}`,
+          layouts,
+        });
+      }
+      const selectedLayout = layoutRows.find(
+        (layout) => layout.name === request.layout,
+      );
+      if (
+        request.config.mode === "device_media" &&
+        request.plotType === "layout" &&
+        selectedLayout?.model === true
+      ) {
+        return res.status(400).json({
+          ok: false,
+          code: "invalid_plot_config",
+          error: 'plot_type="layout" chỉ hợp lệ với paper-space layout',
+        });
+      }
+
+      const jobId = randomUUID().slice(0, 8);
+      const tempPath = plotTempPath(request.outputPath, jobId);
+      assertPlotDestination(request.outputPath, tempPath, request.overwrite);
+
+      const job: JobRecord = {
+        jobId,
+        kind: "plot_pdf",
+        state: "pending",
+        createdAt: Date.now(),
+        outputPath: request.outputPath,
+        tempPath,
+      };
+      activeJob = job;
+      rememberJob(job);
+      const completion = runPlotPdfJob(job, request);
+      const completed = await waitForPlotJob(completion, request.waitMs);
+      if (!completed) {
+        return res.status(202).json(plotJobPayload(job));
+      }
+      return res.status(plotJobHttpStatus(job.state)).json(plotJobPayload(job));
+    } catch (error) {
+      if (
+        error instanceof PlotPdfValidationError ||
+        error instanceof PlotPdfFileError
+      ) {
+        return res.status(error.status).json({
+          ok: false,
+          code: error.code,
+          error: error.message,
+        });
+      }
+      return res.status(500).json({
+        ok: false,
+        code: "plot_failed",
+        error: error instanceof Error ? error.message : "Plot PDF thất bại",
+      });
+    }
   });
 
   // VẼ NATIVE (rank 2+6): dựng native.job dạng bảng → plugin C++ vẽ trực tiếp (không LISP/SECURELOAD).
@@ -1219,9 +1579,10 @@ end tell`;
 
   r.get("/job/:id", (req, res) => {
     const id = req.params.id;
+    const h = history.find((j) => j.jobId === id) || (activeJob?.jobId === id ? activeJob : null);
+    if (h?.kind === "plot_pdf") return res.json(plotJobPayload(h));
     const r2 = readResult(id);
     if (r2) return res.json({ jobId: id, state: r2.status === "ok" ? "done" : "error", result: r2 });
-    const h = history.find((j) => j.jobId === id) || (activeJob?.jobId === id ? activeJob : null);
     res.json({ jobId: id, state: h?.state ?? "unknown", result: h?.result ?? null });
   });
 

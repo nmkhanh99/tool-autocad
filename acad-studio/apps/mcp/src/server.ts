@@ -27,6 +27,81 @@ const commonSchema = {
   target: targetSchema,
 };
 
+const drawingDataSchema = z
+  .object({
+    path: z
+      .string()
+      .optional()
+      .describe("Absolute input/output path. plot_pdf requires an absolute .pdf path."),
+    layout: z
+      .string()
+      .optional()
+      .describe("Exact layout name required by plot_pdf."),
+    page_setup: z
+      .string()
+      .optional()
+      .describe(
+        "Exact named page setup for plot_pdf. Mutually exclusive with device/media and their plot-setting overrides.",
+      ),
+    device: z
+      .string()
+      .optional()
+      .describe(
+        "Plot device for an ephemeral plot_pdf override; requires media and cannot be combined with page_setup.",
+      ),
+    media: z
+      .string()
+      .optional()
+      .describe(
+        "Canonical media for an ephemeral plot_pdf override; requires device and cannot be combined with page_setup.",
+      ),
+    plot_type: z
+      .enum(["extents", "layout"])
+      .optional()
+      .describe(
+        "Device/media mode only; defaults to extents. layout is paper-space only and requires scale 1:1.",
+      ),
+    scale: z
+      .enum(["fit", "1:1"])
+      .optional()
+      .describe("Device/media mode only; defaults to fit."),
+    rotation: z
+      .union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)])
+      .optional()
+      .describe("Device/media mode only; rotation in degrees, defaults to 0."),
+    centered: z
+      .boolean()
+      .optional()
+      .describe("Device/media mode only; center output, defaults to true."),
+    style_sheet: z
+      .string()
+      .optional()
+      .describe("Device/media mode only; optional exact plot style sheet name."),
+    overwrite: z
+      .boolean()
+      .optional()
+      .describe("Allow replacing an existing PDF only after verification; defaults to false."),
+    timeout_ms: z
+      .number()
+      .int()
+      .min(500)
+      .max(600_000)
+      .optional()
+      .describe(
+        "Hard native completion deadline in milliseconds; defaults to 120000. Timeout is uncertain and does not cancel AutoCAD.",
+      ),
+  })
+  .catchall(z.unknown())
+  .optional()
+  .describe(
+    "Operation data. plot_pdf requires path, layout, and exactly one configuration mode: page_setup or device+media.",
+  );
+
+const drawingSchema = z.object({
+  ...commonSchema,
+  data: drawingDataSchema,
+});
+
 const entitySchema = z.object({
   ...commonSchema,
   x1: z.number().optional(),
@@ -125,8 +200,8 @@ export function createAcadMcpServer(
     {
       title: "AutoCAD Drawing Operations",
       description:
-        "Drawing file management. Operations: create, open, info, save, save_as_dxf, plot_pdf, purge, get_variables, undo, redo.",
-      inputSchema: z.object(commonSchema),
+        "Drawing file management. Operations: create, open, info, save, save_as_dxf, plot_pdf, purge, get_variables, undo, redo. plot_pdf requires target, absolute data.path ending in .pdf, exact data.layout, and exactly one configuration mode: data.page_setup or data.device plus data.media.",
+      inputSchema: drawingSchema,
       annotations: { readOnlyHint: false },
     },
     (input) => callBackend(backend, "drawing", input),

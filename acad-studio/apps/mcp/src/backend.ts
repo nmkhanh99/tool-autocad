@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildLispOperation, lispString, type LispBuildResult } from "./lisp.js";
 import {
@@ -91,12 +91,7 @@ export const BASE_OPERATIONS: Record<ToolName, readonly string[]> = {
 
 const EXPLICITLY_UNSUPPORTED: Partial<
   Record<ToolName, Record<string, string>>
-> = {
-  drawing: {
-    plot_pdf:
-      "Cần cấu hình page setup/plotter theo bản vẽ; project chưa có hợp đồng PDF tổng quát an toàn.",
-  },
-};
+> = {};
 
 const PID_SYMBOLS: Record<string, readonly string[]> = {
   ACTUATORS: [
@@ -179,6 +174,182 @@ function canonicalExistingPath(value: string): string {
   } catch {
     return value;
   }
+}
+
+type PlotPdfData = {
+  path: string;
+  layout: string;
+  page_setup?: string;
+  device?: string;
+  media?: string;
+  plot_type?: "extents" | "layout";
+  scale?: "fit" | "1:1";
+  rotation?: 0 | 90 | 180 | 270;
+  centered?: boolean;
+  style_sheet?: string;
+  overwrite: boolean;
+  timeout_ms: number;
+};
+
+type PlotPdfValidation =
+  | { ok: true; value: PlotPdfData }
+  | { ok: false; error: string };
+
+function nonEmptyPlotString(
+  data: Record<string, unknown>,
+  key: string,
+): string | undefined | null {
+  if (data[key] === undefined) return undefined;
+  if (typeof data[key] !== "string" || !data[key].trim()) return null;
+  return data[key].trim();
+}
+
+function validatePlotPdfData(
+  source: Record<string, unknown> | undefined,
+): PlotPdfValidation {
+  const data = source || {};
+  const path = data.path;
+  if (
+    typeof path !== "string" ||
+    !path ||
+    /[\0\r\n]/.test(path) ||
+    !isAbsolute(path) ||
+    extname(path).toLowerCase() !== ".pdf"
+  ) {
+    return {
+      ok: false,
+      error: "plot_pdf cần data.path là đường dẫn tuyệt đối kết thúc bằng .pdf.",
+    };
+  }
+
+  const layout = nonEmptyPlotString(data, "layout");
+  if (!layout) {
+    return {
+      ok: false,
+      error: "plot_pdf cần data.layout là tên layout chính xác, không rỗng.",
+    };
+  }
+
+  const pageSetup = nonEmptyPlotString(data, "page_setup");
+  const device = nonEmptyPlotString(data, "device");
+  const media = nonEmptyPlotString(data, "media");
+  if (pageSetup === null || device === null || media === null) {
+    return {
+      ok: false,
+      error: "page_setup, device và media phải là chuỗi không rỗng khi được truyền.",
+    };
+  }
+  if (pageSetup && (device !== undefined || media !== undefined)) {
+    return {
+      ok: false,
+      error: "Không được kết hợp data.page_setup với cấu hình data.device/data.media.",
+    };
+  }
+  if (!pageSetup && (!device || !media)) {
+    return {
+      ok: false,
+      error:
+        "plot_pdf cần đúng một chế độ cấu hình: page_setup, hoặc đồng thời device và media.",
+    };
+  }
+
+  const overrideKeys = [
+    "plot_type",
+    "scale",
+    "rotation",
+    "centered",
+    "style_sheet",
+  ];
+  if (pageSetup && overrideKeys.some((key) => data[key] !== undefined)) {
+    return {
+      ok: false,
+      error:
+        "Named page_setup đã chứa plot settings; không được truyền plot_type, scale, rotation, centered hoặc style_sheet.",
+    };
+  }
+
+  const plotType = data.plot_type === undefined ? "extents" : data.plot_type;
+  if (plotType !== "extents" && plotType !== "layout") {
+    return {
+      ok: false,
+      error: "data.plot_type phải là extents hoặc layout.",
+    };
+  }
+  const scale = data.scale === undefined ? "fit" : data.scale;
+  if (scale !== "fit" && scale !== "1:1") {
+    return {
+      ok: false,
+      error: "data.scale phải là fit hoặc 1:1.",
+    };
+  }
+  if (!pageSetup && plotType === "layout" && scale !== "1:1") {
+    return {
+      ok: false,
+      error: 'data.plot_type="layout" yêu cầu data.scale="1:1".',
+    };
+  }
+  const rotation = data.rotation === undefined ? 0 : data.rotation;
+  if (rotation !== 0 && rotation !== 90 && rotation !== 180 && rotation !== 270) {
+    return {
+      ok: false,
+      error: "data.rotation phải là 0, 90, 180 hoặc 270.",
+    };
+  }
+  const centered = data.centered === undefined ? true : data.centered;
+  if (typeof centered !== "boolean") {
+    return {
+      ok: false,
+      error: "data.centered phải là boolean.",
+    };
+  }
+  const styleSheet = nonEmptyPlotString(data, "style_sheet");
+  if (styleSheet === null) {
+    return {
+      ok: false,
+      error: "data.style_sheet phải là chuỗi không rỗng khi được truyền.",
+    };
+  }
+  const overwrite = data.overwrite === undefined ? false : data.overwrite;
+  if (typeof overwrite !== "boolean") {
+    return {
+      ok: false,
+      error: "data.overwrite phải là boolean.",
+    };
+  }
+  const timeoutMs = data.timeout_ms === undefined ? 120_000 : data.timeout_ms;
+  if (
+    typeof timeoutMs !== "number" ||
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < 500 ||
+    timeoutMs > 600_000
+  ) {
+    return {
+      ok: false,
+      error: "data.timeout_ms phải là số nguyên từ 500 đến 600000.",
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      path,
+      layout,
+      page_setup: pageSetup,
+      device,
+      media,
+      ...(pageSetup
+        ? {}
+        : {
+            plot_type: plotType,
+            scale,
+            rotation,
+            centered,
+            style_sheet: styleSheet,
+          }),
+      overwrite,
+      timeout_ms: timeoutMs,
+    },
+  };
 }
 
 function responseError(payload: unknown, fallback: string): string {
@@ -677,7 +848,121 @@ export class DaemonAutoCADBackend implements AcadMcpBackend {
       return this.success("drawing", input, { handoff: opened, document });
     }
     if (operation === "create") return this.createDrawing(input);
+    if (operation === "plot_pdf") return this.plotPdf(input);
     return this.runBuiltOperation("drawing", input);
+  }
+
+  private async plotPdf(input: ToolInput): Promise<ToolResponse> {
+    const prepared = await this.prepareTarget("drawing", input, true);
+    if (prepared.error) return prepared.error;
+
+    const validated = validatePlotPdfData(input.data);
+    if (!validated.ok) {
+      return this.failure(
+        "drawing",
+        "plot_pdf",
+        "invalid_input",
+        validated.error,
+      );
+    }
+    const plot = validated.value;
+    if (!plot.overwrite && existsSync(plot.path)) {
+      return this.failure(
+        "drawing",
+        "plot_pdf",
+        "file_exists",
+        `Từ chối ghi đè PDF đã có: ${plot.path}`,
+        "Đặt data.overwrite=true chỉ khi muốn thay file sau khi PDF mới được xác minh.",
+      );
+    }
+
+    const document = objectValue(prepared.document);
+    const documentInstance = String(document.instance || "").trim();
+    if (!documentInstance) {
+      return this.failure(
+        "drawing",
+        "plot_pdf",
+        "target_instance_unavailable",
+        "AcadBridge không cung cấp document instance để khóa target plot.",
+        "Cập nhật/nạp lại plugin rồi gọi system(operation=\"status\").",
+      );
+    }
+
+    const raw = await this.daemon.request("/api/acad/plot-pdf", {
+      method: "POST",
+      body: {
+        target: prepared.input.target,
+        documentInstance,
+        ...plot,
+      },
+      // Daemon performs two guarded native snapshots (up to 5s + 10s)
+      // before it creates a correlated job. Keep the HTTP client alive long
+      // enough to receive either the preflight error or the jobId.
+      timeoutMs: plot.timeout_ms + 30_000,
+    });
+    const row = objectValue(raw);
+    const state = String(row.state || "");
+    const pending = state === "sent" || state === "pending";
+    if (pending && row.ok !== false) {
+      const jobId = String(row.jobId || "");
+      const accepted = this.success("drawing", prepared.input, {
+        jobId: jobId || null,
+        state,
+        accepted: true,
+        completed: false,
+        result: null,
+      });
+      return {
+        ...accepted,
+        warnings: [
+          "AutoCAD đã nhận job plot nhưng chưa trả kết quả; không gửi lại operation vì job có thể vẫn đang ghi PDF.",
+          jobId
+            ? `Theo dõi bằng system(operation="status", data={"job_id":"${jobId}"}).`
+            : "Kiểm tra system(operation=\"status\") trước khi plot tiếp.",
+        ],
+      };
+    }
+
+    if (
+      state === "done" &&
+      row.ok === true &&
+      row.result !== undefined &&
+      row.result !== null
+    ) {
+      return this.success("drawing", prepared.input, {
+        jobId: row.jobId || null,
+        state,
+        accepted: true,
+        completed: true,
+        result: row.result,
+      });
+    }
+
+    const result = objectValue(row.result);
+    const error = typeof row.error === "string" && row.error.trim()
+      ? row.error
+      : typeof result.error === "string" && result.error.trim()
+        ? result.error
+        : typeof result.message === "string" && result.message.trim()
+          ? result.message
+          : `Plot job kết thúc với state=${state || "unknown"}.`;
+    const code = typeof row.code === "string" && row.code.trim()
+      ? row.code
+      : typeof result.code === "string" && result.code.trim()
+        ? result.code
+        : state === "done"
+          ? "invalid_daemon_response"
+          : "plot_failed";
+    return {
+      ...this.failure("drawing", "plot_pdf", code, error),
+      payload: {
+        jobId: row.jobId || null,
+        state: state || "unknown",
+        uncertain: row.uncertain === true,
+        path: row.path || plot.path,
+        result: row.result ?? null,
+      },
+    };
   }
 
   private async createDrawing(input: ToolInput): Promise<ToolResponse> {

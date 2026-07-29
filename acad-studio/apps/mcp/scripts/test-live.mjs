@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,12 +17,25 @@ const serverEntry = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 const timestamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
 const drawingPath = process.env.ACAD_MCP_LIVE_DWG ||
   join(studioRoot, ".work", `MCP-LIVE-${timestamp}.dwg`);
+const pdfPath = process.env.ACAD_MCP_LIVE_PDF ||
+  drawingPath.replace(/\.dwg$/i, ".pdf");
+const layoutPdfPath = drawingPath.replace(/\.dwg$/i, "-layout.pdf");
 const daemonUrl = process.env.ACAD_DAEMON_URL || "http://127.0.0.1:8788";
 
 assert.equal(
   existsSync(drawingPath),
   false,
   `Refusing to overwrite existing live-test drawing: ${drawingPath}`,
+);
+assert.equal(
+  existsSync(pdfPath),
+  false,
+  `Refusing to overwrite existing live-test PDF: ${pdfPath}`,
+);
+assert.equal(
+  existsSync(layoutPdfPath),
+  false,
+  `Refusing to overwrite existing live-test layout PDF: ${layoutPdfPath}`,
 );
 mkdirSync(dirname(drawingPath), { recursive: true });
 
@@ -75,6 +88,16 @@ async function call(name, args) {
   return (await callResult(name, args)).payload;
 }
 
+async function callFailure(name, args) {
+  const response = await client.callTool({ name, arguments: args });
+  const text = response.content.find((item) => item.type === "text");
+  assert.ok(text && text.type === "text", `${name} returned no text payload`);
+  const payload = JSON.parse(text.text);
+  assert.equal(response.isError, true, `${name}.${args.operation} unexpectedly succeeded`);
+  assert.equal(payload.ok, false, `${name}.${args.operation} returned no backend error`);
+  return payload;
+}
+
 function entityHandle(response) {
   const message = String(response.payload?.result?.message || "");
   const match = /\bentity_id=([0-9a-f]+)\b/i.exec(message);
@@ -94,6 +117,31 @@ async function waitForDocument(path, timeoutMs = 45_000) {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
   throw new Error(`AutoCAD did not report the opened test drawing: ${path}`);
+}
+
+async function waitForPlot(jobId, timeoutMs = 180_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const status = await call("system", {
+      operation: "status",
+      data: { job_id: jobId },
+    });
+    const job = status.payload?.job || {};
+    if (job.state === "done" && job.ok !== false) return job;
+    if (job.state === "error" || job.state === "timeout" || job.ok === false) {
+      throw new Error(`Native plot failed: ${JSON.stringify(job)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`Native plot job ${jobId} did not finish in ${timeoutMs} ms`);
+}
+
+function assertPdf(path) {
+  const bytes = readFileSync(path);
+  assert.ok(bytes.length > 1_000, "Plotted PDF is unexpectedly small");
+  assert.equal(bytes.subarray(0, 5).toString("ascii"), "%PDF-");
+  assert.match(bytes.subarray(Math.max(0, bytes.length - 4096)).toString("latin1"), /%%EOF/);
+  return bytes;
 }
 
 try {
@@ -205,6 +253,118 @@ try {
     target: drawingPath,
   });
 
+  const plotStateBefore = await call("drawing", {
+    operation: "get_variables",
+    target: drawingPath,
+    data: { names: ["BACKGROUNDPLOT", "CTAB", "CVPORT"] },
+  });
+  const plotted = await call("drawing", {
+    operation: "plot_pdf",
+    target: drawingPath,
+    data: {
+      path: pdfPath,
+      layout: process.env.ACAD_MCP_PLOT_LAYOUT || "Model",
+      device:
+        process.env.ACAD_MCP_PLOT_DEVICE ||
+        "AutoCAD PDF (General Documentation).pc3",
+      media:
+        process.env.ACAD_MCP_PLOT_MEDIA ||
+        "ISO_A4_(210.00_x_297.00_MM)",
+      plot_type: "extents",
+      scale: "fit",
+      rotation: 0,
+      centered: true,
+      overwrite: false,
+      timeout_ms: 180_000,
+    },
+  });
+  if (plotted.payload?.completed === false) {
+    assert.match(String(plotted.payload?.jobId || ""), /^[a-f0-9]{8}$/i);
+    await waitForPlot(plotted.payload.jobId);
+  }
+  assert.equal(existsSync(pdfPath), true, "Native plot did not publish the PDF");
+  const firstPdf = assertPdf(pdfPath);
+
+  const noOverwrite = await callFailure("drawing", {
+    operation: "plot_pdf",
+    target: drawingPath,
+    data: {
+      path: pdfPath,
+      layout: process.env.ACAD_MCP_PLOT_LAYOUT || "Model",
+      device:
+        process.env.ACAD_MCP_PLOT_DEVICE ||
+        "AutoCAD PDF (General Documentation).pc3",
+      media:
+        process.env.ACAD_MCP_PLOT_MEDIA ||
+        "ISO_A4_(210.00_x_297.00_MM)",
+    },
+  });
+  assert.equal(noOverwrite.code, "file_exists");
+  assert.deepEqual(readFileSync(pdfPath), firstPdf, "No-overwrite changed the PDF");
+
+  const overwritten = await call("drawing", {
+    operation: "plot_pdf",
+    target: drawingPath,
+    data: {
+      path: pdfPath,
+      layout: process.env.ACAD_MCP_PLOT_LAYOUT || "Model",
+      device:
+        process.env.ACAD_MCP_PLOT_DEVICE ||
+        "AutoCAD PDF (General Documentation).pc3",
+      media:
+        process.env.ACAD_MCP_PLOT_MEDIA ||
+        "ISO_A4_(210.00_x_297.00_MM)",
+      plot_type: "extents",
+      scale: "fit",
+      rotation: 0,
+      centered: true,
+      overwrite: true,
+      timeout_ms: 180_000,
+    },
+  });
+  if (overwritten.payload?.completed === false) {
+    assert.match(String(overwritten.payload?.jobId || ""), /^[a-f0-9]{8}$/i);
+    await waitForPlot(overwritten.payload.jobId);
+  }
+  assertPdf(pdfPath);
+
+  const layoutPlot = await call("drawing", {
+    operation: "plot_pdf",
+    target: drawingPath,
+    data: {
+      path: layoutPdfPath,
+      layout: "Layout1",
+      device:
+        process.env.ACAD_MCP_PLOT_DEVICE ||
+        "AutoCAD PDF (General Documentation).pc3",
+      media:
+        process.env.ACAD_MCP_PLOT_MEDIA ||
+        "ISO_A4_(210.00_x_297.00_MM)",
+      plot_type: "layout",
+      scale: "1:1",
+      rotation: 0,
+      centered: false,
+      overwrite: false,
+      timeout_ms: 180_000,
+    },
+  });
+  if (layoutPlot.payload?.completed === false) {
+    assert.match(String(layoutPlot.payload?.jobId || ""), /^[a-f0-9]{8}$/i);
+    await waitForPlot(layoutPlot.payload.jobId);
+  }
+  assertPdf(layoutPdfPath);
+
+  const plotStateAfter = await call("drawing", {
+    operation: "get_variables",
+    target: drawingPath,
+    data: { names: ["BACKGROUNDPLOT", "CTAB", "CVPORT"] },
+  });
+  assert.deepEqual(
+    plotStateAfter.payload?.result?.rows,
+    plotStateBefore.payload?.result?.rows,
+    "Native plot did not restore AutoCAD plot/layout state",
+  );
+
   const screenshot = await callResult("view", {
     operation: "get_screenshot",
     target: drawingPath,
@@ -267,7 +427,7 @@ try {
   });
 
   console.log(
-    `Live MCP test passed on macOS: created, opened, edited, queried, and saved ${drawingPath}`,
+    `Live MCP test passed on macOS: created, plotted, edited, queried, and saved ${drawingPath}; PDFs ${pdfPath}, ${layoutPdfPath}`,
   );
 } catch (error) {
   if (serverStderr) console.error(serverStderr);

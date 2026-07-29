@@ -67,6 +67,32 @@ try {
   const entityTool = tools.find((tool) => tool.name === "entity");
   assert.ok("side_point" in (entityTool?.inputSchema.properties ?? {}));
   assert.ok("row_dist" in (entityTool?.inputSchema.properties ?? {}));
+  const drawingTool = tools.find((tool) => tool.name === "drawing");
+  const drawingData = drawingTool?.inputSchema.properties?.data;
+  assert.equal(drawingData?.type, "object");
+  for (const field of [
+    "path",
+    "layout",
+    "page_setup",
+    "device",
+    "media",
+    "plot_type",
+    "scale",
+    "rotation",
+    "centered",
+    "style_sheet",
+    "overwrite",
+    "timeout_ms",
+  ]) {
+    assert.ok(
+      field in (drawingData?.properties ?? {}),
+      `drawing.data schema exposes ${field}`,
+    );
+  }
+  assert.deepEqual(drawingData?.properties?.plot_type?.enum, ["extents", "layout"]);
+  assert.deepEqual(drawingData?.properties?.scale?.enum, ["fit", "1:1"]);
+  assert.equal(drawingData?.properties?.timeout_ms?.minimum, 500);
+  assert.equal(drawingData?.properties?.timeout_ms?.maximum, 600_000);
 
   const runtimeResult = await client.callTool({
     name: "system",
