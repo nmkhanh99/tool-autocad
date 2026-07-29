@@ -7,6 +7,8 @@ const appDir = join(dirname(fileURLToPath(import.meta.url)), "../app");
 const page = readFileSync(join(appDir, "page.tsx"), "utf8");
 const functions = readFileSync(join(appDir, "functions.ts"), "utf8");
 const standards = readFileSync(join(appDir, "DrawingStandardsPanel.tsx"), "utf8");
+const drawingInfo = readFileSync(join(appDir, "DrawingInfoPanel.tsx"), "utf8");
+const styles = readFileSync(join(appDir, "globals.css"), "utf8");
 
 assert.match(
   page,
@@ -69,6 +71,180 @@ assert.match(
   standards,
   /onChange\(commaList\(nextText\)\);/,
   "list editor updates the parent draft on each edit",
+);
+assert.match(
+  standards,
+  /const document = asRecord\(current\?\.document\);[\s\S]*?scope: \{ kind: "handles", handles \},[\s\S]*?catalogGuard: \{ instance, revision \}/,
+  "standards scan handle selections are bound to the scanned document revision",
+);
+
+assert.match(
+  drawingInfo,
+  /selectionCatalogOf\(drawing\?\.selectionCatalog\)/,
+  "drawing info reads the one-pass current-space object catalog",
+);
+assert.match(
+  drawingInfo,
+  /appendCatalogSubject\(index\.layerHandles, subject\.layerHandle[\s\S]*?appendCatalogSubject\(index\.blockHandles, subject\.blockHandle/,
+  "catalog indexes layer and dynamic-block subjects once by stable table handles",
+);
+assert.match(
+  drawingInfo,
+  /function catalogRowsOf[\s\S]*?for \(const group of groups\)[\s\S]*?result\.push\([\s\S]*?selectableCount: group\.count/,
+  "used catalog groups remain visible even when the plugin table is capped",
+);
+assert.match(
+  drawingInfo,
+  /scope: \{ kind: "handles", handles \},[\s\S]*?catalogGuard: picker\.catalogGuard,[\s\S]*?catalogScope:/,
+  "the chooser binds its exact cached handle set to the catalog document revision",
+);
+assert.match(
+  drawingInfo,
+  /catalogScopeHandle[\s\S]*?catalogScopeConsistent[\s\S]*?selectedAll: picker\.complete && handles\.length === picker\.subjects\.length/,
+  "cached handles retain their exact layer/block membership and all-vs-subset intent",
+);
+assert.match(
+  drawingInfo,
+  /plugin cũ cần kiểm tra[\s\S]*?scope: \{ kind, name, handle: String\(row\.handle \|\| ""\) \}/,
+  "old plugins keep a visible compatibility action until AutoCAD can be restarted",
+);
+assert.match(
+  drawingInfo,
+  /catalogStale \|\| !selectionCatalog \|\| \(!selectionCatalog\.complete && !subjects\.length\)[\s\S]*?snapshot cũ, kiểm tra trực tiếp[\s\S]*?danh mục chưa đầy đủ, kiểm tra trực tiếp/,
+  "stale and unknown rows remain usable through direct guarded resolution",
+);
+assert.match(
+  drawingInfo,
+  /!!selectionCatalog\?\.complete && rowCatalogSubjects\(kind, row\)\.length === 0/,
+  "only an exact catalog disables rows that have no selectable subjects",
+);
+assert.match(
+  drawingInfo,
+  /!current\.complete \|\| current\.subjects\.length > CAD_SELECTION_MAX_SUBJECTS/,
+  "select-all remains fail-closed for incomplete or oversized catalogs",
+);
+assert.match(
+  drawingInfo,
+  /const PICKER_PAGE_SIZE = 100;[\s\S]*?visiblePickerSubjects = filteredPickerSubjects\.slice/,
+  "large object groups are searched and paged instead of fully rendered",
+);
+assert.match(
+  drawingInfo,
+  /prioritizeSelectable[\s\S]*?selectableCountOf\(right\)[\s\S]*?rowsWithObjects/,
+  "layer and block rows with selectable objects are counted and shown first",
+);
+assert.match(
+  drawingInfo,
+  /selectableCountOf\(row\) === 0[\s\S]*?"Chưa xác định"/,
+  "an incomplete catalog does not mislabel an unscanned row as zero objects",
+);
+assert.match(
+  drawingInfo,
+  /if \(loadedSnapshotKey\.current === requestKey\) return;/,
+  "reopening the panel reuses its in-app snapshot",
+);
+assert.doesNotMatch(
+  drawingInfo,
+  /\[open, daemon, selectedTarget, refreshToken, reloadToken\]/,
+  "generic AutoCAD change events do not trigger an automatic full scan",
+);
+assert.match(
+  drawingInfo,
+  /setCatalogStale\(true\);[\s\S]*?\}, \[refreshToken\]\);/,
+  "AutoCAD change events mark the cached snapshot stale without fetching",
+);
+const refreshInvalidationStart = drawingInfo.indexOf(
+  "if (seenRefreshToken.current === refreshToken) return;",
+);
+const refreshInvalidationEnd = drawingInfo.indexOf(
+  "}, [refreshToken]);",
+  refreshInvalidationStart,
+);
+const refreshInvalidationBlock = drawingInfo.slice(
+  refreshInvalidationStart,
+  refreshInvalidationEnd,
+);
+assert.ok(
+  refreshInvalidationStart >= 0 && refreshInvalidationEnd > refreshInvalidationStart,
+  "drawing-info refresh invalidation effect is present",
+);
+assert.doesNotMatch(
+  refreshInvalidationBlock,
+  /setObjectPicker\(null\)/,
+  "a late AutoCAD event does not dismiss an already-open guarded picker",
+);
+assert.match(
+  page,
+  /setDrawingInfoRefreshEventAt\(\(current\) => Math\.max\(current, eventAt\)\)[\s\S]*?refreshEventAt=\{drawingInfoRefreshEventAt\}/,
+  "drawing-info receives the timestamp of its latest invalidating AutoCAD event",
+);
+assert.match(
+  drawingInfo,
+  /body\.snapshotCollectedAt \?\? body\.collectedAt[\s\S]*?latestRefreshEventAt\.current < snapshotCollectedAt[\s\S]*?setCatalogStale\(eventDuringScan && !eventCoveredBySnapshot\)/,
+  "only an event strictly older than the snapshot is considered covered",
+);
+const prepareCadActionStart = drawingInfo.indexOf("async function prepareCadAction(");
+const prepareCadActionEnd = drawingInfo.indexOf(
+  "async function applyPendingCadAction()",
+  prepareCadActionStart,
+);
+assert.ok(
+  prepareCadActionStart >= 0 && prepareCadActionEnd > prepareCadActionStart,
+  "drawing-info prepare action block is present",
+);
+assert.doesNotMatch(
+  drawingInfo.slice(prepareCadActionStart, prepareCadActionEnd),
+  /setCatalogStale\(false\)/,
+  "a prepared operation does not mark the global drawing snapshot fresh",
+);
+assert.match(
+  drawingInfo,
+  /Snapshot nền đã cũ; thao tác vừa được kiểm tra trực tiếp[\s\S]*?onClick=\{\(\) => void applyPendingCadAction\(\)\} disabled=\{!!cadActionBusy\}/,
+  "a freshly resolved operation remains confirmable while the background snapshot is stale",
+);
+assert.match(
+  drawingInfo,
+  /Quét lại từ AutoCAD/,
+  "the explicit one-way pull action is named Quét lại từ AutoCAD",
+);
+assert.match(
+  drawingInfo,
+  /function drawingInfoBusyCode[\s\S]*?document_not_quiescent[\s\S]*?const scanFailed = !response\.ok \|\| body\.ok === false \|\| !!busyCode \|\|[\s\S]*?sameTarget && !!catalogFailure/,
+  "busy and non-quiescent responses cannot be committed as successful snapshots",
+);
+assert.match(
+  drawingInfo,
+  /function drawingInfoCatalogFailure[\s\S]*?selection_catalog_compat_failed[\s\S]*?sameTarget && !!catalogFailure/,
+  "a failed compatibility enrichment cannot replace a good cached catalog",
+);
+assert.match(
+  drawingInfo,
+  /if \(sameTarget\) \{[\s\S]*?Giữ nguyên snapshot cũ vì lần quét mới chưa thành công[\s\S]*?\} else \{[\s\S]*?setData\(/,
+  "a failed explicit rescan keeps the previous in-app snapshot",
+);
+assert.ok(
+  drawingInfo.indexOf("if (scanFailed)") < drawingInfo.indexOf("loadedSnapshotKey.current = requestKey"),
+  "only a successful scan is stored as the reusable snapshot",
+);
+assert.match(
+  drawingInfo,
+  /patchSelectionSummary\(asRecord\(result\.result\) \|\| \{\}\)/,
+  "an app-originated selection patches the cached selection summary without a full scan",
+);
+assert.match(
+  drawingInfo,
+  /function RawJsonSection[\s\S]*?JSON\.stringify\(data, null, 2\)[\s\S]*?\{open && <div/,
+  "the potentially large catalog JSON is formatted and mounted only when explicitly opened",
+);
+assert.match(
+  drawingInfo,
+  /window\.document\.addEventListener\("keydown", containFocus\)/,
+  "the nested object chooser contains keyboard focus",
+);
+assert.match(
+  styles,
+  /\.drawing-object-picker-list \{[\s\S]*?overflow: auto;/,
+  "the per-object chooser has a bounded scroll viewport",
 );
 
 for (const panel of [

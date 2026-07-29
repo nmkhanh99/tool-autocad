@@ -305,6 +305,7 @@ static const size_t kInfoMaxDictionaryItems  = 200;
 static const size_t kInfoMaxSelectionObjects = 200;
 static const size_t kInfoMaxXrefs             = 200;
 static const size_t kInfoMaxEntitiesScanned   = 200000;
+static const size_t kInfoMaxSelectionScopeEntities = 50000;
 static const size_t kInfoMaxCustomSummary     = 50;
 static const size_t kInfoMaxPdfUnderlays      = 200;
 static const size_t kInfoMaxDataLinks         = 200;
@@ -394,6 +395,14 @@ static std::string objectHandle(AcDbObject* obj) {
     AcDbHandle handle;
     obj->getAcDbHandle(handle);
     ACHAR buf[32];
+    handle.getIntoAsciiBuffer(buf);
+    return toUtf8(buf);
+}
+
+static std::string objectIdHandle(AcDbObjectId id) {
+    if (id.isNull()) return "";
+    const AcDbHandle handle = id.handle();
+    ACHAR buf[32] = {};
     handle.getIntoAsciiBuffer(buf);
     return toUtf8(buf);
 }
@@ -629,7 +638,111 @@ static std::string symbolTableNamesJson(AcDbSymbolTable* table,
     return out + "]";
 }
 
-static std::string layerTableJson(AcDbDatabase* db, long long& total,
+struct SelectionScopeStats {
+    std::string space;
+    size_t scanned = 0;
+    bool complete = false;
+    // Table handles remain stable when a layer or block definition is renamed.
+    std::map<std::string, long long> layerHandles;
+    std::map<std::string, long long> blockHandles;
+    std::vector<std::string> objects;
+};
+
+static AcDbObjectId effectiveBlockDefinition(AcDbBlockReference* reference) {
+    if (!reference) return AcDbObjectId::kNull;
+    AcDbDynBlockReference dynamicReference(reference->objectId());
+    if (dynamicReference.isDynamicBlock()) {
+        const AcDbObjectId dynamicId =
+            dynamicReference.dynamicBlockTableRecord();
+        if (!dynamicId.isNull()) return dynamicId;
+    }
+    return reference->blockTableRecord();
+}
+
+static long long selectableCount(
+    const std::map<std::string, long long>& counts,
+    const std::string& name) {
+    const auto found = counts.find(name);
+    return found == counts.end() ? 0 : found->second;
+}
+
+static void collectSelectionScope(AcDbDatabase* db, SelectionScopeStats& stats,
+                                  std::vector<std::string>& warnings) {
+    if (!db || db->currentSpaceId().isNull()) {
+        addWarning(warnings, "selection_scope_unavailable");
+        return;
+    }
+    AcDbBlockTableRecord* space = nullptr;
+    if (acdbOpenObject(space, db->currentSpaceId(), AcDb::kForRead) != Acad::eOk ||
+        !space) {
+        addWarning(warnings, "selection_scope_unavailable");
+        return;
+    }
+    stats.space = layoutNameFor(space);
+
+    AcDbBlockTableRecordIterator* iterator = nullptr;
+    if (space->newIterator(iterator) != Acad::eOk || !iterator) {
+        space->close();
+        addWarning(warnings, "selection_scope_iterator_unavailable");
+        return;
+    }
+
+    bool truncated = false;
+    bool unreadable = false;
+    for (; !iterator->done(); iterator->step()) {
+        if (stats.scanned >= kInfoMaxSelectionScopeEntities) {
+            truncated = true;
+            break;
+        }
+        stats.scanned++;
+        AcDbEntity* entity = nullptr;
+        if (iterator->getEntity(entity, AcDb::kForRead) != Acad::eOk || !entity) {
+            unreadable = true;
+            continue;
+        }
+
+        const std::string handle = objectHandle(entity);
+        const std::string type = objectType(entity);
+        const std::string layer = entityLayer(entity);
+        const std::string layerHandle = objectIdHandle(entity->layerId());
+        if (handle.empty() || type.empty() || layer.empty() || layerHandle.empty()) {
+            unreadable = true;
+        } else {
+            stats.layerHandles[layerHandle]++;
+        }
+
+        std::string object =
+            "{\"handle\":" + jsonString(handle) +
+            ",\"type\":" + jsonString(type) +
+            ",\"layer\":" + jsonString(layer) +
+            ",\"layerHandle\":" + jsonString(layerHandle);
+
+        if (AcDbBlockReference* reference = AcDbBlockReference::cast(entity)) {
+            const AcDbObjectId blockId = effectiveBlockDefinition(reference);
+            const std::string block = symbolName(blockId);
+            const std::string blockHandle = objectIdHandle(blockId);
+            if (block.empty() || blockHandle.empty()) {
+                unreadable = true;
+            } else {
+                stats.blockHandles[blockHandle]++;
+            }
+            object += ",\"blockName\":" + jsonString(block) +
+                      ",\"blockHandle\":" + jsonString(blockHandle);
+        }
+        stats.objects.push_back(object + "}");
+        entity->close();
+    }
+    delete iterator;
+    space->close();
+
+    stats.complete = !truncated && !unreadable;
+    if (truncated) addWarning(warnings, "selection_scope_scan_truncated");
+    if (unreadable) addWarning(warnings, "selection_scope_scan_incomplete");
+}
+
+static std::string layerTableJson(AcDbDatabase* db,
+                                  const SelectionScopeStats& selectionScope,
+                                  long long& total,
                                   std::vector<std::string>& warnings) {
     total = 0;
     AcDbLayerTable* table = nullptr;
@@ -653,8 +766,12 @@ static std::string layerTableJson(AcDbDatabase* db, long long& total,
                 AcCmTransparency transparency = layer->transparency();
                 if (!first) out += ",";
                 first = false;
-                out += "{\"name\":" + jsonString(toUtf8(name.kwszPtr())) +
+                const std::string layerName = toUtf8(name.kwszPtr());
+                out += "{\"name\":" + jsonString(layerName) +
                        ",\"handle\":" + jsonString(objectHandle(layer)) +
+                       ",\"selectableCount\":" +
+                           std::to_string(selectableCount(
+                               selectionScope.layerHandles, objectHandle(layer))) +
                        ",\"aci\":" + std::to_string((unsigned)color.colorIndex()) +
                        ",\"color\":" + std::to_string((unsigned)color.colorIndex()) +
                        ",\"rgb\":[" + std::to_string((unsigned)color.red()) + "," +
@@ -745,7 +862,9 @@ static long long blockReferenceCount(AcDbBlockTableRecord* block) {
     return total;
 }
 
-static std::string blockTableJson(AcDbDatabase* db, std::string& xrefs,
+static std::string blockTableJson(AcDbDatabase* db,
+                                  const SelectionScopeStats& selectionScope,
+                                  std::string& xrefs,
                                   long long& total, long long& totalXrefs,
                                   std::vector<std::string>& warnings) {
     total = 0;
@@ -820,6 +939,9 @@ static std::string blockTableJson(AcDbDatabase* db, std::string& xrefs,
                 firstBlock = false;
                 blocks += "{\"name\":" + jsonString(blockName) +
                           ",\"handle\":" + jsonString(objectHandle(block)) +
+                          ",\"selectableCount\":" +
+                              std::to_string(selectableCount(
+                                  selectionScope.blockHandles, objectHandle(block))) +
                           ",\"comments\":" + jsonString(description) +
                           ",\"description\":" + jsonString(description) +
                           ",\"acadlibMetadata\":" + jsonString(acadlibMetadata) +
@@ -1308,13 +1430,16 @@ static void writeDrawingInfo() {
         addWarning(warnings, "dbmod_unavailable_for_non_current_document");
     }
 
+    SelectionScopeStats selectionScope;
+    collectSelectionScope(db, selectionScope, warnings);
     DrawingEntityStats stats;
     collectEntityStats(db, stats, warnings);
     const std::string selection = selectionJson(doc, db, stats, warnings);
 
     long long layerCount = 0, blockCount = 0, layoutCount = 0, xrefCount = 0;
     long long dataLinkCount = 0;
-    const std::string layers = layerTableJson(db, layerCount, warnings);
+    const std::string layers =
+        layerTableJson(db, selectionScope, layerCount, warnings);
     AcDbSymbolTable* linetypeTable = nullptr;
     if (db->getLinetypeTable(linetypeTable, AcDb::kForRead) != Acad::eOk) linetypeTable = nullptr;
     const std::string linetypes =
@@ -1333,20 +1458,23 @@ static void writeDrawingInfo() {
         symbolTableNamesJson(regAppTable, "registered_apps_unavailable", warnings);
     std::string xrefs;
     const std::string blocks =
-        blockTableJson(db, xrefs, blockCount, xrefCount, warnings);
+        blockTableJson(db, selectionScope, xrefs, blockCount, xrefCount, warnings);
     const std::string layouts = layoutTableJson(db, layoutCount, warnings);
     const std::string dataLinks = dataLinksJson(db, dataLinkCount, warnings);
     const std::string pdfUnderlays = jsonRows(stats.pdfUnderlays);
     const std::string dictionaries = dictionariesJson(db, warnings);
     const std::string metadataSummary = summaryInfoJson(db, warnings);
 
-    std::string ctab;
-    AcDbBlockTableRecord* currentSpace = nullptr;
-    if (acdbOpenObject(currentSpace, db->currentSpaceId(), AcDb::kForRead) == Acad::eOk &&
-        currentSpace) {
-        ctab = layoutNameFor(currentSpace);
-        currentSpace->close();
-    }
+    const std::string ctab = selectionScope.space;
+    const std::string selectionScopeJson =
+        "{\"space\":" + jsonString(selectionScope.space) +
+        ",\"scanned\":" + std::to_string(selectionScope.scanned) +
+        ",\"complete\":" + jsonBool(selectionScope.complete) + "}";
+    const std::string selectionCatalogJson =
+        "{\"space\":" + jsonString(selectionScope.space) +
+        ",\"scanned\":" + std::to_string(selectionScope.scanned) +
+        ",\"complete\":" + jsonBool(selectionScope.complete) +
+        ",\"objects\":" + jsonRows(selectionScope.objects) + "}";
 
     std::string extents;
     if (stats.haveExtents && stats.extents.isValid()) {
@@ -1417,6 +1545,8 @@ static void writeDrawingInfo() {
 
     const std::string limits =
         "{\"maxEntitiesScanned\":" + std::to_string(kInfoMaxEntitiesScanned) +
+        ",\"maxSelectionScopeEntities\":" +
+            std::to_string(kInfoMaxSelectionScopeEntities) +
         ",\"maxTableItems\":" + std::to_string(kInfoMaxTableItems) +
         ",\"maxMapKeys\":" + std::to_string(kInfoMaxMapKeys) +
         ",\"maxDictionaryItems\":" + std::to_string(kInfoMaxDictionaryItems) +
@@ -1496,7 +1626,9 @@ static void writeDrawingInfo() {
         ",\"pdfUnderlays\":" + pdfUnderlays +
         ",\"dataLinks\":" + dataLinks +
         ",\"dictionaries\":" + dictionaries +
-        ",\"selection\":" + selection + "}";
+        ",\"selection\":" + selection +
+        ",\"selectionScope\":" + selectionScopeJson +
+        ",\"selectionCatalog\":" + selectionCatalogJson + "}";
 
     const std::string json =
         "{\"ok\":true,\"requestId\":" + jsonString(requestId) +
@@ -1514,6 +1646,7 @@ static void writeDrawingInfo() {
         ",\"dataLinks\":" + dataLinks +
         ",\"dictionaries\":" + dictionaries +
         ",\"selection\":" + selection +
+        ",\"selectionScope\":" + selectionScopeJson +
         ",\"drawing\":" + drawing +
         ",\"limits\":" + limits +
         ",\"warnings\":" + stringArrayJson(warnings) + "}";

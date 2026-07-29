@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { asRecord, type JsonRecord } from "./json";
 
 type DocumentInfo = JsonRecord & {
@@ -29,11 +29,15 @@ type DrawingData = {
   xrefs?: unknown;
   dictionaries?: unknown;
   selection?: unknown;
+  selectionScope?: unknown;
+  selectionCatalog?: unknown;
 };
 
 type DrawingInfoResponse = {
   ok?: boolean;
   status?: string;
+  code?: string;
+  snapshotCollectedAt?: string | number;
   running?: boolean;
   alive?: boolean;
   collectedAt?: string | number;
@@ -45,6 +49,8 @@ type DrawingInfoResponse = {
   summary?: JsonRecord | null;
   limits?: JsonRecord | null;
   drawing?: DrawingData | null;
+  selectionScope?: unknown;
+  selectionCatalogError?: string;
   warnings?: unknown[];
   error?: string;
   hint?: string;
@@ -61,11 +67,75 @@ type PendingCadAction = {
   nextTarget?: string;
 };
 
+type CatalogSubject = JsonRecord & {
+  handle: string;
+  type: string;
+  layer: string;
+  layerHandle?: string;
+  blockName?: string;
+  blockHandle?: string;
+};
+
+type SelectionCatalog = {
+  space: string;
+  scanned: number;
+  complete: boolean;
+  objects: CatalogSubject[];
+};
+
+type SelectionCatalogIndex = {
+  layerHandles: Map<string, CatalogSubject[]>;
+  layerNames: Map<string, CatalogSubject[]>;
+  blockHandles: Map<string, CatalogSubject[]>;
+  blockNames: Map<string, CatalogSubject[]>;
+};
+
+type ObjectPicker = {
+  kind: "layer" | "block";
+  name: string;
+  rowKey: string;
+  subjects: CatalogSubject[];
+  complete: boolean;
+  catalogGuard: {
+    instance: string;
+    revision: number;
+  };
+  catalogScope: {
+    kind: "layer" | "block";
+    name: string;
+    handle: string;
+  };
+  selectedHandles: Set<string>;
+};
+
+const CAD_SELECTION_MAX_SUBJECTS = 5_000;
+const PICKER_PAGE_SIZE = 100;
+const SELECTION_PREVIEW_LIMIT = 200;
+
+type CadActionFeedback = {
+  tone: "loading" | "error" | "success";
+  text: string;
+};
+
+const STALE_CAD_CODES = new Set([
+  "document_stale",
+  "drawing_stale",
+  "scope_stale",
+  "selection_stale",
+]);
+
+class CadResponseError extends Error {
+  constructor(message: string, readonly code = "") {
+    super(message);
+  }
+}
+
 export type DrawingInfoPanelProps = {
   open: boolean;
   daemon: string;
   initialTarget?: string;
   refreshToken?: number;
+  refreshEventAt?: number;
   onClose: () => void;
   onOpenAutoCAD?: () => void;
 };
@@ -103,7 +173,11 @@ const FIELD_LABELS: Record<string, string> = {
   plottable: "Cho phép in",
   readOnly: "Chỉ đọc",
   references: "Tham chiếu",
+  referenceCount: "Tham chiếu toàn bản vẽ",
   selected: "Đang chọn",
+  selectableCount: "Có thể chọn",
+  selectableCountExact: "Số lượng chính xác",
+  selectionScope: "Phạm vi chọn",
   selectionCount: "Đang chọn",
   size: "Kích thước",
   sizeBytes: "Dung lượng (byte)",
@@ -137,8 +211,8 @@ const STATUS_LABELS: Record<string, string> = {
 const TABLE_COLUMNS: Record<string, string[]> = {
   entityTypes: ["type", "name", "count"],
   entityLayers: ["layer", "name", "count"],
-  layers: ["name", "color", "linetype", "objectCount", "on", "frozen", "locked", "plottable"],
-  blocks: ["name", "references", "count", "isXref", "isLayout", "anonymous"],
+  layers: ["name", "selectableCount", "color", "linetype", "objectCount", "on", "frozen", "locked", "plottable"],
+  blocks: ["name", "selectableCount", "referenceCount", "isXref", "isLayout", "anonymous"],
   layouts: ["name", "tabOrder", "model", "entityCount", "viewportCount"],
   selection: ["type", "layer", "handle", "name"],
   variables: ["name", "value", "type"],
@@ -162,6 +236,34 @@ function plainValue(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function warningLabel(value: unknown): string {
+  const warning = String(value ?? "");
+  if (warning === "selection_catalog_compat_failed") {
+    return "Chưa tạo được danh mục đối tượng một lượt; có thể kiểm tra trực tiếp từng layer/block rồi quét lại.";
+  }
+  return plainValue(value);
+}
+
+function drawingInfoCatalogFailure(value: DrawingInfoResponse): string {
+  const detail = String(value.selectionCatalogError || "").trim();
+  if (detail) return detail;
+  return (Array.isArray(value.warnings) ? value.warnings : []).some(
+    (warning) => String(warning).trim() === "selection_catalog_compat_failed",
+  ) ? "selection_catalog_compat_failed" : "";
+}
+
+function drawingInfoBusyCode(value: DrawingInfoResponse): string {
+  const code = String(value.code || "").trim().toLocaleLowerCase("en");
+  const status = String(value.status || "").trim().toLocaleLowerCase("en");
+  if (code === "busy" || status === "busy") return "busy";
+  if (code === "document_not_quiescent" || status === "document_not_quiescent") {
+    return "document_not_quiescent";
+  }
+  return (Array.isArray(value.warnings) ? value.warnings : []).some(
+    (warning) => String(warning).trim().toLocaleLowerCase("en") === "document_not_quiescent",
+  ) ? "document_not_quiescent" : "";
 }
 
 function shownValue(value: unknown): ReactNode {
@@ -225,12 +327,206 @@ function sumCounts(value: unknown): number {
   }, 0);
 }
 
+function selectableCountOf(row: JsonRecord): number | undefined {
+  if (row.selectableCount == null || row.selectableCount === "") return undefined;
+  const count = Number(row.selectableCount);
+  return Number.isInteger(count) && count >= 0 ? count : undefined;
+}
+
+function selectionRowKey(kind: "layer" | "block", row: JsonRecord): string {
+  return `${kind}:${String(row.handle || row.name || "")}`;
+}
+
+function normalizedHandle(value: unknown): string {
+  const handle = String(value ?? "").trim().toUpperCase();
+  return /^[0-9A-F]{1,16}$/.test(handle) ? handle.replace(/^0+(?=[0-9A-F])/, "") : "";
+}
+
+function catalogObjectRows(value: unknown): unknown[] {
+  const catalog = asRecord(value);
+  if (!catalog) return [];
+  for (const key of ["objects", "subjects", "entities", "items", "rows"]) {
+    if (Array.isArray(catalog[key])) return catalog[key];
+  }
+  return [];
+}
+
+function catalogSubject(value: unknown): CatalogSubject | null {
+  const row = asRecord(value);
+  if (!row) return null;
+  const handle = normalizedHandle(row.handle);
+  const type = String(firstValue(row, ["type", "entityType", "dxfType"]) || "").trim();
+  const layer = String(firstValue(row, ["layer", "layerName"]) || "").trim();
+  if (!handle || !type || !layer) return null;
+  const layerHandle = normalizedHandle(row.layerHandle);
+  const blockName = String(firstValue(row, ["blockName", "effectiveBlockName"]) || "").trim();
+  const blockHandle = normalizedHandle(firstValue(row, ["blockHandle", "effectiveBlockHandle"]));
+  return {
+    ...row,
+    handle,
+    type,
+    layer,
+    ...(layerHandle ? { layerHandle } : {}),
+    ...(blockName ? { blockName } : {}),
+    ...(blockHandle ? { blockHandle } : {}),
+  };
+}
+
+function selectionCatalogOf(value: unknown): SelectionCatalog | null {
+  const catalog = asRecord(value);
+  if (!catalog) return null;
+  const objects: CatalogSubject[] = [];
+  const seen = new Set<string>();
+  for (const item of catalogObjectRows(catalog)) {
+    const subject = catalogSubject(item);
+    if (!subject || seen.has(subject.handle)) continue;
+    seen.add(subject.handle);
+    objects.push(subject);
+  }
+  const scanned = Number(catalog.scanned);
+  return {
+    space: String(catalog.space || ""),
+    scanned: Number.isFinite(scanned) && scanned >= 0 ? scanned : objects.length,
+    complete: catalog.complete === true && objects.length === scanned,
+    objects,
+  };
+}
+
+function appendCatalogSubject(
+  groups: Map<string, CatalogSubject[]>,
+  key: string,
+  subject: CatalogSubject,
+) {
+  if (!key) return;
+  const current = groups.get(key);
+  if (current) current.push(subject);
+  else groups.set(key, [subject]);
+}
+
+function selectionCatalogIndexOf(catalog: SelectionCatalog | null): SelectionCatalogIndex {
+  const index: SelectionCatalogIndex = {
+    layerHandles: new Map(),
+    layerNames: new Map(),
+    blockHandles: new Map(),
+    blockNames: new Map(),
+  };
+  for (const subject of catalog?.objects || []) {
+    appendCatalogSubject(index.layerHandles, subject.layerHandle || "", subject);
+    appendCatalogSubject(
+      index.layerNames,
+      subject.layer.toLocaleUpperCase("en-US"),
+      subject,
+    );
+    if (subject.blockName) {
+      appendCatalogSubject(index.blockHandles, subject.blockHandle || "", subject);
+      appendCatalogSubject(
+        index.blockNames,
+        subject.blockName.toLocaleUpperCase("en-US"),
+        subject,
+      );
+    }
+  }
+  return index;
+}
+
+function catalogRowsOf(
+  value: unknown,
+  catalog: SelectionCatalog | null,
+  kind: "layer" | "block",
+): JsonRecord[] {
+  const sourceRows = normalizeRows(value);
+  if (!catalog) return sourceRows;
+  type Group = { name: string; handle: string; count: number };
+  const groups: Group[] = [];
+  const byHandle = new Map<string, Group>();
+  const byName = new Map<string, Group>();
+  for (const subject of catalog.objects) {
+    const name = kind === "layer" ? subject.layer : String(subject.blockName || "");
+    const handle = normalizedHandle(
+      kind === "layer" ? subject.layerHandle : subject.blockHandle,
+    );
+    const nameKey = name.trim().toLocaleUpperCase("en-US");
+    if (!nameKey) continue;
+    let group = (handle ? byHandle.get(handle) : undefined) || byName.get(nameKey);
+    if (!group) {
+      group = { name, handle, count: 0 };
+      groups.push(group);
+    }
+    group.count += 1;
+    if (!group.handle && handle) group.handle = handle;
+    if (handle) byHandle.set(handle, group);
+    byName.set(nameKey, group);
+  }
+
+  const included = new Set<Group>();
+  const result: JsonRecord[] = sourceRows.map((row) => {
+    const handle = normalizedHandle(row.handle);
+    const nameKey = String(row.name || "").trim().toLocaleUpperCase("en-US");
+    const group = (handle ? byHandle.get(handle) : undefined) || byName.get(nameKey);
+    if (group) included.add(group);
+    return {
+      ...row,
+      selectableCount: group?.count || 0,
+      selectableCountExact: catalog.complete,
+    };
+  });
+  for (const group of groups) {
+    if (included.has(group)) continue;
+    result.push({
+      name: group.name,
+      ...(group.handle ? { handle: group.handle } : {}),
+      selectableCount: group.count,
+      selectableCountExact: catalog.complete,
+    });
+  }
+  return result;
+}
+
+function catalogGroupSubjects(
+  index: SelectionCatalogIndex,
+  kind: "layer" | "block",
+  row: JsonRecord,
+): CatalogSubject[] {
+  const rowName = String(row.name || "").trim().toLocaleUpperCase("en-US");
+  const rowHandle = normalizedHandle(row.handle);
+  if (kind === "layer") {
+    return (rowHandle && index.layerHandles.get(rowHandle)) ||
+      index.layerNames.get(rowName) || [];
+  }
+  return (rowHandle && index.blockHandles.get(rowHandle)) ||
+    index.blockNames.get(rowName) || [];
+}
+
+function subjectSearchText(subject: CatalogSubject): string {
+  return [
+    subject.handle,
+    subject.type,
+    subject.layer,
+    subject.blockName,
+    subject.blockHandle,
+    subject.position,
+  ].filter(Boolean).join(" ").toLocaleLowerCase("vi");
+}
+
 function formatCollectedAt(value: string | number | undefined): string {
   if (value == null || value === "") return "Chưa rõ thời điểm";
-  const date = new Date(value);
+  const numeric = Number(value);
+  const date = new Date(Number.isFinite(numeric) && numeric > 0 && numeric < 1_000_000_000_000
+    ? numeric * 1_000
+    : value);
   return Number.isNaN(date.getTime())
     ? String(value)
     : date.toLocaleString("vi-VN", { dateStyle: "short", timeStyle: "medium" });
+}
+
+function collectedAtSeconds(value: string | number | undefined): number {
+  if (value == null || value === "") return 0;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric >= 1_000_000_000_000 ? numeric / 1_000 : numeric;
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed / 1_000 : 0;
 }
 
 function matchesFilter(row: JsonRecord, filter: string): boolean {
@@ -243,7 +539,10 @@ async function responseRecord(response: Response): Promise<JsonRecord> {
   const body = await response.json().catch(() => ({}));
   const record = asRecord(body) || {};
   if (!response.ok || record.ok === false) {
-    throw new Error(String(record.error || record.message || `HTTP ${response.status}`));
+    throw new CadResponseError(
+      String(record.error || record.message || `HTTP ${response.status}`),
+      String(record.code || ""),
+    );
   }
   return record;
 }
@@ -275,18 +574,33 @@ function DataTable({
   filter,
   preferred = [],
   rowAction,
+  selectionCountExact,
+  prioritizeSelectable = false,
 }: {
   data: unknown;
   filter: string;
   preferred?: string[];
   rowAction?: {
-    label: string;
-    disabled?: boolean;
+    label: string | ((row: JsonRecord) => string);
+    disabled?: boolean | ((row: JsonRecord) => boolean);
+    busy?: (row: JsonRecord) => boolean;
+    title?: (row: JsonRecord) => string | undefined;
     onClick: (row: JsonRecord) => void;
   };
+  selectionCountExact?: boolean;
+  prioritizeSelectable?: boolean;
 }) {
   const allRows = useMemo(() => normalizeRows(data), [data]);
-  const rows = useMemo(() => allRows.filter((row) => matchesFilter(row, filter)), [allRows, filter]);
+  const rows = useMemo(() => {
+    const filtered = allRows.filter((row) => matchesFilter(row, filter));
+    if (!prioritizeSelectable) return filtered;
+    return [...filtered].sort((left, right) =>
+      (selectableCountOf(right) ?? -1) - (selectableCountOf(left) ?? -1));
+  }, [allRows, filter, prioritizeSelectable]);
+  const rowsWithObjects = useMemo(
+    () => allRows.filter((row) => (selectableCountOf(row) || 0) > 0).length,
+    [allRows],
+  );
   const columns = useMemo(() => {
     const keys = Array.from(new Set(allRows.flatMap((row) => Object.keys(row))));
     return [...preferred.filter((key) => keys.includes(key)), ...keys.filter((key) => !preferred.includes(key))];
@@ -298,13 +612,16 @@ function DataTable({
     <>
       <div className="drawing-table-count">
         {filter && rows.length !== allRows.length ? `${rows.length}/${allRows.length} mục` : `${allRows.length} mục`}
+        {prioritizeSelectable && (
+          <> · {rowsWithObjects} {selectionCountExact === false ? "đã thấy có đối tượng" : "có đối tượng"}</>
+        )}
       </div>
       <div className="drawing-table-wrap">
         <table className="drawing-table">
           <thead>
             <tr>
               {columns.map((key) => <th key={key}>{humanize(key)}</th>)}
-              {rowAction && <th>Thao tác</th>}
+              {rowAction && <th className="drawing-table-action">Thao tác</th>}
             </tr>
           </thead>
           <tbody>
@@ -313,15 +630,28 @@ function DataTable({
                 {columns.map((key) => (
                   <td key={key} className={typeof row[key] === "object" && row[key] !== null ? "json" : undefined}
                     title={plainValue(row[key])}>
-                    {shownValue(row[key])}
+                    {key === "selectableCount" && selectableCountOf(row) !== undefined &&
+                      (typeof row.selectableCountExact === "boolean"
+                        ? row.selectableCountExact !== true
+                        : selectionCountExact === false)
+                      ? selectableCountOf(row) === 0
+                        ? "Chưa xác định"
+                        : `≥ ${plainValue(selectableCountOf(row))}`
+                      : shownValue(row[key])}
                   </td>
                 ))}
                 {rowAction && (
-                  <td>
+                  <td className="drawing-table-action">
                     <button type="button" className="standards-link-button"
-                      disabled={rowAction.disabled}
+                      disabled={typeof rowAction.disabled === "function"
+                        ? rowAction.disabled(row)
+                        : rowAction.disabled}
+                      title={rowAction.title?.(row)}
                       onClick={() => rowAction.onClick(row)}>
-                      {rowAction.label}
+                      {rowAction.busy?.(row) && <span className="drawing-action-spinner" aria-hidden="true" />}
+                      {rowAction.busy?.(row)
+                        ? "Đang kiểm tra…"
+                        : typeof rowAction.label === "function" ? rowAction.label(row) : rowAction.label}
                     </button>
                   </td>
                 )}
@@ -352,6 +682,17 @@ function Section({
         {count !== undefined && <span className="drawing-section-count">{count}</span>}
       </summary>
       <div className="drawing-section-body">{children}</div>
+    </details>
+  );
+}
+
+function RawJsonSection({ data }: { data: DrawingInfoResponse }) {
+  const [open, setOpen] = useState(false);
+  const formatted = useMemo(() => open ? JSON.stringify(data, null, 2) : "", [data, open]);
+  return (
+    <details className="drawing-section" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary><span>Dữ liệu thô (JSON)</span></summary>
+      {open && <div className="drawing-section-body"><pre className="drawing-raw-json">{formatted}</pre></div>}
     </details>
   );
 }
@@ -399,6 +740,7 @@ export default function DrawingInfoPanel({
   daemon,
   initialTarget,
   refreshToken,
+  refreshEventAt = 0,
   onClose,
   onOpenAutoCAD,
 }: DrawingInfoPanelProps) {
@@ -410,22 +752,67 @@ export default function DrawingInfoPanel({
   const [reloadToken, setReloadToken] = useState(0);
   const [pendingCadAction, setPendingCadAction] = useState<PendingCadAction | null>(null);
   const [cadActionBusy, setCadActionBusy] = useState("");
-  const [cadActionError, setCadActionError] = useState("");
+  const [preparingRow, setPreparingRow] = useState("");
+  const [cadActionFeedback, setCadActionFeedback] = useState<CadActionFeedback | null>(null);
+  const [catalogStale, setCatalogStale] = useState(false);
+  const [objectPicker, setObjectPicker] = useState<ObjectPicker | null>(null);
+  const [pickerFilter, setPickerFilter] = useState("");
+  const [pickerPage, setPickerPage] = useState(0);
+  const seenRefreshToken = useRef(refreshToken);
+  const latestRefreshToken = useRef(refreshToken);
+  const latestRefreshEventAt = useRef(refreshEventAt);
+  const loadedSnapshotKey = useRef("");
+  const displayedTargetKey = useRef("");
+  const targetSyncPending = useRef<string | null>(null);
+  const pickerDialogRef = useRef<HTMLDivElement | null>(null);
+  const pickerReturnFocusRef = useRef<HTMLElement | null>(null);
+  const pickerWasOpen = useRef(false);
+  latestRefreshToken.current = refreshToken;
+  latestRefreshEventAt.current = refreshEventAt;
 
   useEffect(() => {
+    const requestedTarget = initialTarget?.trim() || "";
+    if (selectedTarget !== requestedTarget) {
+      targetSyncPending.current = requestedTarget;
+      setSelectedTarget(requestedTarget);
+    }
     if (!open) return;
-    setSelectedTarget(initialTarget?.trim() || "");
     setFilter("");
     setPendingCadAction(null);
-    setCadActionError("");
+    setPreparingRow("");
+    setCadActionFeedback(null);
+    setObjectPicker(null);
+    setPickerFilter("");
+    setPickerPage(0);
   }, [open, initialTarget]);
 
   useEffect(() => {
+    if (seenRefreshToken.current === refreshToken) return;
+    seenRefreshToken.current = refreshToken;
+    // Keep an already opened picker/proposal usable. Its catalogGuard and
+    // catalogScope are verified by the backend at prepare and again at Apply.
+    setCatalogStale(true);
+  }, [refreshToken]);
+
+  useEffect(() => {
     if (!open) return;
+    if (targetSyncPending.current !== null) {
+      if (selectedTarget !== targetSyncPending.current) return;
+      targetSyncPending.current = null;
+    }
+    const targetKey = `${daemon.replace(/\/+$/, "")}|${selectedTarget}`;
+    const requestKey = `${targetKey}|${reloadToken}`;
+    // The panel stays mounted while hidden. Reopening the same drawing reuses
+    // the last snapshot; only target changes and the explicit scan button read
+    // the full drawing again.
+    if (loadedSnapshotKey.current === requestKey) return;
+    const sameTarget = displayedTargetKey.current === targetKey;
     const controller = new AbortController();
+    const refreshTokenAtStart = latestRefreshToken.current;
     const load = async () => {
       setLoading(true);
       setRequestError("");
+      if (!sameTarget) setData(null);
       const base = daemon.replace(/\/+$/, "");
       const query = selectedTarget ? `?target=${encodeURIComponent(selectedTarget)}` : "";
       try {
@@ -434,12 +821,60 @@ export default function DrawingInfoPanel({
           cache: "no-store",
         });
         const body = await response.json() as DrawingInfoResponse;
-        if (!response.ok && !body.error) body.error = `HTTP ${response.status}`;
+        const busyCode = drawingInfoBusyCode(body);
+        const catalogFailure = drawingInfoCatalogFailure(body);
+        const scanFailed = !response.ok || body.ok === false || !!busyCode ||
+          (sameTarget && !!catalogFailure);
+        if (scanFailed) {
+          const message = body.error || (busyCode
+            ? "AutoCAD đang thực thi lệnh hoặc chưa sẵn sàng. Hãy hoàn tất/nhấn Esc trong AutoCAD rồi quét lại."
+            : catalogFailure
+              ? "Không tạo được danh mục đối tượng từ lần quét mới."
+            : `Không quét được hồ sơ từ AutoCAD (HTTP ${response.status}).`);
+          if (sameTarget) {
+            setCatalogStale(true);
+            setCadActionFeedback({
+              tone: "error",
+              text: `Giữ nguyên snapshot cũ vì lần quét mới chưa thành công: ${message}`,
+            });
+          } else {
+            setData({
+              ...body,
+              ok: false,
+              status: busyCode || body.status || "error",
+              error: message,
+            });
+          }
+          return;
+        }
         setData(body);
+        displayedTargetKey.current = targetKey;
+        loadedSnapshotKey.current = requestKey;
+        // An AutoCAD event may arrive while a long scan is running. Keep the
+        // freshly returned snapshot marked stale in that race instead of
+        // claiming that it includes a later change.
+        const eventDuringScan = latestRefreshToken.current !== refreshTokenAtStart;
+        const snapshotCollectedAt = collectedAtSeconds(
+          body.snapshotCollectedAt ?? body.collectedAt,
+        );
+        const eventCoveredBySnapshot = latestRefreshEventAt.current > 0 &&
+          snapshotCollectedAt > 0 && latestRefreshEventAt.current < snapshotCollectedAt;
+        setCatalogStale(eventDuringScan && !eventCoveredBySnapshot);
+        setObjectPicker(null);
+        setPickerFilter("");
+        setPickerPage(0);
+        setCadActionFeedback(null);
       } catch (error) {
         if (!controller.signal.aborted) {
-          setData(null);
-          setRequestError(error instanceof Error ? error.message : String(error));
+          const message = error instanceof Error ? error.message : String(error);
+          if (sameTarget) {
+            setCadActionFeedback({
+              tone: "error",
+              text: `Không quét lại được từ AutoCAD: ${message}`,
+            });
+          } else {
+            setRequestError(message);
+          }
         }
       } finally {
         if (!controller.signal.aborted) setLoading(false);
@@ -447,7 +882,7 @@ export default function DrawingInfoPanel({
     };
     void load();
     return () => controller.abort();
-  }, [open, daemon, selectedTarget, refreshToken, reloadToken]);
+  }, [open, daemon, selectedTarget, reloadToken]);
 
   useEffect(() => {
     if (!open) return;
@@ -457,11 +892,47 @@ export default function DrawingInfoPanel({
         void rejectPendingCadAction();
         return;
       }
+      if (objectPicker) {
+        setObjectPicker(null);
+        return;
+      }
       onClose();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [open, onClose, pendingCadAction]);
+  }, [open, onClose, pendingCadAction, objectPicker]);
+
+  useEffect(() => {
+    if (!objectPicker) {
+      if (!pickerWasOpen.current) return;
+      pickerWasOpen.current = false;
+      const returnTarget = pickerReturnFocusRef.current;
+      pickerReturnFocusRef.current = null;
+      requestAnimationFrame(() => returnTarget?.focus());
+      return;
+    }
+    pickerWasOpen.current = true;
+    const dialog = pickerDialogRef.current;
+    if (!dialog) return;
+    const containFocus = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const focusable = [...dialog.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      )].filter((element) => !element.hidden);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && window.document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && window.document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.document.addEventListener("keydown", containFocus);
+    return () => window.document.removeEventListener("keydown", containFocus);
+  }, [objectPicker]);
 
   const documents = Array.isArray(data?.documents) ? data.documents : [];
   const document = data?.document || null;
@@ -490,6 +961,55 @@ export default function DrawingInfoPanel({
   const xrefCount = firstNumber(summary, ["xrefCount", "xrefs"], countFrom(drawing?.xrefs));
   const documentModified = document?.modified === true || Number(document?.dbmod) > 0;
   const drawingSettings = asRecord(drawing?.settings);
+  const selectionScope = asRecord(drawing?.selectionScope) || asRecord(data?.selectionScope);
+  const selectionScopeComplete = selectionScope?.complete === true;
+  const selectionScopeSpace = String(selectionScope?.space || drawingSettings?.CTAB || "");
+  const selectionScopeLabel = selectionScopeSpace
+    ? `không gian “${selectionScopeSpace}” hiện hành`
+    : "layout hiện hành";
+  const selectionCatalog = useMemo(
+    () => selectionCatalogOf(drawing?.selectionCatalog),
+    [drawing?.selectionCatalog],
+  );
+  const selectionCatalogIndex = useMemo(
+    () => selectionCatalogIndexOf(selectionCatalog),
+    [selectionCatalog],
+  );
+  const catalogLayerRows = useMemo(
+    () => catalogRowsOf(drawing?.layers, selectionCatalog, "layer"),
+    [drawing?.layers, selectionCatalog],
+  );
+  const catalogBlockRows = useMemo(
+    () => catalogRowsOf(drawing?.blocks, selectionCatalog, "block"),
+    [drawing?.blocks, selectionCatalog],
+  );
+  const selectionCatalogLabel = selectionCatalog?.space
+    ? `không gian “${selectionCatalog.space}” hiện hành`
+    : selectionScopeLabel;
+  const catalogSubjectsForRow = useMemo(() => {
+    const map = new Map<string, CatalogSubject[]>();
+    for (const kind of ["layer", "block"] as const) {
+      for (const row of kind === "layer" ? catalogLayerRows : catalogBlockRows) {
+        map.set(selectionRowKey(kind, row), catalogGroupSubjects(selectionCatalogIndex, kind, row));
+      }
+    }
+    return map;
+  }, [catalogBlockRows, catalogLayerRows, selectionCatalogIndex]);
+  const pickerSubjects = objectPicker?.subjects || [];
+  const normalizedPickerFilter = pickerFilter.trim().toLocaleLowerCase("vi");
+  const filteredPickerSubjects = useMemo(() => {
+    if (!normalizedPickerFilter) return pickerSubjects;
+    return pickerSubjects.filter((subject) => subjectSearchText(subject).includes(normalizedPickerFilter));
+  }, [normalizedPickerFilter, pickerSubjects]);
+  const pickerPageCount = Math.max(1, Math.ceil(filteredPickerSubjects.length / PICKER_PAGE_SIZE));
+  const safePickerPage = Math.min(pickerPage, pickerPageCount - 1);
+  const visiblePickerSubjects = filteredPickerSubjects.slice(
+    safePickerPage * PICKER_PAGE_SIZE,
+    (safePickerPage + 1) * PICKER_PAGE_SIZE,
+  );
+  const pickerSelectedCount = objectPicker?.selectedHandles.size || 0;
+  const pickerCanSelectAll = !!objectPicker && objectPicker.complete &&
+    objectPicker.subjects.length <= CAD_SELECTION_MAX_SUBJECTS;
   const applicationInfo = {
     ...(data?.application || {}),
     pluginVersion: data?.source?.pluginVersion,
@@ -508,7 +1028,47 @@ export default function DrawingInfoPanel({
   const autoCadOffline = status === "offline" || status === "autocad_offline" || data?.running === false;
   const responseError = data?.error || (!data?.ok && !autoCadOffline && !pluginOffline && !noDocument ? data?.hint : "");
 
-  const refresh = () => setReloadToken((token) => token + 1);
+  const refresh = () => {
+    if (cadActionBusy || pendingCadAction) return;
+    setCatalogStale(true);
+    setObjectPicker(null);
+    setPickerFilter("");
+    setPickerPage(0);
+    setReloadToken((token) => token + 1);
+  };
+
+  function patchSelectionSummary(applied: JsonRecord) {
+    const allSubjects = Array.isArray(applied.subjects) ? applied.subjects : null;
+    const subjects = allSubjects?.slice(0, SELECTION_PREVIEW_LIMIT) || null;
+    const nextCount = Number(applied.count);
+    if (!Number.isFinite(nextCount) || !data) return;
+    setData((previous) => {
+      if (!previous) return previous;
+      const previousDrawing = asRecord(previous.drawing) || {};
+      const previousSelection = asRecord(previousDrawing.selection) || {};
+      const nextSelection = {
+        ...previousSelection,
+        count: nextCount,
+        total: nextCount,
+        ...(subjects ? {
+          entities: subjects,
+          truncated: allSubjects!.length > subjects.length,
+        } : {}),
+      };
+      return {
+        ...previous,
+        summary: {
+          ...(previous.summary || {}),
+          selectionCount: nextCount,
+          selected: nextCount,
+        },
+        drawing: {
+          ...previousDrawing,
+          selection: nextSelection,
+        },
+      };
+    });
+  }
 
   async function prepareCadAction(
     request: JsonRecord,
@@ -516,10 +1076,15 @@ export default function DrawingInfoPanel({
       action: PendingCadAction["action"];
       target: string;
     },
+    rowKey = "",
   ) {
     if (cadActionBusy || pendingCadAction) return;
     setCadActionBusy("prepare");
-    setCadActionError("");
+    setPreparingRow(rowKey);
+    setCadActionFeedback({
+      tone: "loading",
+      text: `Đang kiểm tra ${display.scopeLabel}…`,
+    });
     try {
       const body = await responseRecord(await fetch(
         `${daemon.replace(/\/+$/, "")}/api/acad/selection/prepare`,
@@ -549,9 +1114,18 @@ export default function DrawingInfoPanel({
           : display.nextTarget,
         count: Number.isFinite(count) ? count : display.count,
       });
+      setCadActionFeedback(null);
     } catch (error) {
-      setCadActionError(error instanceof Error ? error.message : String(error));
+      if (error instanceof CadResponseError && STALE_CAD_CODES.has(error.code)) {
+        setCatalogStale(true);
+        setObjectPicker(null);
+      }
+      setCadActionFeedback({
+        tone: "error",
+        text: `${display.scopeLabel}: ${error instanceof Error ? error.message : String(error)}`,
+      });
     } finally {
+      setPreparingRow("");
       setCadActionBusy("");
     }
   }
@@ -560,9 +1134,9 @@ export default function DrawingInfoPanel({
     const pending = pendingCadAction;
     if (!pending || cadActionBusy) return;
     setCadActionBusy("apply");
-    setCadActionError("");
+    setCadActionFeedback(null);
     try {
-      await responseRecord(await fetch(
+      const result = await responseRecord(await fetch(
         `${daemon.replace(/\/+$/, "")}/api/acad/selection/operations/` +
           `${encodeURIComponent(pending.id)}/apply`,
         {
@@ -572,17 +1146,32 @@ export default function DrawingInfoPanel({
         },
       ));
       setPendingCadAction(null);
+      setCadActionFeedback({
+        tone: "success",
+        text: String(result.hint || (pending.action === "select"
+          ? `Đã chọn ${pending.count ?? 0} đối tượng trong AutoCAD.`
+          : `Đã kích hoạt bản vẽ ${pending.targetLabel}.`)),
+      });
       if (pending.nextTarget) {
         setData(null);
         setSelectedTarget(pending.nextTarget);
+      } else if (pending.action === "select") {
+        patchSelectionSummary(asRecord(result.result) || {});
       } else {
-        refresh();
+        setCatalogStale(true);
       }
     } catch (error) {
       // Apply is one-shot server-side. Force a fresh prepare instead of
       // offering a retry against an operation that may already be terminal.
       setPendingCadAction(null);
-      setCadActionError(error instanceof Error ? error.message : String(error));
+      if (error instanceof CadResponseError && STALE_CAD_CODES.has(error.code)) {
+        setCatalogStale(true);
+        setObjectPicker(null);
+      }
+      setCadActionFeedback({
+        tone: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setCadActionBusy("");
     }
@@ -592,6 +1181,7 @@ export default function DrawingInfoPanel({
     const pending = pendingCadAction;
     if (!pending || cadActionBusy) return;
     setPendingCadAction(null);
+    setCadActionFeedback(null);
     setCadActionBusy("reject");
     try {
       await fetch(
@@ -625,25 +1215,204 @@ export default function DrawingInfoPanel({
     );
   }
 
-  function selectTableRow(kind: "layer" | "block", row: JsonRecord) {
+  function openObjectPicker(kind: "layer" | "block", row: JsonRecord) {
     const name = String(row.name || "");
     if (!name) return;
+    if (cadActionBusy || pendingCadAction) return;
+    const scopeLabel = `${kind === "layer" ? "Layer" : "Block"} “${name}” trong ${selectionCatalogLabel}`;
+    const rowKey = selectionRowKey(kind, row);
+    const subjects = catalogSubjectsForRow.get(rowKey) || [];
+    if (catalogStale || !selectionCatalog || (!selectionCatalog.complete && !subjects.length)) {
+      // Compatibility path for a plugin that predates selectionCatalog. It
+      // also keeps stale/unscanned rows usable through a fresh guarded resolve.
+      const rowCount = selectableCountOf(row);
+      const exactTarget = documentPath || viewedTarget;
+      const directReason = catalogStale
+        ? "snapshot cũ, kiểm tra trực tiếp"
+        : selectionCatalog
+          ? "danh mục chưa đầy đủ, kiểm tra trực tiếp"
+          : "plugin cũ cần kiểm tra";
+      void prepareCadAction(
+        {
+          target: exactTarget,
+          action: "select",
+          scope: { kind, name, handle: String(row.handle || "") },
+        },
+        {
+          action: "select",
+          target: exactTarget,
+          targetLabel: documentTitle,
+          scopeLabel: `${scopeLabel} · ${directReason}`,
+          ...(!catalogStale && !selectionCatalog && rowCount !== undefined ? { count: rowCount } : {}),
+        },
+        rowKey,
+      );
+      return;
+    }
+    if (!subjects.length) {
+      setCadActionFeedback({ tone: "error", text: `${scopeLabel}: 0 đối tượng có thể chọn.` });
+      return;
+    }
+    const catalogInstance = String(document?.instance || "").trim();
+    const catalogRevision = Number(document?.revision);
+    if (!catalogInstance || !Number.isSafeInteger(catalogRevision) || catalogRevision < 0) {
+      setCatalogStale(true);
+      setCadActionFeedback({
+        tone: "error",
+        text: `${scopeLabel}: snapshot thiếu định danh phiên bản; hãy bấm “Quét lại từ AutoCAD”.`,
+      });
+      return;
+    }
+    const catalogScopeHandle = normalizedHandle(
+      kind === "layer" ? subjects[0]?.layerHandle : subjects[0]?.blockHandle,
+    );
+    const catalogScopeConsistent = !!catalogScopeHandle && subjects.every((subject) =>
+      normalizedHandle(kind === "layer" ? subject.layerHandle : subject.blockHandle) ===
+        catalogScopeHandle);
+    if (!catalogScopeConsistent) {
+      setCatalogStale(true);
+      setCadActionFeedback({
+        tone: "error",
+        text: `${scopeLabel}: catalog thiếu định danh ${kind === "layer" ? "layer" : "block"}; hãy quét lại.`,
+      });
+      return;
+    }
+    const defaultAll = selectionCatalog.complete && subjects.length <= CAD_SELECTION_MAX_SUBJECTS;
+    pickerReturnFocusRef.current = window.document.activeElement instanceof HTMLElement
+      ? window.document.activeElement
+      : null;
+    setObjectPicker({
+      kind,
+      name,
+      rowKey,
+      subjects,
+      complete: selectionCatalog.complete,
+      catalogGuard: {
+        instance: catalogInstance,
+        revision: catalogRevision,
+      },
+      catalogScope: {
+        kind,
+        name,
+        handle: catalogScopeHandle,
+      },
+      selectedHandles: new Set(defaultAll ? subjects.map((subject) => subject.handle) : []),
+    });
+    setPickerFilter("");
+    setPickerPage(0);
+    setCadActionFeedback(null);
+  }
+
+  function setPickerSubjectChecked(handle: string, checked: boolean) {
+    setObjectPicker((current) => {
+      if (!current) return current;
+      const next = new Set(current.selectedHandles);
+      if (checked) {
+        if (next.size >= CAD_SELECTION_MAX_SUBJECTS) return current;
+        next.add(handle);
+      } else {
+        next.delete(handle);
+      }
+      return { ...current, selectedHandles: next };
+    });
+  }
+
+  function setPickerSelectAll(checked: boolean) {
+    setObjectPicker((current) => {
+      if (!current || !current.complete || current.subjects.length > CAD_SELECTION_MAX_SUBJECTS) {
+        return current;
+      }
+      return {
+        ...current,
+        selectedHandles: checked
+          ? new Set(current.subjects.map((subject) => subject.handle))
+          : new Set<string>(),
+      };
+    });
+  }
+
+  function submitObjectPicker() {
+    const picker = objectPicker;
+    if (!picker) return;
+    const handles = [...picker.selectedHandles];
+    const scopeLabel = `${picker.kind === "layer" ? "Layer" : "Block"} “${picker.name}” trong ${selectionCatalogLabel}`;
+    if (!handles.length) {
+      setCadActionFeedback({ tone: "error", text: `${scopeLabel}: hãy chọn ít nhất một đối tượng.` });
+      return;
+    }
+    if (handles.length > CAD_SELECTION_MAX_SUBJECTS) {
+      setCadActionFeedback({ tone: "error", text: `${scopeLabel}: tối đa ${CAD_SELECTION_MAX_SUBJECTS.toLocaleString("vi-VN")} đối tượng mỗi lần.` });
+      return;
+    }
     const exactTarget = documentPath || viewedTarget;
-    const handle = String(row.handle || "");
+    setObjectPicker(null);
     void prepareCadAction(
       {
         target: exactTarget,
         action: "select",
-        scope: { kind, name, handle },
+        scope: { kind: "handles", handles },
+        catalogGuard: picker.catalogGuard,
+        catalogScope: {
+          ...picker.catalogScope,
+          selectedAll: picker.complete && handles.length === picker.subjects.length,
+        },
       },
       {
         action: "select",
         target: exactTarget,
         targetLabel: documentTitle,
-        scopeLabel:
-          `${kind === "layer" ? "Layer" : "Block"} “${name}” trong layout hiện hành`,
+        scopeLabel: `${scopeLabel} · ${handles.length}/${picker.subjects.length} đối tượng`,
+        count: handles.length,
       },
+      picker.rowKey,
     );
+  }
+
+  function rowCatalogSubjects(kind: "layer" | "block", row: JsonRecord): CatalogSubject[] {
+    return catalogSubjectsForRow.get(selectionRowKey(kind, row)) || [];
+  }
+
+  function rowCatalogLabel(kind: "layer" | "block", row: JsonRecord): string {
+    const subjects = rowCatalogSubjects(kind, row);
+    if (catalogStale) return "Kiểm tra & chọn";
+    if (!selectionCatalog) {
+      return selectionScopeComplete && selectableCountOf(row) === 0
+        ? "0 đối tượng"
+        : "Kiểm tra & chọn";
+    }
+    if (!subjects.length) return selectionCatalog.complete ? "0 đối tượng" : "Kiểm tra & chọn";
+    if (!selectionCatalog.complete) return `Chọn ≥${subjects.length}`;
+    if (subjects.length > CAD_SELECTION_MAX_SUBJECTS) return `Chọn từng (${subjects.length})`;
+    return `Chọn ${subjects.length}`;
+  }
+
+  function rowCatalogDisabled(kind: "layer" | "block", row: JsonRecord): boolean {
+    return !!cadActionBusy || !!pendingCadAction || (!catalogStale && (
+      (!selectionCatalog && selectionScopeComplete && selectableCountOf(row) === 0) ||
+      (!!selectionCatalog?.complete && rowCatalogSubjects(kind, row).length === 0)
+    ));
+  }
+
+  function rowCatalogTitle(kind: "layer" | "block", row: JsonRecord): string {
+    const subjects = rowCatalogSubjects(kind, row);
+    const label = kind === "layer" ? "layer" : "block";
+    if (catalogStale) {
+      return "Snapshot đã cũ; bấm để kiểm tra trực tiếp trên AutoCAD hoặc quét lại để cập nhật danh mục.";
+    }
+    if (!selectionCatalog) {
+      if (selectionScopeComplete && selectableCountOf(row) === 0) {
+        return `${label} này không có đối tượng trong ${selectionScopeLabel}.`;
+      }
+      return "Plugin cũ: daemon sẽ kiểm tra layer/block khi bấm; nạp bản mới để chọn từ snapshot.";
+    }
+    if (!subjects.length) {
+      return selectionCatalog.complete
+        ? `${label} này không có đối tượng trong ${selectionCatalogLabel}.`
+        : `Chưa thấy đối tượng của ${label} này trong phần danh mục đã quét; bấm để kiểm tra trực tiếp.`;
+    }
+    if (!selectionCatalog.complete) return `Chỉ có ${subjects.length} đối tượng đã quét; có thể còn đối tượng khác.`;
+    if (subjects.length > CAD_SELECTION_MAX_SUBJECTS) return `Nhóm có ${subjects.length} đối tượng; chọn từng nhóm tối đa ${CAD_SELECTION_MAX_SUBJECTS}.`;
+    return `Mở danh sách ${subjects.length} đối tượng để chọn tất cả hoặc chọn từng đối tượng.`;
   }
 
   if (!open) return null;
@@ -657,7 +1426,9 @@ export default function DrawingInfoPanel({
         onClose();
       }
     }}>
-      <section className="drawing-info-panel" role="dialog" aria-modal="true" aria-labelledby="drawing-info-title">
+      <section className="drawing-info-panel" role="dialog" aria-modal="true"
+        aria-hidden={objectPicker ? true : undefined} inert={objectPicker ? true : undefined}
+        aria-labelledby="drawing-info-title">
         <header className="drawing-info-head">
           <div className="drawing-info-identity">
             <div className="drawing-info-mark" aria-hidden="true">
@@ -689,10 +1460,6 @@ export default function DrawingInfoPanel({
                 })}
               </select>
             </label>
-            <button type="button" className="drawing-icon-btn" onClick={refresh} disabled={loading}
-              title="Nạp lại toàn bộ thông tin" aria-label="Nạp lại toàn bộ thông tin">
-              <span className={loading ? "drawing-spin" : ""}>↻</span>
-            </button>
             <button type="button" className="drawing-icon-btn close" onClick={() => {
               if (pendingCadAction) {
                 void rejectPendingCadAction();
@@ -712,7 +1479,9 @@ export default function DrawingInfoPanel({
             {document?.active === true && <span className="drawing-tag active">Đang active</span>}
             {documentModified && <span className="drawing-tag modified">Chưa lưu</span>}
             {document?.readOnly === true && <span className="drawing-tag readonly">Chỉ đọc</span>}
-            <span className="drawing-collected">{formatCollectedAt(data?.collectedAt)}</span>
+            <span className="drawing-collected" title="Thời điểm snapshot được quét từ AutoCAD">
+              Snapshot: {formatCollectedAt(data?.snapshotCollectedAt ?? data?.collectedAt)}
+            </span>
           </div>
           <label className="drawing-filter">
             <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -724,16 +1493,14 @@ export default function DrawingInfoPanel({
               placeholder="Lọc layer, block, kiểu đối tượng…" />
             {filter && <button type="button" onClick={() => setFilter("")} aria-label="Xoá bộ lọc">×</button>}
           </label>
+          <button type="button" className="drawing-catalog-refresh" onClick={refresh}
+            disabled={loading || !!cadActionBusy || !!pendingCadAction}
+            title="Quét lại toàn bộ hồ sơ và danh mục từ AutoCAD">
+            {loading ? "Đang quét hồ sơ…" : "Quét lại từ AutoCAD"}
+          </button>
         </div>
 
         <div className="drawing-info-body">
-          {cadActionError && (
-            <div className="drawing-warnings">
-              <strong>⚠ Không thực hiện được thao tác AutoCAD</strong>
-              <div>{cadActionError}</div>
-            </div>
-          )}
-
           {loading && !data && !requestError && (
             <div className="drawing-loading" role="status">
               <span className="drawing-loader" />
@@ -774,6 +1541,20 @@ export default function DrawingInfoPanel({
             <>
               {loading && <div className="drawing-refreshing"><span className="drawing-spin">↻</span> Đang cập nhật…</div>}
 
+              {catalogStale && (
+                <div className="drawing-catalog-state stale" role="status">
+                  <strong>Bản vẽ đã thay đổi trong AutoCAD.</strong>
+                  <span>Dữ liệu trên app là snapshot lúc {formatCollectedAt(data.collectedAt)}. Bấm “Quét lại từ AutoCAD” khi cần cập nhật.</span>
+                </div>
+              )}
+
+              {!selectionCatalog && (
+                <div className="drawing-catalog-state unsupported" role="status">
+                  <strong>Lần quét này chưa có danh mục đối tượng.</strong>
+                  <span>Hoàn tất lệnh đang chạy hoặc nhấn Esc trong AutoCAD, rồi bấm “Quét lại từ AutoCAD”. App sẽ quét một lượt bằng cả plugin mới và đường tương thích.</span>
+                </div>
+              )}
+
               <div className="drawing-metrics">
                 <Metric label="Đối tượng" value={entityCount} tone="blue" />
                 <Metric label="Layer" value={layerCount} tone="violet" />
@@ -786,7 +1567,7 @@ export default function DrawingInfoPanel({
               {!!data.warnings?.length && (
                 <div className="drawing-warnings">
                   <strong>⚠ Lưu ý khi thu thập dữ liệu</strong>
-                  <ul>{data.warnings.map((warning, index) => <li key={index}>{plainValue(warning)}</li>)}</ul>
+                  <ul>{data.warnings.map((warning, index) => <li key={index}>{warningLabel(warning)}</li>)}</ul>
                 </div>
               )}
 
@@ -830,23 +1611,51 @@ export default function DrawingInfoPanel({
                   preferred={["space", "name", "count"]} />
               </Section>
 
-              <Section title="Layer" count={countFrom(drawing?.layers)}>
-                <DataTable data={drawing?.layers} filter={normalizedFilter}
+              <Section title="Layer" count={catalogLayerRows.length}>
+                <div className={"drawing-selection-scope " + (selectionCatalog?.complete && !catalogStale ? "exact" : "partial")}>
+                  Danh mục: <strong>{selectionCatalogLabel}</strong>
+                  {selectionCatalog && <> · Đã quét {plainValue(selectionCatalog.scanned)} đối tượng</>}
+                  {selectionCatalog
+                    ? selectionCatalog.complete
+                      ? " · Danh mục đầy đủ"
+                      : " · Danh mục chưa đầy đủ; chỉ chọn được các đối tượng đã quét"
+                    : " · Plugin cũ: hàng sẽ kiểm tra trực tiếp; nạp bản mới để dùng snapshot"}
+                  {catalogStale && " · Có thay đổi mới; cần quét lại"}
+                </div>
+                <DataTable data={catalogLayerRows} filter={normalizedFilter}
                   preferred={TABLE_COLUMNS.layers}
+                  selectionCountExact={selectionCatalog?.complete ?? selectionScopeComplete}
+                  prioritizeSelectable={!!selectionCatalog}
                   rowAction={{
-                    label: "Chọn trong AutoCAD",
-                    disabled: !!cadActionBusy || !!pendingCadAction,
-                    onClick: (row) => selectTableRow("layer", row),
+                    label: (row) => rowCatalogLabel("layer", row),
+                    disabled: (row) => rowCatalogDisabled("layer", row),
+                    busy: (row) => preparingRow === selectionRowKey("layer", row),
+                    title: (row) => rowCatalogTitle("layer", row),
+                    onClick: (row) => openObjectPicker("layer", row),
                   }} />
               </Section>
 
-              <Section title="Block" count={countFrom(drawing?.blocks)}>
-                <DataTable data={drawing?.blocks} filter={normalizedFilter}
+              <Section title="Block" count={catalogBlockRows.length}>
+                <div className={"drawing-selection-scope " + (selectionCatalog?.complete && !catalogStale ? "exact" : "partial")}>
+                  Danh mục: <strong>{selectionCatalogLabel}</strong>
+                  {selectionCatalog && <> · Đã quét {plainValue(selectionCatalog.scanned)} đối tượng</>}
+                  {selectionCatalog
+                    ? selectionCatalog.complete
+                      ? " · Danh mục đầy đủ"
+                      : " · Danh mục chưa đầy đủ; chỉ chọn được các đối tượng đã quét"
+                    : " · Plugin cũ: hàng sẽ kiểm tra trực tiếp; nạp bản mới để dùng snapshot"}
+                  {catalogStale && " · Có thay đổi mới; cần quét lại"}
+                </div>
+                <DataTable data={catalogBlockRows} filter={normalizedFilter}
                   preferred={TABLE_COLUMNS.blocks}
+                  selectionCountExact={selectionCatalog?.complete ?? selectionScopeComplete}
+                  prioritizeSelectable={!!selectionCatalog}
                   rowAction={{
-                    label: "Chọn trong AutoCAD",
-                    disabled: !!cadActionBusy || !!pendingCadAction,
-                    onClick: (row) => selectTableRow("block", row),
+                    label: (row) => rowCatalogLabel("block", row),
+                    disabled: (row) => rowCatalogDisabled("block", row),
+                    busy: (row) => preparingRow === selectionRowKey("block", row),
+                    title: (row) => rowCatalogTitle("block", row),
+                    onClick: (row) => openObjectPicker("block", row),
                   }} />
               </Section>
 
@@ -889,13 +1698,110 @@ export default function DrawingInfoPanel({
                 <KeyValueGrid data={data.limits} filter={normalizedFilter} />
               </Section>
 
-              <Section title="Dữ liệu thô (JSON)">
-                <pre className="drawing-raw-json">{JSON.stringify(data, null, 2)}</pre>
-              </Section>
+              <RawJsonSection data={data} />
             </>
           )}
         </div>
       </section>
+
+      {objectPicker && (
+        <div className="drawing-object-picker-backdrop" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setObjectPicker(null);
+        }}>
+          <div className="drawing-object-picker" role="dialog" aria-modal="true" ref={pickerDialogRef}
+            aria-labelledby="drawing-object-picker-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="drawing-object-picker-head">
+              <div>
+                <div className="drawing-info-kicker">Danh mục đã quét từ AutoCAD</div>
+                <h3 id="drawing-object-picker-title">
+                  {objectPicker.kind === "layer" ? "Layer" : "Block"} “{objectPicker.name}”
+                </h3>
+              </div>
+              <button type="button" className="drawing-object-picker-close"
+                onClick={() => setObjectPicker(null)} aria-label="Đóng danh sách">×</button>
+            </div>
+            <div className="drawing-object-picker-meta">
+              <span>{objectPicker.subjects.length.toLocaleString("vi-VN")} đối tượng trong {selectionCatalogLabel}</span>
+              <strong>{pickerSelectedCount.toLocaleString("vi-VN")} đã chọn</strong>
+            </div>
+            <label className="drawing-object-picker-all">
+              <input type="checkbox" checked={pickerCanSelectAll && pickerSelectedCount === objectPicker.subjects.length}
+                disabled={!pickerCanSelectAll}
+                onChange={(event) => setPickerSelectAll(event.target.checked)} />
+              <span>
+                {pickerCanSelectAll
+                  ? `Chọn tất cả ${objectPicker.subjects.length.toLocaleString("vi-VN")} đối tượng`
+                  : objectPicker.complete
+                    ? `Chọn tất cả không khả dụng (tối đa ${CAD_SELECTION_MAX_SUBJECTS.toLocaleString("vi-VN")})`
+                    : "Chọn tất cả không khả dụng khi danh mục chưa đầy đủ"}
+              </span>
+            </label>
+            {!objectPicker.complete && (
+              <p className="drawing-object-picker-note">
+                Chỉ các đối tượng đã quét được liệt kê; hãy quét lại để có danh mục đầy đủ trước khi chọn tất cả.
+              </p>
+            )}
+            {objectPicker.subjects.length > CAD_SELECTION_MAX_SUBJECTS && (
+              <p className="drawing-object-picker-note warning">
+                Nhóm này vượt giới hạn {CAD_SELECTION_MAX_SUBJECTS.toLocaleString("vi-VN")}; bạn vẫn có thể chọn một tập con.
+              </p>
+            )}
+            <label className="drawing-object-picker-search">
+              <span className="drawing-sr-only">Lọc đối tượng</span>
+              <input value={pickerFilter} onChange={(event) => {
+                setPickerFilter(event.target.value);
+                setPickerPage(0);
+              }} placeholder="Tìm handle, loại, layer…" autoFocus />
+            </label>
+            <div className="drawing-object-picker-list" role="group" aria-label="Danh sách đối tượng">
+              {visiblePickerSubjects.map((subject, index) => {
+                const checked = objectPicker.selectedHandles.has(subject.handle);
+                const ordinal = safePickerPage * PICKER_PAGE_SIZE + index + 1;
+                return (
+                  <label className="drawing-object-picker-row" key={subject.handle}>
+                    <input type="checkbox" checked={checked}
+                      disabled={!checked && pickerSelectedCount >= CAD_SELECTION_MAX_SUBJECTS}
+                      onChange={(event) => setPickerSubjectChecked(subject.handle, event.target.checked)} />
+                    <span className="drawing-object-picker-ordinal">{ordinal}</span>
+                    <span className="drawing-object-picker-type">{subject.type}</span>
+                    <code>{subject.handle}</code>
+                    <span>{subject.layer}</span>
+                    {subject.blockName && <span>{subject.blockName}</span>}
+                  </label>
+                );
+              })}
+              {!visiblePickerSubjects.length && <div className="drawing-empty-value">Không có đối tượng khớp bộ lọc.</div>}
+            </div>
+            <div className="drawing-object-picker-page">
+              <button type="button" onClick={() => setPickerPage(Math.max(0, safePickerPage - 1))}
+                disabled={safePickerPage === 0}>‹ Trước</button>
+              <span>Trang {safePickerPage + 1}/{pickerPageCount} · {filteredPickerSubjects.length.toLocaleString("vi-VN")} kết quả</span>
+              <button type="button" onClick={() => setPickerPage(Math.min(pickerPageCount - 1, safePickerPage + 1))}
+                disabled={safePickerPage >= pickerPageCount - 1}>Sau ›</button>
+            </div>
+            <div className="drawing-object-picker-actions">
+              <button type="button" onClick={() => setObjectPicker(null)}>Hủy</button>
+              <button type="button" className="primary" onClick={submitObjectPicker}
+                disabled={!pickerSelectedCount || pickerSelectedCount > CAD_SELECTION_MAX_SUBJECTS}>
+                Chọn {pickerSelectedCount.toLocaleString("vi-VN")} trong AutoCAD
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {cadActionFeedback && !pendingCadAction && (
+        <div className={`drawing-cad-feedback ${cadActionFeedback.tone}`}
+          role={cadActionFeedback.tone === "error" ? "alert" : "status"} aria-live="polite">
+          {cadActionFeedback.tone === "loading"
+            ? <span className="drawing-action-spinner" aria-hidden="true" />
+            : <span aria-hidden="true">{cadActionFeedback.tone === "success" ? "✓" : "!"}</span>}
+          <strong>{cadActionFeedback.text}</strong>
+          {cadActionFeedback.tone !== "loading" && (
+            <button type="button" onClick={() => setCadActionFeedback(null)} aria-label="Đóng thông báo">×</button>
+          )}
+        </div>
+      )}
 
       {pendingCadAction && (
         <div className="standards-confirm-backdrop" onMouseDown={(event) => {
@@ -914,7 +1820,9 @@ export default function DrawingInfoPanel({
             {pendingCadAction.count !== undefined && (
               <p>Số đối tượng: <strong>{pendingCadAction.count}</strong>.</p>
             )}
-            {cadActionError && <p>{cadActionError}</p>}
+            {catalogStale && (
+              <p className="drawing-confirm-stale">Snapshot nền đã cũ; thao tác vừa được kiểm tra trực tiếp và backend sẽ xác minh revision lần nữa khi áp dụng.</p>
+            )}
             <div className="standards-confirm-actions">
               <button type="button" onClick={() => void rejectPendingCadAction()}
                 disabled={!!cadActionBusy} autoFocus>

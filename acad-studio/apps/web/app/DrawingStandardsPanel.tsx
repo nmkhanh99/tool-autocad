@@ -1331,11 +1331,24 @@ export default function DrawingStandardsPanel({
 
   async function prepareHandleSelection(handles: string[], scopeLabel: string) {
     if (!handles.length) return;
+    const current = asRecord(scan?.current);
+    const document = asRecord(current?.document);
+    const instance = String(document?.instance || "").trim();
+    const revision = Number(document?.revision);
+    if (!instance || !Number.isSafeInteger(revision) || revision < 0) {
+      setScanStale(true);
+      setNotice({
+        tone: "error",
+        text: "Kết quả quét thiếu định danh phiên bản bản vẽ; hãy quét lại trước khi chọn đối tượng.",
+      });
+      return;
+    }
     await prepareSelectionAction(
       {
         target,
         action: "select",
         scope: { kind: "handles", handles },
+        catalogGuard: { instance, revision },
       },
       "select",
       scopeLabel,

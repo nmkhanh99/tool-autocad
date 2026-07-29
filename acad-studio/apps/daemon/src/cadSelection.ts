@@ -25,6 +25,18 @@ type DocumentGuard = {
   activeInstance: string;
 };
 
+type CatalogGuard = {
+  instance: string;
+  revision: number;
+};
+
+type CatalogScope = {
+  kind: "layer" | "block";
+  name: string;
+  handle: string;
+  selectedAll: boolean;
+};
+
 export type SelectionSubject = {
   handle: string;
   type: string;
@@ -67,6 +79,7 @@ type SelectionOperation = {
   target: string;
   document: OpenDocument;
   scope?: SelectionScope;
+  catalogScope?: CatalogScope;
   params?: { layer: string; handle: string };
   summary: OperationSummary;
   subjects: SelectionSubject[];
@@ -198,6 +211,58 @@ function cleanScope(value: unknown): SelectionScope {
     "invalid_scope",
     "scope.kind phải là layer, block hoặc handles",
   );
+}
+
+function cleanCatalogGuard(value: unknown): CatalogGuard {
+  const guard = record(value);
+  if (typeof guard.instance !== "string") {
+    throw new SelectionApiError(
+      "invalid_request",
+      "catalogGuard.instance không hợp lệ",
+    );
+  }
+  const instance = cleanText(
+    guard.instance,
+    "catalogGuard.instance",
+    128,
+  );
+  if (
+    typeof guard.revision !== "number" ||
+    !Number.isSafeInteger(guard.revision) ||
+    guard.revision < 0
+  ) {
+    throw new SelectionApiError(
+      "invalid_request",
+      "catalogGuard.revision không hợp lệ",
+    );
+  }
+  return { instance, revision: guard.revision };
+}
+
+function cleanCatalogScope(value: unknown): CatalogScope {
+  const scope = record(value);
+  const kind = String(scope.kind ?? "");
+  if (kind !== "layer" && kind !== "block") {
+    throw new SelectionApiError(
+      "invalid_request",
+      "catalogScope.kind phải là layer hoặc block",
+    );
+  }
+  if (typeof scope.selectedAll !== "boolean") {
+    throw new SelectionApiError(
+      "invalid_request",
+      "catalogScope.selectedAll không hợp lệ",
+    );
+  }
+  return {
+    kind,
+    name: cleanText(
+      scope.name,
+      kind === "layer" ? "Tên layer gốc" : "Tên block gốc",
+    ),
+    handle: cleanHandle(scope.handle),
+    selectedAll: scope.selectedAll,
+  };
 }
 
 function utf8Hex(value: string): string {
@@ -381,6 +446,23 @@ function snapshotGuard(
   };
 }
 
+/**
+ * A listOpenDocs response already carries the document instance/revision
+ * guards.  Handles scopes do not need the large drawing-info snapshot just to
+ * validate a layer/block table entry; the native resolve/select call still
+ * re-checks these guards and each subject identity.
+ */
+function listDocumentGuard(
+  document: OpenDocument,
+  activeDocument: OpenDocument,
+): DocumentGuard {
+  return {
+    instance: document.instance,
+    revision: document.revision,
+    activeInstance: activeDocument.instance,
+  };
+}
+
 function findSnapshotEntry(
   snapshot: DrawingInfoPluginSnapshot,
   key: "layers" | "blocks",
@@ -426,6 +508,7 @@ function operationView(operation: SelectionOperation) {
     expiresAt: operation.expiresAt,
     ...(subjectCountKnown ? { subjectCount: operation.subjectCount } : {}),
     ...(operation.scope ? { scope: operation.scope } : {}),
+    ...(operation.catalogScope ? { catalogScope: operation.catalogScope } : {}),
     ...(operation.params ? { params: operation.params } : {}),
     ...(preview.length ? { subjects: preview } : {}),
     subjectsTruncated: operation.subjects.length > preview.length,
@@ -448,6 +531,7 @@ export function buildSelectionControlParams(input: {
   exactTarget: string;
   guard: DocumentGuard;
   scope?: SelectionScope;
+  catalogScope?: CatalogScope;
   subjects?: SelectionSubject[];
   selectionBefore?: SelectionSubject[];
   destLayer?: string;
@@ -470,6 +554,12 @@ export function buildSelectionControlParams(input: {
       params.scopeHandle = input.scope.handles[0] ?? "";
       params.handles = input.scope.handles.join(",");
     }
+  }
+  if (input.catalogScope) {
+    params.catalogScopeKind = input.catalogScope.kind;
+    params.catalogScopeNameHex = utf8Hex(input.catalogScope.name);
+    params.catalogScopeHandle = input.catalogScope.handle;
+    params.catalogScopeSelectedAll = input.catalogScope.selectedAll ? 1 : 0;
   }
   if (input.subjects) {
     params.handles = input.subjects.map((item) => item.handle).join(",");
@@ -788,6 +878,7 @@ export function cadSelectionRouter(
       target: input.target,
       document: input.document,
       ...(input.scope ? { scope: input.scope } : {}),
+      ...(input.catalogScope ? { catalogScope: input.catalogScope } : {}),
       ...(input.params ? { params: input.params } : {}),
       summary: input.summary,
       subjects: input.subjects,
@@ -920,6 +1011,7 @@ export function cadSelectionRouter(
     exactTarget: string,
     guard: DocumentGuard,
     scope: SelectionScope,
+    catalogScope?: CatalogScope,
   ): Promise<SelectionSubject[]> {
     const token = dependencies.randomId().replaceAll("-", "");
     const params = buildSelectionControlParams({
@@ -928,6 +1020,7 @@ export function cadSelectionRouter(
       exactTarget,
       guard,
       scope,
+      catalogScope,
     });
     const result = await nativeCall(
       dependencies,
@@ -989,8 +1082,39 @@ export function cadSelectionRouter(
         request.body?.target,
         requireActive,
       );
-      const snapshot = await drawingSnapshot(exactTarget);
-      const guard = snapshotGuard(snapshot, document, activeDocument);
+      // A handles scope is already an exact, client-selected set.  Resolve it
+      // natively below, but avoid a full drawing-info scan; listOpenDocs gives
+      // us the same instance/revision guard needed for the proposal.
+      const requestedScope = action === "select"
+        ? cleanScope(request.body?.scope)
+        : undefined;
+      const handlesFastPath = requestedScope?.kind === "handles";
+      const catalogGuard = handlesFastPath
+        ? cleanCatalogGuard(request.body?.catalogGuard)
+        : undefined;
+      const catalogScope = handlesFastPath && request.body?.catalogScope != null
+        ? cleanCatalogScope(request.body.catalogScope)
+        : undefined;
+      if (catalogGuard && catalogGuard.instance !== document.instance) {
+        throw new SelectionApiError(
+          "document_stale",
+          "Danh mục đối tượng thuộc phiên bản vẽ cũ; hãy quét lại từ AutoCAD",
+          409,
+        );
+      }
+      if (catalogGuard && catalogGuard.revision !== document.revision) {
+        throw new SelectionApiError(
+          "drawing_stale",
+          "Danh mục đối tượng đã cũ; hãy quét lại từ AutoCAD",
+          409,
+        );
+      }
+      const snapshot = handlesFastPath
+        ? undefined
+        : await drawingSnapshot(exactTarget);
+      const guard = snapshot
+        ? snapshotGuard(snapshot, document, activeDocument)
+        : listDocumentGuard(document, activeDocument);
 
       if (action === "activate-document") {
         const operation = addOperation({
@@ -1010,10 +1134,9 @@ export function cadSelectionRouter(
       }
 
       if (action === "select") {
-        const scope = await validateScope(
-          snapshot,
-          cleanScope(request.body?.scope),
-        );
+        const scope = handlesFastPath
+          ? requestedScope!
+          : await validateScope(snapshot!, requestedScope!);
         const selectionBefore = await captureCurrent(
           document,
           exactTarget,
@@ -1024,12 +1147,14 @@ export function cadSelectionRouter(
           exactTarget,
           guard,
           scope,
+          catalogScope,
         );
         const operation = addOperation({
           action,
           target: exactTarget,
           document,
           scope,
+          catalogScope,
           summary: {
             count: subjects.length,
             scopeKind: scope.kind,
@@ -1052,7 +1177,7 @@ export function cadSelectionRouter(
         record(request.body?.params).layer,
         "Layer đích",
       );
-      if (snapshotDocument(snapshot).readOnly === true) {
+      if (snapshotDocument(snapshot!).readOnly === true) {
         throw new SelectionApiError(
           "drawing_read_only",
           "Bản vẽ đang ở chế độ chỉ đọc",
@@ -1060,7 +1185,7 @@ export function cadSelectionRouter(
         );
       }
       const destinationEntry = findSnapshotEntry(
-        snapshot,
+        snapshot!,
         "layers",
         requestedLayer,
       );
@@ -1164,22 +1289,30 @@ export function cadSelectionRouter(
           409,
         );
       }
-      const snapshot = await drawingSnapshot(exactTarget);
-      const currentGuard = snapshotGuard(
-        snapshot,
-        document,
-        activeDocument,
-      );
-      if (
-        currentGuard.instance !== operation.guard.instance ||
-        currentGuard.revision !== operation.guard.revision ||
-        currentGuard.activeInstance !== operation.guard.activeInstance
-      ) {
-        throw new SelectionApiError(
-          "drawing_stale",
-          "Trạng thái bản vẽ đã thay đổi; thao tác đã tự hủy",
-          409,
+      // Handles are already frozen in the operation and guarded by the
+      // document metadata above.  Keep the native call as the final
+      // subject-identity check, but do not pay for another full snapshot.
+      const handlesFastPath =
+        operation.action === "select" && operation.scope?.kind === "handles";
+      let snapshot: DrawingInfoPluginSnapshot | undefined;
+      if (!handlesFastPath) {
+        snapshot = await drawingSnapshot(exactTarget);
+        const currentGuard = snapshotGuard(
+          snapshot,
+          document,
+          activeDocument,
         );
+        if (
+          currentGuard.instance !== operation.guard.instance ||
+          currentGuard.revision !== operation.guard.revision ||
+          currentGuard.activeInstance !== operation.guard.activeInstance
+        ) {
+          throw new SelectionApiError(
+            "drawing_stale",
+            "Trạng thái bản vẽ đã thay đổi; thao tác đã tự hủy",
+            409,
+          );
+        }
       }
 
       let nativeAction: SelectionNativeAction;
@@ -1194,7 +1327,9 @@ export function cadSelectionRouter(
           guard: operation.guard,
         });
       } else if (operation.action === "select") {
-        const scope = await validateScope(snapshot, operation.scope!);
+        const scope = handlesFastPath
+          ? operation.scope!
+          : await validateScope(snapshot!, operation.scope!);
         nativeAction = "select";
         params = buildSelectionControlParams({
           action: nativeAction,
@@ -1202,11 +1337,12 @@ export function cadSelectionRouter(
           exactTarget,
           guard: operation.guard,
           scope,
+          catalogScope: operation.catalogScope,
           subjects: operation.subjects,
           selectionBefore: operation.selectionBefore,
         });
       } else {
-        if (snapshotDocument(snapshot).readOnly === true) {
+        if (snapshotDocument(snapshot!).readOnly === true) {
           throw new SelectionApiError(
             "drawing_read_only",
             "Bản vẽ đang ở chế độ chỉ đọc",
@@ -1214,7 +1350,7 @@ export function cadSelectionRouter(
           );
         }
         const destination = findSnapshotEntry(
-          snapshot,
+          snapshot!,
           "layers",
           operation.params!.layer,
         );

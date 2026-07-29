@@ -16,6 +16,18 @@ const drawing = {
   revision: 7,
 };
 
+const catalogGuard = {
+  instance: drawing.instance,
+  revision: drawing.revision,
+};
+
+const layerCatalogScope = {
+  kind: "layer",
+  name: "A-WALL",
+  handle: "10",
+  selectedAll: false,
+};
+
 const baseSubjects = [
   {
     handle: "A1",
@@ -245,6 +257,26 @@ assert.equal(rawParams.documentInstance, drawing.instance);
 assert.equal(rawParams.databaseRevision, drawing.revision);
 assert.equal(rawParams.activeDocumentInstance, drawing.instance);
 
+const catalogScopeParams = buildSelectionControlParams({
+  action: "resolve",
+  token: "catalog123",
+  exactTarget: drawing.file,
+  guard: {
+    instance: drawing.instance,
+    revision: drawing.revision,
+    activeInstance: drawing.instance,
+  },
+  scope: { kind: "handles", handles: ["A1"] },
+  catalogScope: layerCatalogScope,
+});
+assert.equal(catalogScopeParams.catalogScopeKind, "layer");
+assert.equal(
+  Buffer.from(String(catalogScopeParams.catalogScopeNameHex), "hex").toString("utf8"),
+  "A-WALL",
+);
+assert.equal(catalogScopeParams.catalogScopeHandle, "10");
+assert.equal(catalogScopeParams.catalogScopeSelectedAll, 0);
+
 // GET current is a full native capture, not the 200-object drawing-info list.
 {
   const test = harness();
@@ -381,7 +413,126 @@ assert.equal(rawParams.activeDocumentInstance, drawing.instance);
   assert.equal(test.calls.length, 3, "applied operation is one-shot");
 }
 
-// Handle scopes normalize duplicates and resolve complete subject guards at prepare.
+// Empty layer/block scopes fail visibly at prepare and never create an operation.
+for (const scope of [
+  { kind: "layer", name: "A-WALL" },
+  { kind: "block", name: "CHAIR" },
+]) {
+  const test = harness({
+    invoke: async (command) => {
+      if (command.action === "capture") return nativeSuccess(command, []);
+      return {
+        ok: false,
+        token: command.token,
+        action: command.action,
+        target: command.exactTarget,
+        code: "no_matching_objects",
+        error: "no_matching_objects",
+      };
+    },
+  });
+  const prepared = await invoke(test.router, "POST", "/prepare", {
+    body: {
+      target: drawing.file,
+      action: "select",
+      scope,
+    },
+  });
+  assert.equal(prepared.status, 409);
+  assert.equal(prepared.payload.code, "selection_empty");
+  assert.equal(prepared.payload.operation, undefined);
+  assert.deepEqual(
+    test.calls.map((call) => call.action),
+    ["capture", "resolve"],
+    `${scope.kind} empty scope is checked read-only before proposal`,
+  );
+}
+
+// Handle scopes fail closed unless the cached catalog is bound to the current
+// document instance and revision. Validation happens before native capture or
+// resolve, and the fast path never requests a drawing-info snapshot.
+{
+  const test = harness();
+  const missing = await invoke(test.router, "POST", "/prepare", {
+    body: {
+      target: drawing.file,
+      action: "select",
+      scope: { kind: "handles", handles: ["A1"] },
+    },
+  });
+  assert.equal(missing.status, 400);
+  assert.equal(missing.payload.code, "invalid_request");
+  assert.equal(test.calls.length, 0);
+  assert.equal(test.snapshots.length, 0);
+}
+
+for (const invalidGuard of [
+  { instance: `${drawing.instance}\nold`, revision: drawing.revision },
+  { instance: "X".repeat(129), revision: drawing.revision },
+  { instance: drawing.instance, revision: -1 },
+  { instance: drawing.instance, revision: Number.MAX_SAFE_INTEGER + 1 },
+]) {
+  const test = harness();
+  const invalid = await invoke(test.router, "POST", "/prepare", {
+    body: {
+      target: drawing.file,
+      action: "select",
+      scope: { kind: "handles", handles: ["A1"] },
+      catalogGuard: invalidGuard,
+    },
+  });
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.payload.code, "invalid_request");
+  assert.equal(test.calls.length, 0);
+  assert.equal(test.snapshots.length, 0);
+}
+
+for (const [invalidCatalogScope, code] of [
+  [{ kind: "layout", name: "Model", handle: "1", selectedAll: false }, "invalid_request"],
+  [{ kind: "layer", name: "A-WALL\nold", handle: "10", selectedAll: false }, "invalid_request"],
+  [{ kind: "layer", name: "A-WALL", handle: "not-a-handle", selectedAll: false }, "invalid_scope"],
+  [{ kind: "layer", name: "A-WALL", handle: "10", selectedAll: "false" }, "invalid_request"],
+]) {
+  const test = harness();
+  const invalid = await invoke(test.router, "POST", "/prepare", {
+    body: {
+      target: drawing.file,
+      action: "select",
+      scope: { kind: "handles", handles: ["A1"] },
+      catalogGuard,
+      catalogScope: invalidCatalogScope,
+    },
+  });
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.payload.code, code);
+  assert.equal(test.calls.length, 0);
+  assert.equal(test.snapshots.length, 0);
+}
+
+for (const [staleGuard, code] of [
+  [{ instance: "DOC-OLD", revision: drawing.revision }, "document_stale"],
+  [
+    { instance: drawing.instance, revision: drawing.revision + 1 },
+    "drawing_stale",
+  ],
+]) {
+  const test = harness();
+  const stale = await invoke(test.router, "POST", "/prepare", {
+    body: {
+      target: drawing.file,
+      action: "select",
+      scope: { kind: "handles", handles: ["A1"] },
+      catalogGuard: staleGuard,
+    },
+  });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.payload.code, code);
+  assert.equal(test.calls.length, 0);
+  assert.equal(test.snapshots.length, 0);
+}
+
+// A matching catalog guard preserves the exact handles fast path, normalizes
+// duplicate handles and resolves complete subject guards at prepare.
 {
   const test = harness();
   const prepared = await invoke(test.router, "POST", "/prepare", {
@@ -389,11 +540,17 @@ assert.equal(rawParams.activeDocumentInstance, drawing.instance);
       target: drawing.file,
       action: "select",
       scope: { kind: "handles", handle: "000a1", handles: ["A1", "b2"] },
+      catalogGuard,
     },
   });
   assert.equal(prepared.status, 201);
   assert.deepEqual(prepared.payload.operation.scope.handles, ["A1", "B2"]);
   assert.equal(prepared.payload.operation.subjectCount, 2);
+  assert.equal(
+    test.snapshots.length,
+    0,
+    "handles prepare uses listOpenDocs guards without a drawing-info scan",
+  );
   assert.deepEqual(
     test.calls.map((call) => call.action),
     ["capture", "resolve"],
@@ -411,6 +568,256 @@ assert.equal(rawParams.activeDocumentInstance, drawing.instance);
     ["capture", "resolve"],
     "reject never invokes select",
   );
+}
+
+// Handles apply keeps the fast path: listOpenDocs guards the operation and the
+// native select call performs the final current-subject identity check.
+{
+  const test = harness();
+  const prepared = await invoke(test.router, "POST", "/prepare", {
+    body: {
+      target: drawing.file,
+      action: "select",
+      scope: { kind: "handles", handles: ["A1", "B2"] },
+      catalogGuard,
+    },
+  });
+  const applied = await invoke(
+    test.router,
+    "POST",
+    applyPath(prepared.payload.operation).path,
+    applyPath(prepared.payload.operation),
+  );
+  assert.equal(applied.status, 200);
+  assert.equal(applied.payload.result.count, 2);
+  assert.equal(test.snapshots.length, 0, "handles apply does not rescan drawing-info");
+  assert.deepEqual(
+    test.calls.map((call) => call.action),
+    ["capture", "resolve", "select"],
+  );
+  assert.equal(test.calls[2].params.databaseRevision, drawing.revision);
+  assert.equal(test.calls[2].params.activeDocumentInstance, drawing.instance);
+}
+
+// Catalog-origin handle sets carry their layer/block precondition through the
+// operation hash and both native phases. selectedAll is also preserved
+// so native can distinguish an exact full group from a user-selected subset.
+{
+  const test = harness();
+  const prepared = await invoke(test.router, "POST", "/prepare", {
+    body: {
+      target: drawing.file,
+      action: "select",
+      scope: { kind: "handles", handles: ["A1"] },
+      catalogGuard,
+      catalogScope: { ...layerCatalogScope, selectedAll: true },
+    },
+  });
+  assert.equal(prepared.status, 201);
+  assert.deepEqual(prepared.payload.operation.catalogScope, {
+    ...layerCatalogScope,
+    selectedAll: true,
+  });
+  assert.equal(test.calls[1].params.catalogScopeKind, "layer");
+  assert.equal(test.calls[1].params.catalogScopeHandle, "10");
+  assert.equal(test.calls[1].params.catalogScopeSelectedAll, 1);
+  assert.equal(
+    Buffer.from(String(test.calls[1].params.catalogScopeNameHex), "hex").toString("utf8"),
+    "A-WALL",
+  );
+
+  const applied = await invoke(
+    test.router,
+    "POST",
+    applyPath(prepared.payload.operation).path,
+    applyPath(prepared.payload.operation),
+  );
+  assert.equal(applied.status, 200);
+  assert.equal(test.calls[2].params.catalogScopeKind, "layer");
+  assert.equal(test.calls[2].params.catalogScopeHandle, "10");
+  assert.equal(test.calls[2].params.catalogScopeSelectedAll, 1);
+}
+
+// A handle that no longer belongs to its catalog layer/block is rejected by
+// native at prepare, before an operation can be offered for confirmation.
+{
+  const test = harness({
+    invoke: async (command) => {
+      if (command.action !== "resolve") return nativeSuccess(command);
+      return {
+        ok: false,
+        token: command.token,
+        action: command.action,
+        target: command.exactTarget,
+        code: "catalog_scope_stale",
+        error: "catalog_scope_stale: exact handle left its origin",
+      };
+    },
+  });
+  const stale = await invoke(test.router, "POST", "/prepare", {
+    body: {
+      target: drawing.file,
+      action: "select",
+      scope: { kind: "handles", handles: ["A1"] },
+      catalogGuard,
+      catalogScope: layerCatalogScope,
+    },
+  });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.payload.code, "selection_stale");
+  assert.deepEqual(test.calls.map((call) => call.action), ["capture", "resolve"]);
+}
+
+// Origin membership is checked again inside the confirmed native select. This
+// closes a same-revision catalog rebase between prepare and Apply.
+{
+  const test = harness({
+    invoke: async (command) => {
+      if (command.action !== "select") return nativeSuccess(command);
+      return {
+        ok: false,
+        token: command.token,
+        action: command.action,
+        target: command.exactTarget,
+        code: "catalog_scope_stale",
+        error: "catalog_scope_stale: complete origin handle set changed",
+      };
+    },
+  });
+  const prepared = await invoke(test.router, "POST", "/prepare", {
+    body: {
+      target: drawing.file,
+      action: "select",
+      scope: { kind: "handles", handles: ["B2"] },
+      catalogGuard,
+      catalogScope: {
+        kind: "block",
+        name: "CHAIR",
+        handle: "20",
+        selectedAll: true,
+      },
+    },
+  });
+  assert.equal(prepared.status, 201);
+  const stale = await invoke(
+    test.router,
+    "POST",
+    applyPath(prepared.payload.operation).path,
+    applyPath(prepared.payload.operation),
+  );
+  assert.equal(stale.status, 409);
+  assert.equal(stale.payload.code, "selection_stale");
+  assert.equal(test.calls[2].params.catalogScopeKind, "block");
+  assert.equal(test.calls[2].params.catalogScopeHandle, "20");
+  assert.equal(test.calls[2].params.catalogScopeSelectedAll, 1);
+}
+
+// Even when the daemon heartbeat has not advanced yet, native performs the
+// final database-revision check inside the Apply command.
+{
+  const test = harness({
+    invoke: async (command) => {
+      if (command.action !== "select") return nativeSuccess(command);
+      return {
+        ok: false,
+        token: command.token,
+        action: command.action,
+        target: command.exactTarget,
+        code: "drawing_stale",
+        error: "drawing_stale: database revision changed",
+      };
+    },
+  });
+  const prepared = await invoke(test.router, "POST", "/prepare", {
+    body: {
+      target: drawing.file,
+      action: "select",
+      scope: { kind: "handles", handles: ["A1"] },
+      catalogGuard,
+      catalogScope: layerCatalogScope,
+    },
+  });
+  const stale = await invoke(
+    test.router,
+    "POST",
+    applyPath(prepared.payload.operation).path,
+    applyPath(prepared.payload.operation),
+  );
+  assert.equal(stale.status, 409);
+  assert.equal(stale.payload.code, "drawing_stale");
+  assert.deepEqual(
+    test.calls.map((call) => call.action),
+    ["capture", "resolve", "select"],
+  );
+}
+
+// The listOpenDocs revision guard still closes a handles operation before the
+// mutating native call; skipping drawing-info must not weaken stale protection.
+{
+  const test = harness({
+    listDocuments: (read) => [{
+      ...drawing,
+      revision: read === 1 ? drawing.revision : drawing.revision + 1,
+    }],
+  });
+  const prepared = await invoke(test.router, "POST", "/prepare", {
+    body: {
+      target: drawing.file,
+      action: "select",
+      scope: { kind: "handles", handles: ["A1"] },
+      catalogGuard,
+    },
+  });
+  const stale = await invoke(
+    test.router,
+    "POST",
+    applyPath(prepared.payload.operation).path,
+    applyPath(prepared.payload.operation),
+  );
+  assert.equal(stale.status, 409);
+  assert.equal(stale.payload.code, "drawing_stale");
+  assert.equal(test.snapshots.length, 0);
+  assert.deepEqual(
+    test.calls.map((call) => call.action),
+    ["capture", "resolve"],
+    "revision stale blocks handles select before native mutation",
+  );
+}
+
+// Even on the fast path, a changed subject identity is rejected from the
+// native result and never reported as a successful selection.
+{
+  const test = harness({
+    invoke: async (command) => {
+      if (command.action !== "select") return nativeSuccess(command);
+      return {
+        ...nativeSuccess(command),
+        subjects: [{
+          ...baseSubjects[0],
+          handle: "A1",
+          type: "AcDbCircle",
+        }],
+        count: 1,
+      };
+    },
+  });
+  const prepared = await invoke(test.router, "POST", "/prepare", {
+    body: {
+      target: drawing.file,
+      action: "select",
+      scope: { kind: "handles", handles: ["A1"] },
+      catalogGuard,
+    },
+  });
+  const stale = await invoke(
+    test.router,
+    "POST",
+    applyPath(prepared.payload.operation).path,
+    applyPath(prepared.payload.operation),
+  );
+  assert.equal(stale.status, 409);
+  assert.equal(stale.payload.code, "selection_stale");
+  assert.equal(test.snapshots.length, 0);
 }
 
 // A duplicate document title is ambiguous; a full file path remains exact.

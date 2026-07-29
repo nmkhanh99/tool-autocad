@@ -332,6 +332,18 @@ assert(
   "selection control sets the C++ Pickfirst argument",
 );
 assert(
+  selectionControl.includes('param(params, "catalogScopeKind")') &&
+    selectionControl.includes("entityMatchesScope(entity, catalogScopeKind, catalogScopeId)") &&
+    selectionControl.includes("effectiveBlockDefinition(reference) == scopeId"),
+  "exact handles retain their source layer or effective block identity",
+);
+assert(
+  selectionControl.includes('catalogSelectedAll == "1"') &&
+    selectionControl.includes("validateCompleteCatalogScope") &&
+    selectionControl.includes("current != requested"),
+  "catalog select-all rechecks the complete origin handle set",
+);
+assert(
   selectionControl.includes("source_layer_locked") &&
     selectionControl.includes("source_layer_frozen") &&
     selectionControl.includes("source_layer_off"),

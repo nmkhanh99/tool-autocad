@@ -173,6 +173,7 @@ export default function Page() {
   const [drawingInfoOpen, setDrawingInfoOpen] = useState(false);
   const [drawingInfoTarget, setDrawingInfoTarget] = useState("");
   const [drawingInfoRefreshToken, setDrawingInfoRefreshToken] = useState(0);
+  const [drawingInfoRefreshEventAt, setDrawingInfoRefreshEventAt] = useState(0);
   const [standardsOpen, setStandardsOpen] = useState(false);
   const [standardsTarget, setStandardsTarget] = useState("");
   const [standardsRefreshToken, setStandardsRefreshToken] = useState(0);
@@ -232,17 +233,25 @@ export default function Page() {
     es.onmessage = (e) => {
       try {
         const ev = JSON.parse(e.data);
+        const rawEventAt = Number(ev.t);
+        const eventAt = Number.isFinite(rawEventAt) && rawEventAt > 0
+          ? rawEventAt >= 1_000_000_000_000 ? rawEventAt / 1_000 : rawEventAt
+          : Date.now() / 1_000;
+        const invalidateDrawingInfo = () => {
+          setDrawingInfoRefreshToken((token) => token + 1);
+          setDrawingInfoRefreshEventAt((current) => Math.max(current, eventAt));
+        };
         setAcadLive({ activeDoc: ev.activeDoc || "", last: `${ev.type}${ev.detail ? ": " + ev.detail : ""}` });
         if (String(ev.type).startsWith("doc")) {
           loadDocs();
           loadDrawDocs();
           setDrawingInfoTarget(ev.activeDoc || "");
-          setDrawingInfoRefreshToken((token) => token + 1);
+          invalidateDrawingInfo();
           setStandardsTarget(ev.activeDoc || "");
           setStandardsRefreshToken((token) => token + 1);
         }
         if (ev.type === "drawingModified" || ev.type === "pluginLoaded") {
-          setDrawingInfoRefreshToken((token) => token + 1);
+          invalidateDrawingInfo();
           setStandardsRefreshToken((token) => token + 1);
         }
         if (ev.type === "drawingModified" && autoBomRef.current) refreshBom();   // BOM tự cập nhật khi vẽ
@@ -1572,6 +1581,7 @@ export default function Page() {
         daemon={DAEMON}
         initialTarget={drawingInfoTarget}
         refreshToken={drawingInfoRefreshToken}
+        refreshEventAt={drawingInfoRefreshEventAt}
         onClose={() => setDrawingInfoOpen(false)}
         onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
       />

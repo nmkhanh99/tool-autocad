@@ -62,6 +62,13 @@ import {
   validatePlotPdfRequest,
   type PlotPdfRequest,
 } from "./plotPdf.js";
+import {
+  LEGACY_SELECTION_CATALOG_MAX,
+  attachSelectionCatalog,
+  buildLegacySelectionCatalogLisp,
+  hasSelectionCatalog,
+  parseLegacySelectionCatalog,
+} from "./legacySelectionCatalog.js";
 
 /** Headless AutoLISP helper library (generic core; plumbing profile optional). */
 export function acadLib(): string {
@@ -417,6 +424,164 @@ export async function requestDrawingInfo(target: string, timeoutMs = 8000):
     }
     return null;
   });
+}
+
+export const DRAWING_INFO_BUSY_ATTEMPTS = 3;
+const DRAWING_INFO_BUSY_RETRY_MS = 250;
+
+/** A busy response is transient and must not be published as a usable snapshot. */
+export function drawingInfoBusyCode(snapshot: DrawingInfoPluginSnapshot): string {
+  const code = String(snapshot.code ?? "").trim().toLowerCase();
+  const status = String(snapshot.status ?? "").trim().toLowerCase();
+  if (code === "busy" || status === "busy") return "busy";
+  if (code === "document_not_quiescent" || status === "document_not_quiescent") {
+    return "document_not_quiescent";
+  }
+  const warnings = Array.isArray(snapshot.warnings) ? snapshot.warnings : [];
+  return warnings.some((warning) => String(warning).trim().toLowerCase() === "document_not_quiescent")
+    ? "document_not_quiescent"
+    : "";
+}
+
+/** Retry only the two known transient drawing-info busy states, with a fixed bound. */
+export async function requestDrawingInfoWithBusyRetry(
+  target: string,
+  request: (exactTarget: string) => Promise<DrawingInfoPluginSnapshot | null> = requestDrawingInfo,
+  wait: (delayMs: number) => Promise<void> = (delayMs) =>
+    new Promise((resolve) => setTimeout(resolve, delayMs)),
+): Promise<DrawingInfoPluginSnapshot | null> {
+  let snapshot: DrawingInfoPluginSnapshot | null = null;
+  for (let attempt = 1; attempt <= DRAWING_INFO_BUSY_ATTEMPTS; attempt++) {
+    snapshot = await request(target);
+    if (!snapshot || !drawingInfoBusyCode(snapshot) || attempt === DRAWING_INFO_BUSY_ATTEMPTS) {
+      return snapshot;
+    }
+    await wait(DRAWING_INFO_BUSY_RETRY_MS * attempt);
+  }
+  return snapshot;
+}
+
+const LEGACY_SELECTION_CATALOG_MAX_BYTES = 32 * 1024 * 1024;
+
+function drawingInfoRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function selectionCatalogFailure(
+  snapshot: DrawingInfoPluginSnapshot,
+  error: unknown,
+): DrawingInfoPluginSnapshot {
+  const warnings = Array.isArray(snapshot.warnings)
+    ? snapshot.warnings.map(String)
+    : [];
+  if (!warnings.includes("selection_catalog_compat_failed")) {
+    warnings.push("selection_catalog_compat_failed");
+  }
+  const source = drawingInfoRecord(snapshot.source) || {};
+  return {
+    ...snapshot,
+    source: {
+      ...source,
+      selectionCatalogChannel: "autolisp-compat-failed",
+    },
+    selectionCatalogError:
+      error instanceof Error ? error.message : String(error || "selection_catalog_compat_failed"),
+    warnings,
+  };
+}
+
+/**
+ * AcadBridge 1.5 compatibility: scan the current layout once through the
+ * existing read-only job channel, then attach the same catalog shape as 1.6.
+ * Document instance/revision and CTAB are checked before publishing the data.
+ */
+export async function withLegacySelectionCatalog(
+  snapshot: DrawingInfoPluginSnapshot,
+  exactTarget: string,
+): Promise<DrawingInfoPluginSnapshot> {
+  if (hasSelectionCatalog(snapshot)) return snapshot;
+  const document = drawingInfoRecord(snapshot.document);
+  const drawing = drawingInfoRecord(snapshot.drawing);
+  const settings = drawingInfoRecord(drawing?.settings) || drawingInfoRecord(snapshot.settings);
+  const expectedInstance = String(document?.instance || "");
+  const expectedRevision = document?.revision;
+  const expectedSpace = String(settings?.CTAB || "");
+  if (document?.quiescent !== true || !expectedInstance || expectedRevision == null || !expectedSpace) {
+    return selectionCatalogFailure(snapshot, "selection_catalog_guard_unavailable");
+  }
+
+  ensureBridgeDirs();
+  const outputPath = join(
+    getResultsDir(),
+    `selection-catalog-${randomUUID().replaceAll("-", "")}.tsv`,
+  );
+  let deferredCleanup = false;
+  try {
+    const job = await dispatchLiveJob(
+      buildLegacySelectionCatalogLisp({
+        outputPath,
+        exactTarget,
+        maxSubjects: LEGACY_SELECTION_CATALOG_MAX,
+      }),
+      exactTarget,
+      60_000,
+      { readOnly: true },
+    );
+    if (job.state === "sent") {
+      deferredCleanup = true;
+      const timer = setTimeout(() => {
+        try { rmSync(outputPath, { force: true }); } catch { /* best-effort */ }
+      }, 125_000);
+      timer.unref();
+      throw new Error("selection_catalog_compat_timeout");
+    }
+    if (job.state !== "done" || job.result?.status !== "ok" ||
+        job.result.message !== `selection_catalog=${outputPath}`) {
+      throw new Error(job.result?.message || "selection_catalog_compat_job_failed");
+    }
+    const outputStat = statSync(outputPath);
+    if (outputStat.size <= 0 || outputStat.size > LEGACY_SELECTION_CATALOG_MAX_BYTES) {
+      throw new Error("selection_catalog_compat_output_invalid");
+    }
+    const catalog = parseLegacySelectionCatalog(readFileSync(outputPath, "utf8"));
+    if (catalog.space !== expectedSpace) {
+      throw new Error("selection_catalog_space_stale");
+    }
+
+    // Loading a read-only Lisp job can advance the legacy plugin's coarse
+    // reactor revision even though DWG geometry is unchanged. Re-read the
+    // normal snapshot after the scan, then publish the catalog only when that
+    // exact post-scan document/space also matches the fresh docs heartbeat.
+    const afterSnapshot = await requestDrawingInfoWithBusyRetry(exactTarget);
+    const afterDocument = drawingInfoRecord(afterSnapshot?.document);
+    const afterDrawing = drawingInfoRecord(afterSnapshot?.drawing);
+    const afterSettings = drawingInfoRecord(afterDrawing?.settings) ||
+      drawingInfoRecord(afterSnapshot?.settings);
+    if (!afterSnapshot || afterSnapshot.ok === false || drawingInfoBusyCode(afterSnapshot) ||
+        afterDocument?.quiescent !== true ||
+        String(afterDocument?.instance || "") !== expectedInstance ||
+        String(afterSettings?.CTAB || "") !== catalog.space) {
+      throw new Error("selection_catalog_post_scan_snapshot_stale");
+    }
+
+    const open = await listOpenDocs(5_000);
+    const selected = selectOpenDocument(open.docs, exactTarget);
+    const current = selected.document;
+    if (!open.alive || selected.ambiguous || !current ||
+        String(current.instance || "") !== expectedInstance ||
+        String(current.revision ?? "") !== String(afterDocument.revision ?? "")) {
+      throw new Error("selection_catalog_document_stale");
+    }
+    return attachSelectionCatalog(afterSnapshot, catalog) as DrawingInfoPluginSnapshot;
+  } catch (error) {
+    return selectionCatalogFailure(snapshot, error);
+  } finally {
+    if (!deferredCleanup) {
+      try { rmSync(outputPath, { force: true }); } catch { /* best-effort */ }
+    }
+  }
 }
 
 function drawingFileInfo(path: string): {
@@ -1271,7 +1436,7 @@ export function acadBridgeRouter(): Router {
       });
     }
 
-    const snapshot = await requestDrawingInfo(exactTarget);
+    const snapshot = await requestDrawingInfoWithBusyRetry(exactTarget);
     if (!snapshot) {
       return res.status(504).json({
         ok: false,
@@ -1282,10 +1447,27 @@ export function acadBridgeRouter(): Router {
       });
     }
 
-    const pluginCode = typeof snapshot.code === "string" ? snapshot.code.toLowerCase() : "";
-    const ok = snapshot.ok !== false && pluginCode !== "busy" && pluginCode !== "not_found";
-    const status = typeof snapshot.status === "string" && snapshot.status
-      ? snapshot.status
+    const busyCode = drawingInfoBusyCode(snapshot);
+    if (busyCode) {
+      return res.status(409).json({
+        ok: false,
+        status: busyCode,
+        code: busyCode,
+        error: "AutoCAD đang thực thi lệnh hoặc chưa sẵn sàng. Hãy hoàn tất/nhấn Esc trong AutoCAD rồi quét lại.",
+        retryAttempts: DRAWING_INFO_BUSY_ATTEMPTS,
+        ...drawingInfoRuntime(true, true, open.docs, document.file),
+      });
+    }
+
+    const responseSnapshot = snapshot.ok === false
+      ? snapshot
+      : await withLegacySelectionCatalog(snapshot, exactTarget);
+    const pluginCode = typeof responseSnapshot.code === "string"
+      ? responseSnapshot.code.toLowerCase()
+      : "";
+    const ok = responseSnapshot.ok !== false && pluginCode !== "busy" && pluginCode !== "not_found";
+    const status = typeof responseSnapshot.status === "string" && responseSnapshot.status
+      ? responseSnapshot.status
       : ok ? "ok" : pluginCode || "error";
     const httpStatus = pluginCode === "busy"
       ? 409
@@ -1293,7 +1475,8 @@ export function acadBridgeRouter(): Router {
         ? 404
         : ok ? 200 : 502;
     return res.status(httpStatus).json({
-      ...snapshot,
+      ...responseSnapshot,
+      snapshotCollectedAt: responseSnapshot.collectedAt,
       ok,
       status,
       ...drawingInfoRuntime(true, true, open.docs, document.file),

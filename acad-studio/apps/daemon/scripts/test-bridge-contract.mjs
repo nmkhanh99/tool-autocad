@@ -33,6 +33,7 @@ const ctrl = await import("../src/acadControl.ts");
 const rawJob = await import("../src/objectarx/rawJob.ts");
 const rawDispatch = await import("../src/objectarx/rawDispatch.ts");
 const plotPdf = await import("../src/plotPdf.ts");
+const legacyCatalog = await import("../src/legacySelectionCatalog.ts");
 
 let failed = 0;
 const lines = [];
@@ -196,6 +197,134 @@ utimesSync(drawingResPath, new Date(0), new Date(0));
 assert(
   bridge.readDrawingInfoResponse(drawingResPath, "req-123", Date.now()) === null,
   "drawing-info ignores response older than request",
+);
+
+assert(
+  bridge.drawingInfoBusyCode({ ok: true, warnings: ["document_not_quiescent"] }) ===
+    "document_not_quiescent",
+  "drawing-info treats a non-quiescent warning as transient busy state",
+);
+assert(
+  bridge.drawingInfoBusyCode({ ok: false, code: "busy" }) === "busy",
+  "drawing-info recognizes the native busy error code",
+);
+assert(
+  bridge.drawingInfoBusyCode({ ok: true, warnings: ["selection_scope_scan_incomplete"] }) === "",
+  "drawing-info does not retry unrelated completeness warnings",
+);
+
+let busyAttempts = 0;
+const busyDelays = [];
+const eventuallyQuiescent = await bridge.requestDrawingInfoWithBusyRetry(
+  "/tmp/Plan.dwg",
+  async () => {
+    busyAttempts++;
+    return busyAttempts < 3
+      ? { requestId: `busy-${busyAttempts}`, ok: true, warnings: ["document_not_quiescent"] }
+      : { requestId: "ready", ok: true };
+  },
+  async (delayMs) => { busyDelays.push(delayMs); },
+);
+assert(
+  busyAttempts === bridge.DRAWING_INFO_BUSY_ATTEMPTS && eventuallyQuiescent?.requestId === "ready",
+  "drawing-info retries busy snapshots until a quiescent snapshot is returned",
+);
+assert(
+  busyDelays.join(",") === "250,500",
+  "drawing-info busy retry uses bounded incremental delays",
+);
+
+let boundedBusyAttempts = 0;
+const stillBusy = await bridge.requestDrawingInfoWithBusyRetry(
+  "/tmp/Plan.dwg",
+  async () => {
+    boundedBusyAttempts++;
+    return { requestId: `busy-${boundedBusyAttempts}`, ok: false, code: "busy" };
+  },
+  async () => {},
+);
+assert(
+  boundedBusyAttempts === bridge.DRAWING_INFO_BUSY_ATTEMPTS &&
+    bridge.drawingInfoBusyCode(stillBusy) === "busy",
+  "drawing-info stops after the bounded number of busy attempts",
+);
+
+const legacyCatalogLisp = legacyCatalog.buildLegacySelectionCatalogLisp({
+  outputPath: "/tmp/selection catalog.tsv",
+  exactTarget: "/tmp/Plan.dwg",
+});
+assert(
+  legacyCatalogLisp.includes('(ssget "_X" (list (cons 410 acad:cat-space)))') &&
+    (legacyCatalogLisp.match(/\(ssget/g) || []).length === 1,
+  "legacy selection catalog scans the current CTAB once without per-row requests",
+);
+assert(
+  legacyCatalogLisp.includes("ACDBBLOCKREPBTAG") &&
+    legacyCatalogLisp.includes("(assoc 1005"),
+  "legacy selection catalog maps dynamic block variants to the original block definition",
+);
+assert(
+  legacyCatalogLisp.includes("50000") &&
+    legacyCatalogLisp.includes("acad:cat-complete") &&
+    legacyCatalogLisp.includes("(float acad:cat-index)"),
+  "legacy selection catalog is bounded and reports completeness",
+);
+assert(
+  /\(defun acad:cat-run[\s\S]*?\/[^)]*acad:cat-ss[\s\S]*?\(acad:cat-run\)/.test(
+    legacyCatalogLisp,
+  ),
+  "legacy scan keeps its full selection set in a call-local variable",
+);
+
+const parsedLegacyCatalog = legacyCatalog.parseLegacySelectionCatalog([
+  "O\t000A\tINSERT\tP-ThoatRua\t0010\tcutdenhatD110\t1A805",
+  "O\t000B\tLINE\t0\t0011\t\t",
+  "O\t000C\tINSERT\tP-New\t0012\tNewDynamicBlock\t1A806",
+  "O\t000D\tCIRCLE\tP-New\t0012\t\t",
+  "META\t01\t4\t1",
+  "",
+].join("\n"));
+assert(
+  parsedLegacyCatalog.complete && parsedLegacyCatalog.objects.length === 4 &&
+    parsedLegacyCatalog.objects[0].handle === "A" &&
+    parsedLegacyCatalog.objects[0].blockHandle === "1A805",
+  "legacy selection catalog parser normalizes handles and preserves block identity",
+);
+const attachedLegacyCatalog = legacyCatalog.attachSelectionCatalog({
+  source: { pluginVersion: "1.5.0" },
+  tables: {
+    layers: [{ name: "P-ThoatRua", handle: "10" }, { name: "0", handle: "11" }],
+    blocks: [{ name: "cutdenhatD110", handle: "1A805" }, { name: "Unused", handle: "FF" }],
+  },
+  drawing: {
+    settings: { CTAB: "01" },
+    layers: [{ name: "P-ThoatRua", color: 4 }, { name: "0", handle: "11" }],
+    blocks: [{ name: "cutdenhatD110" }, { name: "Unused", handle: "FF" }],
+  },
+}, parsedLegacyCatalog);
+const attachedDrawing = attachedLegacyCatalog.drawing;
+const attachedTables = attachedLegacyCatalog.tables;
+const synthesizedLayer = attachedDrawing.layers.find((row) => row.handle === "12");
+const synthesizedBlock = attachedDrawing.blocks.find((row) => row.handle === "1A806");
+assert(
+  legacyCatalog.hasSelectionCatalog(attachedLegacyCatalog) &&
+    attachedDrawing.layers[0].selectableCount === 1 &&
+    typeof attachedDrawing.layers[0].selectableCount === "number" &&
+    attachedDrawing.layers[0].color === 4 &&
+    attachedDrawing.blocks[0].selectableCount === 1 &&
+    attachedDrawing.blocks[1].selectableCount === 0 &&
+    synthesizedLayer?.name === "P-New" &&
+    synthesizedLayer?.selectableCount === 2 &&
+    synthesizedBlock?.name === "NewDynamicBlock" &&
+    synthesizedBlock?.selectableCount === 1,
+  "legacy catalog attaches numeric name-fallback counts and preserves existing row fields",
+);
+assert(
+  attachedDrawing.layers.filter((row) => row.name === "P-ThoatRua").length === 1 &&
+    attachedDrawing.blocks.filter((row) => row.name === "cutdenhatD110").length === 1 &&
+    attachedTables.layers.some((row) => row.handle === "12") &&
+    attachedTables.blocks.some((row) => row.handle === "1A806"),
+  "legacy catalog synthesizes each referenced group omitted by capped tables without duplicates",
 );
 
 // Simulate LISP result poll
@@ -672,7 +801,20 @@ assert(bridgeSrc.includes('DRAWING_INFO_REQUEST_NAME = "drawing-info.req"'), "so
 assert(bridgeSrc.includes('DRAWING_INFO_RESPONSE_NAME = "drawing-info.json"'), "source drawing-info response name");
 const acadBridgeSrc = readFileSync(join(__dirname, "../src/acadBridge.ts"), "utf8");
 assert(acadBridgeSrc.includes('r.get("/drawing-info"'), "drawing-info HTTP route wired");
-assert(acadBridgeSrc.includes("requestDrawingInfo(exactTarget)"), "drawing-info route sends exact target");
+assert(
+  acadBridgeSrc.includes("requestDrawingInfoWithBusyRetry(exactTarget)"),
+  "drawing-info route retries only transient busy snapshots for the exact target",
+);
+assert(
+  acadBridgeSrc.includes("withLegacySelectionCatalog(snapshot, exactTarget)") &&
+    acadBridgeSrc.includes("{ readOnly: true }") &&
+    acadBridgeSrc.includes("selection_catalog_document_stale"),
+  "drawing-info enriches old-plugin snapshots through a guarded read-only one-pass scan",
+);
+assert(
+  acadBridgeSrc.includes("snapshotCollectedAt: responseSnapshot.collectedAt"),
+  "drawing-info preserves the plugin snapshot timestamp separately from HTTP response time",
+);
 assert(!acadBridgeSrc.includes("globSync("), "daemon avoids Node 22-only fs.globSync");
 assert(
   acadBridgeSrc.includes('LANG: "en_US.UTF-8"') &&
@@ -725,6 +867,68 @@ const drawingInfoBlock = arxCpp.slice(
 assert(drawingInfoBlock.length > 0, "drawing-info native snapshot block found");
 assert(!drawingInfoBlock.includes("kForWrite"), "drawing-info snapshot opens no database object for write");
 assert(drawingInfoBlock.includes("pluginVersion"), "drawing-info reports plugin version");
+const selectionScopeCollector = drawingInfoBlock.slice(
+  drawingInfoBlock.indexOf("struct SelectionScopeStats"),
+  drawingInfoBlock.indexOf("static std::string layerTableJson"),
+);
+assert(
+  selectionScopeCollector.includes("db->currentSpaceId()") &&
+    selectionScopeCollector.includes("stats.scanned >= kInfoMaxSelectionScopeEntities"),
+  "drawing-info bounds the selectable-count scan to the current space",
+);
+assert(
+  selectionScopeCollector.includes("entityLayer(entity)") &&
+    selectionScopeCollector.includes("AcDbBlockReference::cast(entity)"),
+  "drawing-info counts direct current-space layer entities and block references",
+);
+assert(
+  selectionScopeCollector.includes("objectIdHandle(entity->layerId())") &&
+    selectionScopeCollector.includes('\\\"layerHandle\\\"') &&
+    selectionScopeCollector.includes('\\\"blockName\\\"') &&
+    selectionScopeCollector.includes('\\\"blockHandle\\\"'),
+  "drawing-info catalog rows identify direct entities and their layer/block table handles",
+);
+assert(
+  selectionScopeCollector.includes("dynamicBlockTableRecord()") &&
+    selectionScopeCollector.includes("effectiveBlockDefinition(reference)"),
+  "drawing-info groups dynamic block variants under their original definition",
+);
+assert(
+  selectionScopeCollector.includes("stats.complete = !truncated && !unreadable"),
+  "drawing-info marks incomplete or truncated selectable counts",
+);
+const layerTableBlock = drawingInfoBlock.slice(
+  drawingInfoBlock.indexOf("static std::string layerTableJson"),
+  drawingInfoBlock.indexOf("static std::string blockAnnotationScalesJson"),
+);
+const blockTableBlock = drawingInfoBlock.slice(
+  drawingInfoBlock.indexOf("static std::string blockTableJson"),
+  drawingInfoBlock.indexOf("static std::string layoutTableJson"),
+);
+assert(
+  layerTableBlock.includes("selectableCount") &&
+    layerTableBlock.includes("selectionScope.layerHandles, objectHandle(layer)") &&
+    blockTableBlock.includes("selectableCount") &&
+    blockTableBlock.includes("selectionScope.blockHandles, objectHandle(block)"),
+  "drawing-info matches selectable layer/block counts through table handles",
+);
+assert(
+  drawingInfoBlock.includes("selectionScopeJson") &&
+    drawingInfoBlock.includes("maxSelectionScopeEntities") &&
+    /\\\"space\\\"[\s\S]*\\\"scanned\\\"[\s\S]*\\\"complete\\\"/.test(drawingInfoBlock),
+  "drawing-info publishes bounded selectionScope completeness metadata",
+);
+assert(
+  drawingInfoBlock.includes("selectionCatalogJson") &&
+    drawingInfoBlock.includes('\\\"selectionCatalog\\\"') &&
+    drawingInfoBlock.includes("jsonRows(selectionScope.objects)") &&
+    (drawingInfoBlock.match(/\\\"selectionCatalog\\\"/g) || []).length === 1,
+  "drawing-info publishes one bounded current-space catalog without duplicating its payload",
+);
+assert(
+  (drawingInfoBlock.match(/\\\"selectionScope\\\"/g) || []).length === 2,
+  "drawing-info publishes selectionScope at root and in drawing",
+);
 assert(
   drawingInfoBlock.includes("AcDbPdfReference::cast") &&
     drawingInfoBlock.includes("pdfUnderlays") &&

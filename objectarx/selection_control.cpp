@@ -457,11 +457,13 @@ static bool parseHandleList(const std::string& raw,
 
 static bool layerScopeId(AcDbDatabase* database,
                          const std::map<std::string, std::string>& params,
-                         AcDbObjectId& layerId, std::string& error) {
+                         AcDbObjectId& layerId, std::string& error,
+                         const char* nameField = "scopeNameHex",
+                         const char* handleField = "scopeHandle") {
     std::string name;
-    if (!decodeTextHex(param(params, "scopeNameHex"), name, "scopeNameHex",
+    if (!decodeTextHex(param(params, nameField), name, nameField,
                        true, error)) return false;
-    const std::string handleText = param(params, "scopeHandle");
+    const std::string handleText = param(params, handleField);
     if (name.empty() && handleText.empty()) {
         error = "layer scope needs scopeNameHex or scopeHandle";
         return false;
@@ -503,11 +505,13 @@ static bool layerScopeId(AcDbDatabase* database,
 
 static bool blockScopeId(AcDbDatabase* database,
                          const std::map<std::string, std::string>& params,
-                         AcDbObjectId& blockId, std::string& error) {
+                         AcDbObjectId& blockId, std::string& error,
+                         const char* nameField = "scopeNameHex",
+                         const char* handleField = "scopeHandle") {
     std::string name;
-    if (!decodeTextHex(param(params, "scopeNameHex"), name, "scopeNameHex",
+    if (!decodeTextHex(param(params, nameField), name, nameField,
                        true, error)) return false;
-    const std::string handleText = param(params, "scopeHandle");
+    const std::string handleText = param(params, handleField);
     if (name.empty() && handleText.empty()) {
         error = "block scope needs scopeNameHex or scopeHandle";
         return false;
@@ -558,6 +562,70 @@ static AcDbObjectId effectiveBlockDefinition(AcDbBlockReference* reference) {
     return reference->blockTableRecord();
 }
 
+static bool entityMatchesScope(AcDbEntity* entity, const std::string& scopeKind,
+                               AcDbObjectId scopeId) {
+    if (!entity || scopeId.isNull()) return false;
+    if (scopeKind == "layer") return entity->layerId() == scopeId;
+    AcDbBlockReference* reference = AcDbBlockReference::cast(entity);
+    return scopeKind == "block" && reference &&
+           effectiveBlockDefinition(reference) == scopeId;
+}
+
+static bool validateCompleteCatalogScope(
+    AcDbObjectId currentSpaceId, const std::string& scopeKind,
+    AcDbObjectId scopeId, const std::set<std::string>& requested,
+    std::string& error) {
+    AcDbBlockTableRecord* space = nullptr;
+    if (acdbOpenObject(space, currentSpaceId, AcDb::kForRead) != Acad::eOk ||
+        !space) {
+        error = "catalog_scope_stale: cannot open current space";
+        return false;
+    }
+    AcDbBlockTableRecordIterator* iterator = nullptr;
+    if (space->newIterator(iterator) != Acad::eOk || !iterator) {
+        space->close();
+        error = "catalog_scope_stale: cannot iterate current space";
+        return false;
+    }
+
+    std::set<std::string> current;
+    for (; !iterator->done(); iterator->step()) {
+        AcDbEntity* entity = nullptr;
+        if (iterator->getEntity(entity, AcDb::kForRead) != Acad::eOk ||
+            !entity) {
+            delete iterator;
+            space->close();
+            error = "catalog_scope_stale: cannot verify every origin member";
+            return false;
+        }
+        if (entityMatchesScope(entity, scopeKind, scopeId)) {
+            const std::string handle = objectHandle(entity);
+            if (handle.empty() || !current.insert(handle).second) {
+                entity->close();
+                delete iterator;
+                space->close();
+                error = "catalog_scope_stale: invalid origin handle set";
+                return false;
+            }
+            if (current.size() > kMaxSubjects) {
+                entity->close();
+                delete iterator;
+                space->close();
+                error = "selection_too_large";
+                return false;
+            }
+        }
+        entity->close();
+    }
+    delete iterator;
+    space->close();
+    if (current != requested) {
+        error = "catalog_scope_stale: complete origin handle set changed";
+        return false;
+    }
+    return true;
+}
+
 static bool resolveScope(AcDbDatabase* database,
                          const std::map<std::string, std::string>& params,
                          std::vector<AcDbObjectId>& ids,
@@ -574,6 +642,40 @@ static bool resolveScope(AcDbDatabase* database,
         std::vector<std::string> handles;
         if (!parseHandleList(param(params, "handles"), handles, true, error))
             return false;
+        const std::string catalogScopeKind = param(params, "catalogScopeKind");
+        const std::string catalogSelectedAll =
+            param(params, "catalogScopeSelectedAll");
+        const bool hasCatalogScope = !catalogScopeKind.empty();
+        if (!hasCatalogScope &&
+            (!param(params, "catalogScopeNameHex").empty() ||
+             !param(params, "catalogScopeHandle").empty() ||
+             !catalogSelectedAll.empty())) {
+            error = "catalog scope is incomplete";
+            return false;
+        }
+        if (hasCatalogScope && catalogScopeKind != "layer" &&
+            catalogScopeKind != "block") {
+            error = "catalogScopeKind must be layer|block";
+            return false;
+        }
+        if (hasCatalogScope && catalogSelectedAll != "0" &&
+            catalogSelectedAll != "1") {
+            error = "catalogScopeSelectedAll must be 0|1";
+            return false;
+        }
+        AcDbObjectId catalogScopeId;
+        if (catalogScopeKind == "layer") {
+            if (!layerScopeId(
+                    database, params, catalogScopeId, error,
+                    "catalogScopeNameHex", "catalogScopeHandle")) return false;
+        } else if (catalogScopeKind == "block" &&
+                   !blockScopeId(
+                       database, params, catalogScopeId, error,
+                       "catalogScopeNameHex", "catalogScopeHandle")) {
+            return false;
+        }
+
+        std::set<std::string> requested;
         ids.reserve(handles.size());
         for (const std::string& handle : handles) {
             AcDbObjectId id;
@@ -587,13 +689,27 @@ static bool resolveScope(AcDbDatabase* database,
                 return false;
             }
             const bool inCurrentSpace = entity->ownerId() == currentSpaceId;
+            const bool inCatalogScope = !hasCatalogScope ||
+                entityMatchesScope(entity, catalogScopeKind, catalogScopeId);
             entity->close();
             if (!inCurrentSpace) {
                 error = "exact handle is not a top-level entity in current space: " +
                         normalized;
                 return false;
             }
+            if (!inCatalogScope) {
+                error = "catalog_scope_stale: exact handle left its origin: " +
+                        normalized;
+                return false;
+            }
             ids.push_back(id);
+            requested.insert(normalized);
+        }
+        if (hasCatalogScope && catalogSelectedAll == "1" &&
+            !validateCompleteCatalogScope(
+                currentSpaceId, catalogScopeKind, catalogScopeId,
+                requested, error)) {
+            return false;
         }
     } else if (scopeKind == "layer" || scopeKind == "block") {
         AcDbObjectId scopeId;
@@ -621,14 +737,7 @@ static bool resolveScope(AcDbDatabase* database,
                 !entity) {
                 continue;
             }
-            bool matches = false;
-            if (scopeKind == "layer") {
-                matches = entity->layerId() == scopeId;
-            } else {
-                AcDbBlockReference* reference = AcDbBlockReference::cast(entity);
-                matches = reference &&
-                          effectiveBlockDefinition(reference) == scopeId;
-            }
+            const bool matches = entityMatchesScope(entity, scopeKind, scopeId);
             if (matches) ids.push_back(entity->objectId());
             entity->close();
             if (ids.size() > kMaxSubjects) {
