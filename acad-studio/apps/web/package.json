@@ -9,8 +9,9 @@
     "test:contract": "node scripts/test-contract.mjs && pnpm --filter @acad/cadweb exec tsx --test ../web/scripts/test-preconstruction.test.ts",
     "check:css": "node scripts/check-css-collisions.mjs",
     "check:boundaries": "node scripts/check-import-boundaries.mjs",
+    "check:guards": "node scripts/extract-guard-codes.mjs",
     "test:routes": "node scripts/test-route-serving.mjs",
-    "verify": "pnpm check:css && pnpm check:boundaries && pnpm test:contract && pnpm build && pnpm test:routes",
+    "verify": "pnpm check:css && pnpm check:boundaries && pnpm check:guards && pnpm test:contract && pnpm build && pnpm test:routes",
     "start": "next start -p 3000"
   },
   "dependencies": {

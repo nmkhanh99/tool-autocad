@@ -110,6 +110,7 @@ cd acad-studio/apps/web && pnpm verify
 |------|-------------|
 | `pnpm check:css` | Va chạm class/token giữa `globals.css` và `design-system.css`; trần hex literal của `globals.css` |
 | `pnpm check:boundaries` | 3 ranh giới thư mục của kiến trúc mới |
+| `pnpm check:guards` | Mọi mã lỗi daemon phát ra đều có thái độ trong UI, và ngược lại |
 | `pnpm test:contract` | Bất biến an toàn của UI (xem §6) |
 | `pnpm build` | Next build + TypeScript |
 | `pnpm test:routes` | Bản đóng gói phục vụ đúng route (khởi động daemon thật) |
@@ -191,6 +192,9 @@ phải dùng `127.0.0.1`, thêm `allowedDevOrigins: ["127.0.0.1"]` vào
   chuyển file làm test đỏ, và đỏ ở đây là tín hiệu đúng: người di chuyển phải xác
   nhận bất biến còn đúng chứ không mặc nhiên bỏ qua.
 
+Hai phép đếm dạng "chuỗi X chỉ được xuất hiện N lần" **bỏ comment trước khi
+đếm** — chính comment giải thích bất biến lại chứa chuỗi đang đếm.
+
 Các bất biến đang được khoá:
 
 | Bất biến | Trạng thái |
@@ -201,7 +205,9 @@ Các bất biến đang được khoá:
 | Chỉ MỘT `EventSource` trong toàn app | đang khoá |
 | Nút ghi không đặt `data-write` lên `<button>` thô | đang khoá |
 | Route `/` mang mốc `data-screen` đúng giai đoạn | đang khoá |
-| Chỉ một luồng ghi (`confirmed: true` = 1) | **chưa** — hiện là 3, mở khoá ở giai đoạn 2A |
+| Chỉ một luồng ghi (`confirmed: true` = 1, trong `features/staged-ops/`) | đang khoá |
+| Không màn hình nào gọi thẳng endpoint prepare/apply/reject | đang khoá |
+| Mọi mã lỗi daemon đều có thái độ trong UI | đang khoá (`check:guards`) |
 | Endpoint chỉ khai ở `lib/daemon/endpoints.ts` | **chỉ áp cho `components/` và `features/`** — `app/` legacy còn 32 đường dẫn rải rác |
 
 ---

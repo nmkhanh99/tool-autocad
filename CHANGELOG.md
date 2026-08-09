@@ -1,5 +1,65 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 2A (phần 1): một luồng ghi duy nhất
+
+Gộp 3 bản sao của luồng ghi hai pha **trước khi** di chuyển bất kỳ file nào.
+Thứ tự này không tuỳ ý: lệnh ghi vào bản vẽ không hoàn tác được, và một bản port
+sót `confirmed: true` là một đường ghi chạy mà không hiện danh sách đối tượng
+cho ai xem.
+
+### Added
+
+- `lib/daemon/endpoints.ts` — mọi đường dẫn API khai một chỗ.
+- `lib/daemon/client.ts` — `DaemonError` giữ `code` và `status`; chuẩn hoá cặp
+  mã đồng nghĩa `ambiguous_target` → `target_ambiguous` và
+  `autocad_not_running` → `not_running` ngay tại biên nhận.
+- `features/staged-ops/{types,guards,prepareApplyReject}.ts` — một bản duy nhất
+  của prepare → confirm → reject. `confirmed: true` chỉ tồn tại ở đây.
+- `scripts/extract-guard-codes.mjs` + script `check:guards`. Nó quét daemon và
+  bắt UI phải có thái độ với **từng** mã: hoặc có câu chữ riêng, hoặc nằm trong
+  `GENERIC_CODES`, hoặc fail build. Chặn cả chiều ngược lại — entry cho mã
+  daemon không còn phát ra cũng fail, vì câu chữ chết còn tệ hơn không có.
+
+### Changed
+
+- `page.tsx`, `DrawingInfoPanel`, `DrawingStandardsPanel` gọi module chung thay
+  cho ba bản tự viết.
+- Bản trong `page.tsx` trước đây **không kiểm `ok === false`** và vứt luôn mã
+  lỗi có kiểu của daemon; nay nó dùng chung đường xử lý lỗi với hai panel kia.
+- Chuỗi rút số đối tượng lấy theo bản đầy đủ nhất trong ba bản. Bản ngắn ở
+  `page.tsx` bỏ sót `summary.subjectCount` và độ dài mảng `subjects`.
+- `prepare` nay từ chối cả phản hồi thiếu `revision`, không chỉ thiếu `id` —
+  thiếu revision thì daemon không có gì để đối chiếu lúc ghi.
+- Tập mã "snapshot đã cũ" mở rộng từ 4 lên 7. Bốn mã cũ là các mã kết thúc bằng
+  `_stale` trừ `destination_stale` — một thiếu sót. Thêm
+  `operation_revision_mismatch` và `target_mismatch` vì cả hai đều có nghĩa là
+  thứ app đang cầm không còn khớp bản vẽ. Mở rộng theo hướng an toàn: nhiều
+  trường hợp hơn sẽ đánh dấu snapshot cũ và buộc quét lại.
+
+### Fixed
+
+- 62 mã lỗi của daemon nay đều có thái độ, trong đó 51 mã có câu giải thích và
+  lối thoát riêng. Bộ mẫu thiết kế chỉ liệt kê 11 — thiếu cả bốn mã mà màn
+  "Thay đổi chờ duyệt" sẽ gặp nhiều nhất khi apply một thao tác cũ
+  (`operation_expired`, `operation_not_found`, `operation_not_pending`,
+  `operation_revision_mismatch`) và thiếu `selection_too_large`.
+
+### Technical
+
+- Bất biến mới trong `test-contract.mjs`: `confirmed: true` đúng **1** lần
+  (trước là 3) và phải nằm trong `features/staged-ops/prepareApplyReject.ts`;
+  không file nào ngoài `lib/daemon/endpoints.ts` được nhắc endpoint
+  prepare/operations. Phép đếm **bỏ comment trước khi đếm** — chính comment giải
+  thích bất biến lại chứa chuỗi đang đếm.
+- `check-import-boundaries.mjs` cũng bỏ comment: một doc comment nhắc tên
+  endpoint mà nó mô tả không phải là phụ thuộc.
+- Negative test: thêm một bản sao luồng ghi thứ hai thì contract test đỏ
+  (`2 !== 1`), gỡ ra thì xanh lại.
+- `tsc --noEmit` sạch. `applyStagedOp` trả `JsonRecord` (giá trị `unknown`) thay
+  vì `any` như `response.json()` cũ — siết chặt hơn, đã sửa một chỗ gọi.
+
+---
+
 ## 2026-08-09 — Giai đoạn 1: dọn va chạm CSS
 
 Giao diện **không đổi**. Đây là điều kiện nghiệm thu chính của giai đoạn, đã

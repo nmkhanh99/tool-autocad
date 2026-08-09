@@ -2,6 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { asRecord, type JsonRecord } from "./json";
+import {
+  applyStagedOp,
+  isStale,
+  prepareStagedOp,
+  rejectStagedOp,
+  stagedErrorText,
+} from "../features/staged-ops/prepareApplyReject";
 
 type DocumentInfo = JsonRecord & {
   title?: string;
@@ -116,19 +123,6 @@ type CadActionFeedback = {
   tone: "loading" | "error" | "success";
   text: string;
 };
-
-const STALE_CAD_CODES = new Set([
-  "document_stale",
-  "drawing_stale",
-  "scope_stale",
-  "selection_stale",
-]);
-
-class CadResponseError extends Error {
-  constructor(message: string, readonly code = "") {
-    super(message);
-  }
-}
 
 export type DrawingInfoPanelProps = {
   open: boolean;
@@ -533,18 +527,6 @@ function matchesFilter(row: JsonRecord, filter: string): boolean {
   if (!filter) return true;
   return Object.entries(row).some(([key, value]) =>
     `${humanize(key)} ${plainValue(value)}`.toLocaleLowerCase("vi").includes(filter));
-}
-
-async function responseRecord(response: Response): Promise<JsonRecord> {
-  const body = await response.json().catch(() => ({}));
-  const record = asRecord(body) || {};
-  if (!response.ok || record.ok === false) {
-    throw new CadResponseError(
-      String(record.error || record.message || `HTTP ${response.status}`),
-      String(record.code || ""),
-    );
-  }
-  return record;
 }
 
 function KeyValueGrid({ data, filter = "" }: { data: unknown; filter?: string }) {
@@ -1086,43 +1068,30 @@ export default function DrawingInfoPanel({
       text: `Đang kiểm tra ${display.scopeLabel}…`,
     });
     try {
-      const body = await responseRecord(await fetch(
-        `${daemon.replace(/\/+$/, "")}/api/acad/selection/prepare`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request),
-        },
-      ));
-      const operation = asRecord(body.operation) || {};
-      const id = String(operation.id || body.operationId || "");
-      if (!id) throw new Error("Daemon không trả operation id để xác nhận.");
-      const summary = asRecord(operation.summary) || {};
-      const subjects = Array.isArray(operation.subjects) ? operation.subjects : [];
-      const rawCount = operation.subjectCount ?? operation.count ??
-        summary.count ?? summary.subjectCount ??
-        (subjects.length ? subjects.length : display.count);
-      const count = Number(rawCount);
+      const op = await prepareStagedOp(daemon, request, {
+        action: display.action,
+        fallbackCount: display.count,
+      });
       setPendingCadAction({
         ...display,
-        id,
-        revision: String(operation.revision || body.revision || ""),
+        id: op.id,
+        revision: op.revision,
         action: display.action,
-        target: String(operation.target || display.target),
+        target: op.target || display.target,
         nextTarget: display.action === "activate-document"
-          ? String(operation.target || display.nextTarget || display.target)
+          ? (op.nextTarget || display.nextTarget || display.target)
           : display.nextTarget,
-        count: Number.isFinite(count) ? count : display.count,
+        count: op.count ?? display.count,
       });
       setCadActionFeedback(null);
     } catch (error) {
-      if (error instanceof CadResponseError && STALE_CAD_CODES.has(error.code)) {
+      if (isStale(error)) {
         setCatalogStale(true);
         setObjectPicker(null);
       }
       setCadActionFeedback({
         tone: "error",
-        text: `${display.scopeLabel}: ${error instanceof Error ? error.message : String(error)}`,
+        text: `${display.scopeLabel}: ${stagedErrorText(error)}`,
       });
     } finally {
       setPreparingRow("");
@@ -1136,15 +1105,7 @@ export default function DrawingInfoPanel({
     setCadActionBusy("apply");
     setCadActionFeedback(null);
     try {
-      const result = await responseRecord(await fetch(
-        `${daemon.replace(/\/+$/, "")}/api/acad/selection/operations/` +
-          `${encodeURIComponent(pending.id)}/apply`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ revision: pending.revision, confirmed: true }),
-        },
-      ));
+      const result = await applyStagedOp(daemon, pending);
       setPendingCadAction(null);
       setCadActionFeedback({
         tone: "success",
@@ -1164,14 +1125,11 @@ export default function DrawingInfoPanel({
       // Apply is one-shot server-side. Force a fresh prepare instead of
       // offering a retry against an operation that may already be terminal.
       setPendingCadAction(null);
-      if (error instanceof CadResponseError && STALE_CAD_CODES.has(error.code)) {
+      if (isStale(error)) {
         setCatalogStale(true);
         setObjectPicker(null);
       }
-      setCadActionFeedback({
-        tone: "error",
-        text: error instanceof Error ? error.message : String(error),
-      });
+      setCadActionFeedback({ tone: "error", text: stagedErrorText(error) });
     } finally {
       setCadActionBusy("");
     }
@@ -1184,17 +1142,7 @@ export default function DrawingInfoPanel({
     setCadActionFeedback(null);
     setCadActionBusy("reject");
     try {
-      await fetch(
-        `${daemon.replace(/\/+$/, "")}/api/acad/selection/operations/` +
-          `${encodeURIComponent(pending.id)}/reject`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ revision: pending.revision }),
-        },
-      );
-    } catch {
-      // Best effort: the staged operation expires server-side and no CAD change is applied.
+      await rejectStagedOp(daemon, pending);
     } finally {
       setCadActionBusy("");
     }

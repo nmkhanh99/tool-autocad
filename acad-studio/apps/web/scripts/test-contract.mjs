@@ -61,6 +61,32 @@ function countAll(pattern) {
   return [...all.matchAll(new RegExp(pattern, "g"))].length;
 }
 
+/** Bỏ comment trước khi đếm. Cần cho các bất biến dạng "chuỗi X chỉ được xuất
+ * hiện đúng N lần": chính comment giải thích bất biến đó lại chứa chuỗi đó, nên
+ * đếm thô sẽ luôn sai. Không bỏ `//` giữa dòng để không cắt nhầm URL. */
+function stripComments(text) {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .filter((line) => !/^\s*(\/\/|\*)/.test(line))
+    .join("\n");
+}
+
+const codeOnly = stripComments(all);
+
+function countCode(pattern) {
+  return [...codeOnly.matchAll(new RegExp(pattern, "g"))].length;
+}
+
+/** Như countCode nhưng bỏ qua những file được phép chứa mẫu đó. */
+function countCodeExcept(pattern, ...allowed) {
+  const text = sources
+    .filter((s) => !allowed.includes(s.path))
+    .map((s) => stripComments(s.text))
+    .join("\n");
+  return [...text.matchAll(new RegExp(pattern, "g"))].length;
+}
+
 const page = sourceAt("app/page.tsx");
 const functions = sourceAt("functions.ts");
 const standards = sourceAt("DrawingStandardsPanel.tsx");
@@ -101,6 +127,30 @@ assert.doesNotMatch(
   all,
   /\[open, daemon, selectedTarget, refreshToken, reloadToken\]/,
   "generic AutoCAD change events do not trigger an automatic full scan",
+);
+
+/* MỘT luồng ghi duy nhất. Đây là bất biến an toàn quan trọng nhất của repo:
+ * lệnh ghi vào bản vẽ KHÔNG HOÀN TÁC ĐƯỢC, và `confirmed: true` là thứ duy
+ * nhất phân biệt "đã có người xem danh sách đối tượng và đồng ý" với "một lời
+ * gọi HTTP nào đó". Ba bản sao (giai đoạn 2A gộp lại) nghĩa là ba chỗ có thể
+ * lệch nhau mà không ai thấy. */
+assert.equal(
+  countCode("confirmed: true"),
+  1,
+  "chỉ features/staged-ops/prepareApplyReject.ts được gửi confirmed: true",
+);
+assert.ok(
+  sources.some((s) =>
+    s.path === "features/staged-ops/prepareApplyReject.ts" && s.text.includes("confirmed: true")),
+  "luồng ghi phải nằm trong features/staged-ops/prepareApplyReject.ts",
+);
+
+/* Không màn hình nào được tự gọi thẳng endpoint hai pha. Nếu một màn hình dựng
+ * lại lời gọi bằng tay, nó sẽ bỏ qua việc kiểm revision và câu chữ guard. */
+assert.equal(
+  countCodeExcept("/api/acad/selection/(?:prepare|operations)", "lib/daemon/endpoints.ts"),
+  0,
+  "prepare/apply/reject phải đi qua features/staged-ops, không gọi thẳng endpoint",
 );
 
 /* Một EventSource duy nhất. Hôm nay nó ở page.tsx; từ giai đoạn 2A trở đi nó

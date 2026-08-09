@@ -1,6 +1,12 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { GROUPS, MENU_FUNCTIONS, byId, type Fn } from "./functions";
+import {
+  applyStagedOp,
+  prepareStagedOp,
+  rejectStagedOp,
+  stagedErrorText,
+} from "../features/staged-ops/prepareApplyReject";
 import DrawingInfoPanel from "./DrawingInfoPanel";
 import DrawingStandardsPanel from "./DrawingStandardsPanel";
 import BlockLibraryPanel from "./BlockLibraryPanel";
@@ -545,31 +551,19 @@ export default function Page() {
     setPageCadActionBusy("prepare");
     setPageCadActionError("");
     try {
-      const response = await fetch(`${DAEMON}/api/acad/selection/prepare`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
+      const op = await prepareStagedOp(DAEMON, request, {
+        action: display.action,
+        fallbackCount: display.count,
       });
-      const body = await response.json();
-      if (!response.ok || body.error) {
-        throw new Error(body.error || `HTTP ${response.status}`);
-      }
-      const operation = body.operation || {};
-      if (!operation.id || !operation.revision) {
-        throw new Error("Daemon không trả operation/revision để xác nhận.");
-      }
-      const count = Number(
-        operation.subjectCount ?? operation.summary?.count ?? display.count,
-      );
       setPendingPageCadAction({
         ...display,
-        id: String(operation.id),
-        revision: String(operation.revision),
-        target: String(operation.target || display.target),
-        count: Number.isFinite(count) ? count : display.count,
+        id: op.id,
+        revision: op.revision,
+        target: op.target || display.target,
+        count: op.count ?? display.count,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = stagedErrorText(error);
       setPageCadActionError(message);
       setMessages((messages) => [
         ...messages,
@@ -624,35 +618,21 @@ export default function Page() {
     setPageCadActionBusy("apply");
     setPageCadActionError("");
     try {
-      const response = await fetch(
-        `${DAEMON}/api/acad/selection/operations/${encodeURIComponent(pending.id)}/apply`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            revision: pending.revision,
-            confirmed: true,
-          }),
-        },
-      );
-      const body = await response.json();
-      if (!response.ok || body.error) {
-        throw new Error(body.error || `HTTP ${response.status}`);
-      }
+      const body = await applyStagedOp(DAEMON, pending);
       if (pending.action === "activate-document") {
         await persistDrawTarget(pending.drawTargetTitle || pending.target);
         await loadDrawDocs();
       } else {
         setMessages((messages) => [...messages, {
           role: "assistant",
-          text: body.hint || `Đã chọn layer ${pending.scopeLabel} trong AutoCAD.`,
+          text: String(body.hint || `Đã chọn layer ${pending.scopeLabel} trong AutoCAD.`),
         }]);
       }
       setPendingPageCadAction(null);
     } catch (error) {
       // Apply là one-shot; stale/error phải chuẩn bị proposal mới.
       setPendingPageCadAction(null);
-      const message = error instanceof Error ? error.message : String(error);
+      const message = stagedErrorText(error);
       setPageCadActionError(message);
       setMessages((messages) => [
         ...messages,
@@ -669,14 +649,7 @@ export default function Page() {
     setPendingPageCadAction(null);
     setPageCadActionBusy("reject");
     try {
-      await fetch(
-        `${DAEMON}/api/acad/selection/operations/${encodeURIComponent(pending.id)}/reject`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ revision: pending.revision }),
-        },
-      );
+      await rejectStagedOp(DAEMON, pending);
     } finally {
       setPageCadActionBusy("");
     }

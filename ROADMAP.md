@@ -32,7 +32,27 @@ Giao diện không đổi, đã kiểm bằng Chrome thật.
 
 ## In Progress
 
-Chưa có.
+### Giai đoạn 2A — Gộp luồng ghi
+
+**Phần 1 xong (2026-08-10):** `lib/daemon/{client,endpoints}.ts` +
+`features/staged-ops/{types,guards,prepareApplyReject}.ts`; 3 call site đã
+chuyển; `confirmed: true` từ 3 → **1**; 62 mã guard đều có thái độ, khoá bằng
+`check:guards`.
+
+**Phần 2 còn lại:**
+
+- Gộp 4 bản `responseJson`/`responseRecord` còn lại (`BlockLibraryPanel`,
+  `LispLibraryPanel`, `DrawingStandardsPanel`, và `app/json.ts`) về
+  `lib/daemon/client.ts`; xoá `app/json.ts`. Sẽ làm contract test đỏ ở assert
+  `from "./json"` — đó là tín hiệu đúng, sửa trong cùng commit.
+- `ConfirmSheet.tsx` dùng chung, có checkbox ack và banner "không hoàn tác".
+  Hiện mỗi màn hình vẫn tự dựng phần xác nhận của mình.
+- `features/acad-connection/events.ts` — event bus bằng ref, thay cho 6 lần
+  `setState` mỗi sự kiện SSE.
+- `useDocs()` nguồn duy nhất; xoá 3 `refreshToken`, **giữ** `refreshEventAt`.
+  Ngoại lệ phải viết ra: `DrawingInfoPanel` lấy `documents` từ payload
+  `/drawing-info` vì cần cùng revision với snapshot — panel này **không** dùng
+  `useDocs()`.
 
 ---
 
@@ -49,29 +69,19 @@ Còn chờ: **D2** (2 panel prototype — chặn GĐ4) · **D3/D4/D5** (chặn G
 
 ## Next
 
-### Giai đoạn 2A — Gộp luồng ghi về một bản duy nhất
+### Giai đoạn 2B — Chat sang id-based
 
-Phải làm **trước khi di chuyển bất cứ file nào**: nếu một bản port sót
-`confirmed: true`, ta có một lệnh ghi không hoàn tác được chạy im lặng.
+Tách khỏi 2A để có thể trượt mà không chặn giai đoạn 3. Làm **khi chat còn đứng
+yên trong `page.tsx`** — không bao giờ cùng PR với việc di chuyển nó.
 
-- `features/staged-ops/`: `types.ts`, `guards.ts`, `prepareApplyReject.ts`,
-  `ConfirmSheet.tsx` — một bản duy nhất, có checkbox ack và banner "không hoàn
-  tác".
-- `scripts/extract-guard-codes.mjs` sinh bảng mã guard từ daemon (33+ mã trong
-  `cadSelection.ts` thôi đã vượt xa 11 mã của mẫu). Mỗi mã phải có một trong ba
-  trạng thái: entry trong `guards[]`, nằm trong `GENERIC_CODES`, hoặc fail build.
-  Chuẩn hoá `selection_empty` → khoá copy `no_match`, và
-  `ambiguous_target` ↔ `target_ambiguous`.
-- Thay 3 bản cũ bằng module mới, **không đổi hành vi**.
-- Gộp 4 bản `responseJson`/`responseRecord` → `lib/daemon/client.ts`.
-- `features/acad-connection/events.ts` (event bus) + `useDocs()`; xoá 3
-  `refreshToken`, **giữ** `refreshEventAt`.
-- **Ngoại lệ phải viết ra:** `DrawingInfoPanel` lấy `documents` từ payload
-  `/drawing-info` chứ không fetch `/docs`, vì nó cần danh sách cùng revision với
-  snapshot. Panel này **không** dùng `useDocs()`.
+- Trước tiên: viết 5–8 test cho `decide` / `decideLispProposal` / `patchLast`.
+  Hiện **không có test nào** phủ chat; đổi ~68 điểm gọi không lưới an toàn là
+  đánh bạc.
+- Gán `id` cho mọi message do handler tạo qua một factory duy nhất; đổi ba
+  handler sang `patchMessage(id, …)`; `key={m.id}` không fallback index.
 
-Nghiệm thu: `confirmed: true` = 1 (hiện 3) · `new EventSource` = 1 và ở
-`features/acad-connection/events.ts` · `/api/acad/docs` = 1.
+Nghiệm thu: `patchLast(` = 0 · `messagesRef.current[` = 0 · contract test khoá
+việc mọi message `role:"function"|"preview"` đều có `id`.
 
 ---
 

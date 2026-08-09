@@ -7,6 +7,12 @@ import {
   type ReactNode,
 } from "react";
 import { asRecord, type JsonRecord } from "./json";
+import {
+  applyStagedOp,
+  prepareStagedOp,
+  rejectStagedOp,
+  stagedErrorText,
+} from "../features/staged-ops/prepareApplyReject";
 
 type AcadDocument = {
   title?: string;
@@ -1162,39 +1168,23 @@ export default function DrawingStandardsPanel({
     setActionBusy(action);
     setNotice(null);
     try {
-      const body = await responseJson<JsonRecord>(await fetch(
-        `${baseUrl}/api/acad/selection/prepare`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request),
-        },
-      ));
-      const operation = asRecord(body.operation) || {};
-      const id = String(operation.id || body.operationId || "");
-      if (!id) throw new Error("Daemon không trả operation id để xác nhận.");
-      const summary = asRecord(operation.summary) || {};
-      const subjects = Array.isArray(operation.subjects) ? operation.subjects : [];
-      const rawCount = operation.subjectCount ?? operation.count ??
-        summary.count ?? summary.subjectCount ??
-        (subjects.length ? subjects.length : fallbackCount);
-      const count = Number(rawCount);
-      setPendingSelectionAction({
-        id,
-        revision: String(operation.revision || body.revision || ""),
+      const op = await prepareStagedOp(baseUrl, request, {
         action,
-        target: String(operation.target || requestedTarget),
+        fallbackCount,
+      });
+      setPendingSelectionAction({
+        id: op.id,
+        revision: op.revision,
+        action,
+        target: op.target || requestedTarget,
         scopeLabel,
-        count: Number.isFinite(count) ? count : fallbackCount,
+        count: op.count ?? fallbackCount,
         ...(action === "activate-document"
-          ? { nextTarget: String(operation.target || requestedTarget) }
+          ? { nextTarget: op.nextTarget || requestedTarget }
           : {}),
       });
     } catch (error) {
-      setNotice({
-        tone: "error",
-        text: error instanceof Error ? error.message : String(error),
-      });
+      setNotice({ tone: "error", text: stagedErrorText(error) });
     } finally {
       setActionBusy("");
     }
@@ -1206,14 +1196,7 @@ export default function DrawingStandardsPanel({
     setActionBusy("selection-apply");
     setNotice(null);
     try {
-      const body = await responseJson<JsonRecord>(await fetch(
-        `${baseUrl}/api/acad/selection/operations/${encodeURIComponent(pending.id)}/apply`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ revision: pending.revision, confirmed: true }),
-        },
-      ));
+      const body = await applyStagedOp(baseUrl, pending);
       setPendingSelectionAction(null);
       if (pending.action === "activate-document") {
         await loadDocuments();
@@ -1251,10 +1234,7 @@ export default function DrawingStandardsPanel({
     } catch (error) {
       // Apply is one-shot. A retry must start from a new capture/proposal.
       setPendingSelectionAction(null);
-      setNotice({
-        tone: "error",
-        text: error instanceof Error ? error.message : String(error),
-      });
+      setNotice({ tone: "error", text: stagedErrorText(error) });
     } finally {
       setActionBusy("");
     }
@@ -1266,16 +1246,7 @@ export default function DrawingStandardsPanel({
     setPendingSelectionAction(null);
     setActionBusy("selection-reject");
     try {
-      await fetch(
-        `${baseUrl}/api/acad/selection/operations/${encodeURIComponent(pending.id)}/reject`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ revision: pending.revision }),
-        },
-      );
-    } catch {
-      // Best effort: no apply call is made and the operation expires server-side.
+      await rejectStagedOp(baseUrl, pending);
     } finally {
       setActionBusy("");
     }

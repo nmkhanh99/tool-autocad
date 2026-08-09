@@ -27,6 +27,16 @@ function walk(dir, acc = []) {
   return acc;
 }
 
+/** Bỏ comment. Một doc comment nhắc tên endpoint mà nó mô tả là chuyện bình
+ * thường và hữu ích — chỉ lời gọi thật mới là phụ thuộc. */
+function stripComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .filter((line) => !/^\s*(\/\/|\*)/.test(line))
+    .join("\n");
+}
+
 /** Mọi module specifier trong file: import tĩnh, re-export, và import động. */
 function importsOf(source) {
   const specs = [];
@@ -58,7 +68,7 @@ const files = [...walk(join(webDir, "components")), ...walk(join(webDir, "featur
 const violations = [];
 
 for (const rel of files) {
-  const source = readFileSync(join(webDir, rel), "utf8");
+  const source = stripComments(readFileSync(join(webDir, rel), "utf8"));
   const parts = rel.split(sep);
   const specs = importsOf(source);
 
