@@ -2532,7 +2532,7 @@ a.hfix { display: inline-flex; align-items: center; }
 .precon-project > div > b { color: #90a0ab; font-size: 8px; font-weight: 600; }
 .precon-nav { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 6px; scrollbar-width: thin; }
 .precon-nav button {
-  width: 100%; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center;
+  position: relative; width: 100%; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center;
   gap: 8px; margin-bottom: 2px; padding: 8px 8px; color: #91a0aa; text-align: left;
   background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: pointer;
 }
@@ -2869,11 +2869,11 @@ a.hfix { display: inline-flex; align-items: center; }
 }
 .precon-table td input + b { margin-left: 4px; color: #718894; font-size: 7px; }
 .precon-table td select { width: 150px; height: 25px; padding: 0 20px 0 5px; font-size: 7.5px; }
-.precon-table td:last-child > button {
+.precon-table td > button.precon-delete {
   width: 23px; height: 23px; display: grid; place-items: center; color: #a97878;
   border: 1px solid transparent; border-radius: 4px; font-size: 14px;
 }
-.precon-table td:last-child > button:hover { color: #f1a5a5; background: #352124; border-color: #65363a; }
+.precon-table td > button.precon-delete:hover { color: #f1a5a5; background: #352124; border-color: #65363a; }
 .precon-table.estimate { min-width: 760px; }
 .precon-table.estimate td:first-child { min-width: 180px; }
 .precon-table.estimate td:last-child { color: #e5edf1; text-align: right; }
@@ -3066,7 +3066,7 @@ a.hfix { display: inline-flex; align-items: center; }
 .precon-field-photos > em { align-self: center; color: #71838e; font-size: 7.5px; font-style: normal; }
 .precon-punch-list { margin-top: 0; }
 .precon-punch-list > label {
-  min-height: 48px; display: grid; grid-template-columns: 0 26px minmax(0, 1fr) auto; align-items: center;
+  min-height: 48px; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center;
   gap: 9px; padding: 8px 11px; border-bottom: 1px solid #22313a; cursor: pointer;
 }
 .precon-punch-list > label:last-child { border-bottom: 0; }
@@ -3224,9 +3224,14 @@ a.hfix { display: inline-flex; align-items: center; }
 }
 .precon-pending { color: #e2bd79; background: #352b1b; border-color: #68522c; }
 .precon-ai-table td:last-child button {
-  width: auto; height: 25px; padding: 0 8px; color: #aebcc5; background: #1a252d;
+  width: auto; height: 25px; display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 8px; color: #aebcc5; background: #1a252d;
   border: 1px solid #34444e; border-radius: 5px; font-size: 7.5px;
 }
+.precon-ai-table td:last-child button.primary {
+  color: #f7fbff; background: #246f9d; border-color: #4198c9;
+}
+.precon-ai-table td:last-child button.primary:hover { background: #2b7eaf; border-color: #67b7e2; }
 
 .precon-footer {
   min-width: 0; display: flex; align-items: center; gap: 18px; padding: 0 9px;
@@ -3464,8 +3469,8 @@ a.hfix { display: inline-flex; align-items: center; }
   .precon-issue-main { grid-column: 2 / -1; grid-row: 1; }
   .precon-issue-photo { grid-column: 2; grid-row: 2; justify-self: start; }
   .precon-issue select { grid-column: 3; grid-row: 2; width: 104px; }
-  .precon-punch-list > label { grid-template-columns: 0 24px minmax(0, 1fr); }
-  .precon-punch-list > label > em { grid-column: 3; color: #71838e; }
+  .precon-punch-list > label { grid-template-columns: 24px minmax(0, 1fr); }
+  .precon-punch-list > label > em { grid-column: 2; color: #71838e; }
   .precon-form-grid { grid-template-columns: 1fr; }
   .precon-connectors article { padding: 13px; }
   .precon-mapping-flow { overflow: hidden; }

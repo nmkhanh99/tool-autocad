@@ -341,6 +341,31 @@ assert.match(
   /\.precon-backdrop \{[\s\S]*?\.precon-panel \{[\s\S]*?@media \(max-width: 640px\)/,
   "the preconstruction workspace has scoped desktop and mobile styling",
 );
+assert.match(
+  styles,
+  /\.precon-table td > button\.precon-delete \{/,
+  "destructive table styling is scoped to explicit delete buttons",
+);
+assert.doesNotMatch(
+  styles,
+  /\.precon-table td:last-child > button/,
+  "last-column actions are not implicitly styled as destructive",
+);
+assert.match(
+  styles,
+  /\.precon-ai-table td:last-child button\.primary \{/,
+  "approval actions preserve their primary styling",
+);
+assert.match(
+  styles,
+  /\.precon-punch-list > label \{[\s\S]*?grid-template-columns: 26px minmax\(0, 1fr\) auto;/,
+  "punch-list content uses columns that match its in-flow children",
+);
+assert.match(
+  styles,
+  /\.precon-nav button \{[\s\S]*?position: relative;/,
+  "navigation badges are positioned relative to their button",
+);
 
 for (const panel of [
   "BlockLibraryPanel.tsx",

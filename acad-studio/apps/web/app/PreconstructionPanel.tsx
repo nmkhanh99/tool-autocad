@@ -63,6 +63,36 @@ type Action = {
   connectorId?: string;
 };
 
+export function fileNameFromPath(value: string): string {
+  return value.split(/[\\/]/).pop() || value;
+}
+
+export function uniqueDrawingNames(
+  fileNames: readonly string[],
+  existingNames: readonly string[],
+): string[] {
+  const used = new Set(existingNames);
+  return fileNames.map((fileName) => {
+    if (!used.has(fileName)) {
+      used.add(fileName);
+      return fileName;
+    }
+
+    const extensionIndex = fileName.lastIndexOf(".");
+    const hasExtension = extensionIndex > 0;
+    const stem = hasExtension ? fileName.slice(0, extensionIndex) : fileName;
+    const extension = hasExtension ? fileName.slice(extensionIndex) : "";
+    let sequence = 2;
+    let candidate = `${stem} (${sequence})${extension}`;
+    while (used.has(candidate)) {
+      sequence += 1;
+      candidate = `${stem} (${sequence})${extension}`;
+    }
+    used.add(candidate);
+    return candidate;
+  });
+}
+
 export type PreconstructionPanelProps = {
   open: boolean;
   initialView?: PreconstructionView;
@@ -414,11 +444,11 @@ export default function PreconstructionPanel({
     }));
   }
 
-  function retainFiles(files: File[]): LocalAsset[] {
-    return files.map((file) => {
+  function retainFiles(files: File[], names: readonly string[] = files.map((file) => file.name)): LocalAsset[] {
+    return files.map((file, index) => {
       const url = URL.createObjectURL(file);
       objectUrlsRef.current.push(url);
-      return { name: file.name, type: file.type, url };
+      return { name: names[index] || file.name, type: file.type, url };
     });
   }
 
@@ -450,13 +480,14 @@ export default function PreconstructionPanel({
   function handleDrawingUpload(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files || []);
     if (!files.length) return;
-    const assets = retainFiles(files);
-    setDrawings((current) => [...files.map((file) => file.name), ...current]);
+    const names = uniqueDrawingNames(files.map((file) => file.name), drawings);
+    const assets = retainFiles(files, names);
+    setDrawings((current) => [...names, ...current]);
     setDrawingAssets((current) => ({
       ...current,
       ...Object.fromEntries(assets.map((asset) => [asset.name, asset])),
     }));
-    setActiveDrawing(files[0].name);
+    setActiveDrawing(names[0]);
     showNotice(
       `Đã giữ ${files.length} file trong phiên. Ảnh/PDF có thể xem ngay; DWG và định dạng kỹ thuật cần daemon chuyển đổi.`,
       "ok",
@@ -496,7 +527,7 @@ export default function PreconstructionPanel({
             <span className="precon-local"><i /> Dữ liệu dự án cục bộ</span>
             {jobs.length > 0 && <span className="precon-job-count">⚡ {jobs.length} tác vụ chờ</span>}
             <button type="button" onClick={() => {
-              if (initialCadTarget) showNotice(`Đã map với ${initialCadTarget.split("/").pop()}.`, "ok");
+              if (initialCadTarget) showNotice(`Đã map với ${fileNameFromPath(initialCadTarget)}.`, "ok");
               else if (onOpenAutoCAD) onOpenAutoCAD();
             }}>{initialCadTarget ? "A · Đã map AutoCAD" : "A · Kết nối AutoCAD"}</button>
             <button type="button" className="precon-close" onClick={onClose} aria-label="Đóng">×</button>
@@ -709,7 +740,7 @@ export default function PreconstructionPanel({
                             onChange={(event) => updateTakeoff(item.id, { assembly: event.target.value })}>
                             <option value="">Chưa gán</option>{ASSEMBLIES.map(([id, label]) => <option key={id} value={id}>{id} · {label}</option>)}
                           </select></td>
-                          <td><button type="button" aria-label={`Xóa ${item.name}`} onClick={() =>
+                          <td><button type="button" className="precon-delete" aria-label={`Xóa ${item.name}`} onClick={() =>
                             setTakeoffs((current) => current.filter((row) => row.id !== item.id))}>×</button></td>
                         </tr>
                       ))}</tbody>
@@ -1023,7 +1054,7 @@ export default function PreconstructionPanel({
 
         <footer className="precon-footer">
           <span><i /> Phiên cục bộ · Chưa đồng bộ cloud</span>
-          <span>{initialCadTarget ? `AutoCAD: ${initialCadTarget.split("/").pop()}` : "Chưa map bản vẽ AutoCAD"}</span>
+          <span>{initialCadTarget ? `AutoCAD: ${fileNameFromPath(initialCadTarget)}` : "Chưa map bản vẽ AutoCAD"}</span>
           <span>Cập nhật vừa xong</span>
         </footer>
 
