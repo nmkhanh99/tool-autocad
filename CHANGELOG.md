@@ -1,6 +1,57 @@
 # CHANGELOG
 
-## 2026-08-09
+## 2026-08-09 — Giai đoạn 1: dọn va chạm CSS
+
+Giao diện **không đổi**. Đây là điều kiện nghiệm thu chính của giai đoạn, đã
+kiểm bằng trình duyệt thật chứ không chỉ bằng script.
+
+### Added
+
+- `apps/web/app/design-system.css` — copy của `mau-thiet-ke/css/app.css` @
+  `82f5232`, với đúng 2 sai lệch được khai ngay đầu file: khối reset gate bằng
+  `body[data-ds]`, và mục 8 mở rộng khoá lệnh ghi cho `missing` / `no-plugin` /
+  `mute` (mẫu chỉ khoá `busy` và `off`).
+- Route `(shell)/changes` nay đặt `data-ds` và dùng class của design system —
+  nó là chỗ duy nhất chứng minh `design-system.css` thật sự áp được trước khi
+  `AppShell` tồn tại ở giai đoạn 3.
+
+### Changed
+
+- Đổi tên mọi thứ va chạm ở **phía legacy** (phía sẽ chết), không đụng phía
+  design system: `--bg` → `--legacy-bg`, `--accent` → `--legacy-accent`,
+  `.app` `.main` `.empty` `.modal` `.field` → tiền tố `legacy-`.
+- Gate `body` và 5 rule cấp element của legacy (`select`, `textarea`,
+  `textarea:focus`, `code`, `footer`) bằng `body[data-legacy="1"]`. Mọi gate
+  dùng `:where()` nên **specificity không đổi** — mục tiêu là cascade giữ
+  nguyên, không chỉ giao diện giữ nguyên.
+- `app/page.tsx` đặt `data-legacy` trong `useEffect` và gỡ khi unmount.
+
+### Fixed
+
+- Gộp 3 `@keyframes` xoay giống hệt nhau (`drawing-spin`, `standards-spin`,
+  `lisp-library-spin`) thành `legacy-spin`; giữ nguyên tên class vì chúng được
+  dùng trong TSX. Còn 5 keyframes.
+- Xoá dead code đã xác minh 0 usage: `.chips`, `.chip`, `.chip:hover`, `.log`.
+
+### Technical
+
+- **Đếm usage trước/sau khớp tuyệt đối** — đây là tiêu chí thay cho "khác một
+  pixel" vốn không đo được: `.app` 1→1, `.modal` 1→1, `.field` 4→4, `.empty`
+  2→2, `.main` 1→1 (CSS); 1/2/2/1/1 (JSX); `var(--bg)` 1→1, `var(--accent)`
+  40→40.
+- **Kiểm bằng Chrome thật, không chỉ bằng script.** Route legacy:
+  `data-legacy="1"`, body `rgb(15,18,22)`, chữ `rgb(230,233,238)`, 15px, grid
+  `240px 1fr auto`. Route shell: `data-ds="1"`, body `rgb(245,245,245)`, 13px,
+  `SF Pro HK`, `--muted` `rgb(140,140,140)`, không rò `data-legacy`. Các rule
+  vừa gate cũng khớp bản gốc: `select`/`textarea` nền `#1e242c`, `footer` nền
+  `#171b21` viền `#2a313b`.
+- Ghi vào `DEVELOPMENT.md` một bẫy dev đã mất thời gian truy: `next dev` chặn
+  `/_next/*` từ `127.0.0.1`, làm React **không hydrate** — trang trông như đã
+  chạy nhưng chết hoàn toàn, console không báo gì. Dùng `localhost:3000`.
+
+---
+
+## 2026-08-09 — Giai đoạn 0: gỡ blocker & dựng guardrail
 
 ### Added
 

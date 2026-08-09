@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
+// Hai hệ CSS sống song song tới giai đoạn 10. Cả hai gate reset của mình bằng
+// attribute trên <body> (data-legacy / data-ds) nên không đè lên nhau; thứ tự
+// import ở đây không quyết định gì, giữ legacy trước cho khớp lịch sử file.
 import "./globals.css";
+import "./design-system.css";
 
 export const metadata: Metadata = {
   title: "Acad Studio — AutoCAD Toolkit",

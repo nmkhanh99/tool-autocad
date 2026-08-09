@@ -17,11 +17,22 @@ Kế hoạch đầy đủ và lý do từng quyết định: `KE-HOACH-CHUYEN-DO
   khi code di chuyển.
 - `DEVELOPMENT.md`, `CHANGELOG.md`, `ROADMAP.md`, `USER_GUIDE.md`.
 
+### Giai đoạn 1 — Dọn va chạm CSS (2026-08-09)
+
+Giao diện không đổi, đã kiểm bằng Chrome thật.
+
+- Đổi tên phía legacy: 2 token + 5 class → tiền tố `legacy-`. Đếm usage
+  trước/sau khớp tuyệt đối.
+- Gate hai hệ bằng `body[data-legacy]` / `body[data-ds]`, dùng `:where()` để giữ
+  nguyên specificity.
+- `design-system.css` = copy `app.css` @ `82f5232` + 2 sai lệch được khai.
+- Gộp 3 keyframes xoay trùng; xoá `.chips` `.chip` `.log`.
+
 ---
 
 ## In Progress
 
-Chưa có. Giai đoạn 1 bị chặn bởi quyết định **D1**.
+Chưa có.
 
 ---
 
@@ -38,19 +49,29 @@ Còn chờ: **D2** (2 panel prototype — chặn GĐ4) · **D3/D4/D5** (chặn G
 
 ## Next
 
-### Giai đoạn 1 — Dọn va chạm CSS (giao diện KHÔNG đổi)
+### Giai đoạn 2A — Gộp luồng ghi về một bản duy nhất
 
-- Đổi tên phía legacy: `--bg` `--accent` `.app` `.main` `.empty` `.modal`
-  `.field` → tiền tố `legacy-`.
-- Gate `body` hai chiều: `body[data-legacy]` cho legacy, `body[data-ds]` cho
-  design system. Không bọc `.ds` vào một `<div>` — rule `body{...}` của mẫu sẽ
-  không match và nền tối của legacy vẫn thắng.
-- Copy `mau-thiet-ke/css/app.css` → `app/design-system.css`, ghi commit hash
-  nguồn ở đầu file.
-- Mở rộng selector khoá `[data-write]` cho `missing` / `no-plugin` / `mute` —
-  mẫu hiện chỉ khoá `busy` và `off`.
-- Xoá dead code đã xác minh: `.chips` `.chip` `.log`, 3 `@keyframes` xoay trùng.
-  **Không** xoá `.review-sheet-grid.views-2/4/16` (dùng qua template literal).
+Phải làm **trước khi di chuyển bất cứ file nào**: nếu một bản port sót
+`confirmed: true`, ta có một lệnh ghi không hoàn tác được chạy im lặng.
+
+- `features/staged-ops/`: `types.ts`, `guards.ts`, `prepareApplyReject.ts`,
+  `ConfirmSheet.tsx` — một bản duy nhất, có checkbox ack và banner "không hoàn
+  tác".
+- `scripts/extract-guard-codes.mjs` sinh bảng mã guard từ daemon (33+ mã trong
+  `cadSelection.ts` thôi đã vượt xa 11 mã của mẫu). Mỗi mã phải có một trong ba
+  trạng thái: entry trong `guards[]`, nằm trong `GENERIC_CODES`, hoặc fail build.
+  Chuẩn hoá `selection_empty` → khoá copy `no_match`, và
+  `ambiguous_target` ↔ `target_ambiguous`.
+- Thay 3 bản cũ bằng module mới, **không đổi hành vi**.
+- Gộp 4 bản `responseJson`/`responseRecord` → `lib/daemon/client.ts`.
+- `features/acad-connection/events.ts` (event bus) + `useDocs()`; xoá 3
+  `refreshToken`, **giữ** `refreshEventAt`.
+- **Ngoại lệ phải viết ra:** `DrawingInfoPanel` lấy `documents` từ payload
+  `/drawing-info` chứ không fetch `/docs`, vì nó cần danh sách cùng revision với
+  snapshot. Panel này **không** dùng `useDocs()`.
+
+Nghiệm thu: `confirmed: true` = 1 (hiện 3) · `new EventSource` = 1 và ở
+`features/acad-connection/events.ts` · `/api/acad/docs` = 1.
 
 ---
 

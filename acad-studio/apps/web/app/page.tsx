@@ -231,6 +231,15 @@ export default function Page() {
     setPanel(false);
   }
 
+  /* Hai hệ CSS sống song song tới giai đoạn 10 và cả hai đều muốn tạo kiểu cho
+     <body>. Màn hình này nhận nền/chữ của globals.css qua data-legacy; shell mới
+     nhận của design-system.css qua data-ds. Phải gỡ khi unmount, nếu không điều
+     hướng sang route mới sẽ kéo theo nền tối của legacy. */
+  useEffect(() => {
+    document.body.dataset.legacy = "1";
+    return () => { delete document.body.dataset.legacy; };
+  }, []);
+
   useEffect(() => { loadAgents(); loadConvs(); loadRawCatalog(); loadDrawDocs(); }, []);
   useEffect(() => {
     if (!pendingPageCadAction) return;
@@ -1224,7 +1233,7 @@ export default function Page() {
     // data-screen là mốc để scripts/test-route-serving.mjs khẳng định route "/"
     // vẫn do màn hình legacy phục vụ. Khi Tổng quan thay thế nó (giai đoạn 8),
     // mốc kỳ vọng của test đổi từ "legacy" sang "home" trong cùng commit.
-    <div className="app" data-screen="legacy">
+    <div className="legacy-app" data-screen="legacy">
       <aside className="side">
         <div className="brand">Acad<span>·</span>Studio</div>
         <div className="newbtn" onClick={newChat}>＋ Hội thoại mới</div>
@@ -1247,7 +1256,7 @@ export default function Page() {
         </div>
       </aside>
 
-      <main className="main">
+      <main className="legacy-main">
         <div className="topbar">
           <button className="pillbtn" onClick={() => setPanel(!panel)}>🧰 Chức năng</button>
           <button className="pillbtn" onClick={() => openPreconstruction()}
@@ -1311,7 +1320,7 @@ export default function Page() {
         <div className="chat" ref={chatRef}>
           <div className="wrap">
             {messages.length === 0 && (
-              <div className="empty"><h2>Acad Studio — AutoCAD Toolkit</h2>
+              <div className="legacy-empty"><h2>Acad Studio — AutoCAD Toolkit</h2>
                 <button className="drawing-empty-open" onClick={() => openPreconstruction()}>
                   ◇ Mở Preconstruction Workspace
                 </button>
@@ -1496,7 +1505,7 @@ export default function Page() {
       )}
 
       {healthOpen && (
-        <div className="modal" onClick={() => setHealthOpen(false)}>
+        <div className="legacy-modal" onClick={() => setHealthOpen(false)}>
           <div className="modalbox" onClick={(e) => e.stopPropagation()} style={{ width: 620, maxHeight: "85vh", overflow: "auto" }}>
             <h3>⚙ Kiểm tra / Sửa AutoCAD (ổn định + plugin)</h3>
             {!health && <div className="dim">Đang kiểm tra…</div>}
@@ -1718,12 +1727,12 @@ export default function Page() {
       />
 
       {form && (
-        <div className="modal" onClick={() => setForm(null)}>
+        <div className="legacy-modal" onClick={() => setForm(null)}>
           <div className="modalbox" onClick={(e) => e.stopPropagation()}>
             <h3>{form.icon} {form.label}</h3>
             <p className="fndesc">{form.desc}</p>
             {form.live && (
-              <label className="field">
+              <label className="legacy-field">
                 <span>Bản vẽ đích (đang mở trong AutoCAD)
                   {" "}<a className="refr" onClick={() => loadDocs()}>↻ làm mới</a></span>
                 {docsAlive === null && <div className="dim">Đang hỏi AutoCAD…</div>}
@@ -1741,7 +1750,7 @@ export default function Page() {
               </label>
             )}
             {form.fields.map((fl) => (
-              <label key={fl.name} className="field">
+              <label key={fl.name} className="legacy-field">
                 <span>{fl.label}</span>
                 {fl.type === "select"
                   ? <select value={formVals[fl.name] || ""} onChange={(e) => setFormVals({ ...formVals, [fl.name]: e.target.value })}>

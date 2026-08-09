@@ -161,6 +161,22 @@ Hệ quả cần biết:
 Triệu chứng giống hệt "daemon không chạy", nên hãy kiểm tra mã lỗi trước khi đi
 tìm nguyên nhân khác.
 
+### Bẫy thứ hai: `next dev` chặn `/_next/*` từ `127.0.0.1`
+
+Mở <http://127.0.0.1:3000> ở chế độ dev cho ra một trang **trông như đã chạy
+nhưng chết hoàn toàn**: HTML server-render hiện đầy đủ, còn client JS bị chặn
+nên React **không hydrate** — không effect nào chạy, không nút nào bấm được, và
+console không báo gì. Log của dev server mới là chỗ nói ra:
+
+```
+⚠ Blocked cross-origin request to Next.js dev resource /_next/webpack-hmr from "127.0.0.1".
+```
+
+**Luôn dùng <http://localhost:3000> khi chạy `next dev`.** (Bản đóng gói do
+daemon phục vụ không dính bẫy này — nó không đi qua dev server.) Nếu bắt buộc
+phải dùng `127.0.0.1`, thêm `allowedDevOrigins: ["127.0.0.1"]` vào
+`next.config.mjs` rồi khởi động lại dev server.
+
 ---
 
 ## 6. Bất biến được khoá bằng test
@@ -200,13 +216,31 @@ Các bất biến đang được khoá:
 
 ### CSS trong lúc migrate
 
-Hai hệ sống song song. Khi có va chạm tên, **luôn đổi tên phía sẽ chết**
-(`globals.css` → tiền tố `legacy-`), không bao giờ đổi phía design system — đổi
-là fork khỏi `mau-thiet-ke/css/app.css` và không đồng bộ lại được nữa.
+Hai hệ sống song song tới giai đoạn 10:
 
-Va chạm đã đo được (5 class + 2 token): `.app` `.main` `.empty` `.modal`
-`.field`, `--bg` `--accent`. Các class `.count` `.spacer` `.check` **không** va
-chạm — cả hai phía đều đã có tổ tiên riêng.
+| File | Gate | Dùng cho |
+|------|------|----------|
+| `app/globals.css` | `body[data-legacy="1"]` | màn hình legacy (`app/page.tsx`) |
+| `app/design-system.css` | `body[data-ds]` | mọi route trong `app/(shell)/` |
+
+Component đặt attribute trong `useEffect` và **phải gỡ khi unmount** — nếu không,
+điều hướng sang hệ kia sẽ kéo theo nền của hệ này.
+
+Ba quy tắc:
+
+1. **Luôn đổi tên phía sẽ chết** (`globals.css` → tiền tố `legacy-`), không bao
+   giờ đổi phía design system — đổi là fork khỏi `mau-thiet-ke/css/app.css` và
+   không đồng bộ lại được nữa.
+2. **Mọi gate dùng `:where()`** để giữ nguyên specificity. Mục tiêu của giai đoạn
+   1 là giao diện không đổi một pixel, nên cascade cũng không được đổi.
+3. **`design-system.css` chỉ được lệch khỏi mẫu theo danh sách khai ở đầu file.**
+   Hiện có đúng 2 sai lệch: gate reset, và mở rộng khoá lệnh ghi cho
+   `missing`/`no-plugin`/`mute`.
+
+Va chạm đã đo được và đã xử lý (5 class + 2 token): `.app` `.main` `.empty`
+`.modal` `.field`, `--bg` `--accent`. Các class `.count` `.spacer` `.check`
+**không** va chạm — cả hai phía đều đã có tổ tiên riêng, nên bộ dò so trên
+selector chứ không trên token class rời.
 
 ### Git
 
