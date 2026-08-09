@@ -30,8 +30,6 @@ Giao diện không đổi, đã kiểm bằng Chrome thật.
 
 ---
 
-## In Progress
-
 ### Giai đoạn 2A — Gộp luồng ghi
 
 **Phần 1 xong (2026-08-10):** `lib/daemon/{client,endpoints}.ts` +
@@ -71,6 +69,18 @@ Ngoại lệ phải viết ra: `DrawingInfoPanel` lấy `documents` từ payload
 `/drawing-info` vì cần cùng revision với snapshot — panel này **không** dùng
 `fetchDocs()`.
 
+### Giai đoạn 2B — Chat sang id-based (2026-08-10)
+
+Làm **khi chat còn đứng yên trong `page.tsx`**, không cùng PR với việc di
+chuyển nó sang route.
+
+- `features/assistant/messages.ts` + 7 test viết **trước** khi đụng code.
+- Xoá 28 `patchLast`; `decide`/`decideLispProposal`/`refreshBom` nhận ID thay
+  vì chỉ số mảng.
+- **`Msg.id` từ tuỳ chọn thành bắt buộc** — siết kiểu xong, TypeScript chỉ ra
+  13 chỗ tạo message không ID mà grep không tìm hết.
+- Kiểm end-to-end bằng Chrome: hai thao tác nối tiếp, mỗi lỗi vào đúng message.
+
 ---
 
 ## Quyết định đã chốt
@@ -91,31 +101,23 @@ khoảng **21–33 ngày công**, tính riêng ngoài 95–140 ngày front-end.
 
 ## Next
 
-### Giai đoạn 2B — Chat sang id-based
+### Giai đoạn 3 — Shell dùng chung
 
-Tách khỏi 2A để có thể trượt mà không chặn giai đoạn 3. Làm **khi chat còn đứng
-yên trong `page.tsx`** — không bao giờ cùng PR với việc di chuyển nó.
+Không còn gì chặn. Nội dung: titlebar / rail / statusbar / command palette ⌘K /
+activity drawer; `Button` primitive có `disabled` thật (CSS `pointer-events`
+không chặn Tab+Enter); 4 khoá lưu trữ; `useDrawTarget` phải giữ lựa chọn `""` =
+file `.work`.
 
-- Trước tiên: viết 5–8 test cho `decide` / `decideLispProposal` / `patchLast`.
-  Hiện **không có test nào** phủ chat; đổi ~68 điểm gọi không lưới an toàn là
-  đánh bạc.
-- Gán `id` cho mọi message do handler tạo qua một factory duy nhất; đổi ba
-  handler sang `patchMessage(id, …)`; `key={m.id}` không fallback index.
+Kèm việc backend theo **D6**: thêm `dbmod` vào `writeDocs()`
+(`objectarx/mepbridge.cpp`) và `dbmod?: number` vào `OpenAcadDocument`.
 
-Nghiệm thu: `patchLast(` = 0 · `messagesRef.current[` = 0 · contract test khoá
-việc mọi message `role:"function"|"preview"` đều có `id`.
+Cũng là lúc dựng `ConfirmSheet` dùng chung — nó cần `Modal`/`Button`/
+`GuardStrip` của design system, nên hoãn từ 2A sang đây.
 
 ---
 
 ## Later
 
-- **Giai đoạn 3** — shell dùng chung (titlebar/rail/statusbar/palette ⌘K);
-  `Button` primitive có `disabled` thật. Kèm việc backend theo **D6**: thêm
-  `dbmod` vào `writeDocs()` (`objectarx/mepbridge.cpp`, đọc `DBMOD` cho từng
-  document trong iterator như đoạn đã có ở snapshot `/drawing-info`) và
-  `dbmod?: number` vào `OpenAcadDocument` (`apps/daemon/src/acadBridge.ts`).
-  Contract test đi kèm: nếu UI render "chưa lưu"/"đã lưu" từ `useDocs()` thì
-  `/docs` phải trả `dbmod`.
 - **Giai đoạn 4** — `/library/blocks`, `/library/lisp`. Không còn bị D2 chặn.
 - **Giai đoạn 5** — `/workspace`: hit-test entity trên canvas WebGL2 là code
   mới hoàn toàn, không tái sử dụng được gì.
@@ -176,5 +178,6 @@ Khoảng **21–33 ngày công**, tính riêng ngoài 95–140 ngày front-end.
   có trong 15 recipe headless — chưa đối chiếu với `/api/acad/live`. Nếu không
   có handler thì đó là 2 nút luôn báo lỗi.
 - **Không có lint/format.** Ba ranh giới thư mục kiểm bằng script riêng.
-- **Chat không có test nào.** (Bus sự kiện đã có 8 test từ 10.08.) Cần 5–8 test trước khi đổi ~68 điểm gọi ở giai
-  đoạn 2B.
+- **Chat vẫn thiếu test cho luồng gửi/nhận.** Đã có 7 test cho việc sửa message
+  theo ID và 8 test cho bus sự kiện, nhưng `send()` và luồng stream SSE của
+  agent thì chưa. Viết khi chat được migrate sang `/assistant` (giai đoạn 9).

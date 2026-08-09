@@ -8,6 +8,7 @@ import {
   stagedErrorText,
 } from "../features/staged-ops/prepareApplyReject";
 import { useAcadEvents } from "../features/acad-connection/events";
+import { newMessageId, patchById } from "../features/assistant/messages";
 import { fetchDocs } from "../lib/daemon/docs";
 import DrawingInfoPanel from "./DrawingInfoPanel";
 import DrawingStandardsPanel from "./DrawingStandardsPanel";
@@ -60,7 +61,10 @@ type Preview = {
   before?: Geom[]; after?: Geom[];
 };
 type Msg = {
-  id?: string;
+  /** BẮT BUỘC. Mọi message phải đi qua `appendMessage` hoặc `hydrateMessage` để
+   * có ID: handler điền kết quả theo ID, và `key` của React cũng lấy từ đây.
+   * Để `id?` là mở lại đúng cửa cho lỗi "kết quả rơi vào nhầm message". */
+  id: string;
   role: "user" | "assistant" | "function" | "preview";
   text: string;
   thinking?: string;
@@ -87,12 +91,6 @@ type PendingPageCadAction = {
   count?: number;
   drawTargetTitle?: string;
 };
-
-let messageSequence = 0;
-function newMessageId(): string {
-  messageSequence += 1;
-  return `msg-${Date.now().toString(36)}-${messageSequence.toString(36)}`;
-}
 
 function hydrateMessage(role: Msg["role"], text: string): Msg {
   return {
@@ -170,7 +168,7 @@ export default function Page() {
   messagesRef.current = messages; // always latest for button handlers (avoid stale closure)
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [decideBusy, setDecideBusy] = useState<number | null>(null); // msg idx while accept/decline in flight
+  const [decideBusy, setDecideBusy] = useState<string | null>(null); // ID message đang chờ accept/decline
   const [panel, setPanel] = useState(true);
   const [health, setHealth] = useState<any>(null);
   const [healthOpen, setHealthOpen] = useState(false);
@@ -197,7 +195,7 @@ export default function Page() {
   const [preconstructionView, setPreconstructionView] =
     useState<PreconstructionView>("overview");
   const [cadWebViewerOpen, setCadWebViewerOpen] = useState(false);
-  const [lispProposalBusy, setLispProposalBusy] = useState<number | null>(null);
+  const [lispProposalBusy, setLispProposalBusy] = useState<string | null>(null);
   /** Bản vẽ đang mở trong AutoCAD + đích vẽ đang chọn ("" = file .work mặc định). */
   const [drawDocs, setDrawDocs] = useState<{ title: string; file: string; active: boolean }[]>([]);
   const [drawTarget, setDrawTarget] = useState("");
@@ -216,7 +214,9 @@ export default function Page() {
   const chatRef = useRef<HTMLDivElement>(null);
   const [autoBom, setAutoBom] = useState(false);
   const autoBomRef = useRef(false);
-  const bomIdxRef = useRef<number | null>(null);
+  /** ID của thẻ BOM đang hiển thị, để auto-BOM cập nhật đúng thẻ đó. Trước đây
+   * là chỉ số mảng — chỉ số trỏ sang message khác ngay khi có gì chèn vào. */
+  const bomMessageIdRef = useRef<string | null>(null);
   // ObjectARX raw catalog (one-to-one with OBJECTARX-CAPABILITIES.md) — separate from MEP composites
   type RawCap = {
     id: string; name: string; api: string; catalogStatus: string;
@@ -303,11 +303,11 @@ export default function Page() {
   /** Mở AutoCAD GUI + (mặc định) file scratch mới để thao tác ObjectARX raw. */
   async function openAutoCAD(path?: string, opts?: { newFile?: boolean }) {
     const wantNew = opts?.newFile !== false && !path; // mặc định: tạo/mở scratch DWG
-    setMessages((p) => [...p, {
+    const openAutoCADMsgId = appendMessage({
       role: "function",
       text: path ? `📂 Mở bản vẽ trong AutoCAD` : (wantNew ? `🚀 Mở AutoCAD + file mới` : `🚀 Mở AutoCAD`),
       fn: { id: "open-acad", label: "Mở AutoCAD", group: "Hệ thống", icon: "🚀", desc: "POST /api/acad/open", endpoint: "open", fields: [], result: "text" },
-    }]);
+    });
     try {
       const body = path ? { path } : (wantNew ? { new: true } : {});
       const r = await (await fetch(`${DAEMON}/api/acad/open`, {
@@ -316,9 +316,9 @@ export default function Page() {
         body: JSON.stringify(body),
       })).json();
       if (r.ok === false || r.error) {
-        return patchLast((m) => { m.error = r.error || "Không mở được AutoCAD (kiểm tra cài đặt /Applications/Autodesk)."; });
+        return patchMessage(openAutoCADMsgId, (m) => { m.error = r.error || "Không mở được AutoCAD (kiểm tra cài đặt /Applications/Autodesk)."; });
       }
-      patchLast((m) => {
+      patchMessage(openAutoCADMsgId, (m) => {
         m.fnResult = {
           live: true,
           hint: r.hint || (r.path
@@ -330,17 +330,17 @@ export default function Page() {
       setTimeout(() => { loadDocs(); }, 4000);
       setTimeout(() => { loadDocs(); }, 10000);
     } catch (e) {
-      patchLast((m) => { m.error = "Lỗi mở AutoCAD: " + e; });
+      patchMessage(openAutoCADMsgId, (m) => { m.error = "Lỗi mở AutoCAD: " + e; });
     }
   }
   async function runRaw(cap: RawCap) {
-    setMessages((p) => [...p, {
+    const runRawMsgId = appendMessage({
       role: "function",
       text: `⚙️ ObjectARX raw: ${cap.name}`,
       fn: { id: cap.id, label: cap.name, group: "ObjectARX raw", icon: "⚙️", desc: cap.api, endpoint: "raw", fields: [], result: "text" },
-    }]);
+    });
     if (!cap.enabled) {
-      return patchLast((m) => {
+      return patchMessage(runRawMsgId, (m) => {
         m.error = cap.reason || "Capability disabled (Win-only / not on Mac)";
         m.fnResult = { live: true, hint: `blocked: ${cap.id}`, raw: { ok: false, blocked: true, id: cap.id } };
       });
@@ -357,7 +357,7 @@ export default function Page() {
         body: JSON.stringify({ id: cap.id, target, params: cap.defaultParams || {} }),
       })).json();
       if (r.ok) {
-        patchLast((m) => {
+        patchMessage(runRawMsgId, (m) => {
           m.fnResult = {
             live: true,
             hint: r.interactive
@@ -371,7 +371,7 @@ export default function Page() {
         });
       } else {
         const needOpen = r.diagnostic === "autocad_not_running" || /AutoCAD chưa chạy/i.test(String(r.error || ""));
-        patchLast((m) => {
+        patchMessage(runRawMsgId, (m) => {
           m.error = needOpen
             ? (r.error || "AutoCAD chưa chạy") + " — bấm 🚀 Mở AutoCAD ở panel trái, đợi app + plugin nạp, mở 1 DWG, rồi chạy lại."
             : (r.error || "raw invoke failed");
@@ -384,7 +384,7 @@ export default function Page() {
         });
       }
     } catch (e) {
-      patchLast((m) => { m.error = "Lỗi raw invoke: " + e; });
+      patchMessage(runRawMsgId, (m) => { m.error = "Lỗi raw invoke: " + e; });
     }
   }
   async function loadConvs() {
@@ -396,21 +396,23 @@ export default function Page() {
     setMessages([]);
     setActiveConv(null);
     sessionRef.current = null;
+    bomMessageIdRef.current = null; // thẻ BOM thuộc về hội thoại vừa rời đi
   }
 
-  function patchLast(fn: (m: Msg) => void) {
-    setMessages((prev) => {
-      const n = [...prev]; const last = { ...n[n.length - 1] }; fn(last); n[n.length - 1] = last; return n;
-    });
+  /** Thêm một message và trả về ID của nó.
+   *
+   * Handler nào cũng có dạng "thêm chỗ giữ chỗ → await mạng → điền kết quả".
+   * Giữ lại ID ở bước đầu là cách duy nhất để bước cuối chắc chắn điền vào đúng
+   * message đó: giữa lúc await, người dùng có thể gõ tiếp, một sự kiện AutoCAD
+   * có thể chèn thông báo, hoặc một chức năng khác có thể chạy song song. */
+  function appendMessage(message: Omit<Msg, "id">): string {
+    const id = newMessageId();
+    setMessages((previous) => [...previous, { ...message, id }]);
+    return id;
   }
 
   function patchMessage(id: string, fn: (message: Msg) => void) {
-    setMessages((previous) => previous.map((message) => {
-      if (message.id !== id) return message;
-      const updated = { ...message };
-      fn(updated);
-      return updated;
-    }));
+    setMessages((previous) => patchById(previous, id, fn));
   }
 
   // ─── Chạy 1 chức năng (nút bấm hoặc gợi ý) ───
@@ -449,7 +451,7 @@ export default function Page() {
       const hint =
         baseHint +
         (action === "buildplugin" && r.ok ? " → bấm Restart AutoCAD để nạp plugin mới." : "");
-      setMessages((p) => [...p, {
+      appendMessage({
         role: "function",
         text: `⚙ Setup: ${action}`,
         fn: { id: "setup", label: action, group: "Hệ thống", icon: "⚙", desc: action, endpoint: "setup", fields: [], result: "text" },
@@ -459,24 +461,24 @@ export default function Page() {
           raw: r,
         },
         error: r.ok === false ? (r.error || r.detail) : undefined,
-      }]);
+      });
       if (action === "openacad" || action === "restartacad") {
         setTimeout(() => loadDocs(), 4000);
         setTimeout(() => loadDocs(), 12000);
       }
       // After successful plugin build, offer restart in chat
       if (action === "buildplugin" && r.ok) {
-        setMessages((p) => [...p, {
+        appendMessage({
           role: "assistant",
           text: "✓ Plugin đã cài. **Restart AutoCAD** (nút ⚙ hoặc bên dưới) để nạp bản fix reactor — không restart thì vẫn crash khi đổi tab.",
-        }]);
+        });
       }
     } catch (e) {
-      setMessages((p) => [...p, {
+      appendMessage({
         role: "function", text: `⚙ Setup: ${action}`,
         fn: { id: "setup", label: action, group: "Hệ thống", icon: "⚙", desc: action, endpoint: "setup", fields: [], result: "text" },
         error: String(e),
-      }]);
+      });
     }
     setFixing(""); loadHealth();
   }
@@ -532,10 +534,7 @@ export default function Page() {
       ? String(r.target.file || r.target.title || exactTarget)
       : "";
     setDrawTarget(savedTarget);
-    setMessages((p) => [
-      ...p,
-      { role: "assistant", text: r.agentOutput || "Đã đổi đích vẽ." },
-    ]);
+    appendMessage({ role: "assistant", text: r.agentOutput || "Đã đổi đích vẽ." });
   }
 
   async function preparePageCadAction(
@@ -562,10 +561,7 @@ export default function Page() {
     } catch (error) {
       const message = stagedErrorText(error);
       setPageCadActionError(message);
-      setMessages((messages) => [
-        ...messages,
-        { role: "assistant", text: `Không thể tạo proposal AutoCAD: ${message}` },
-      ]);
+      appendMessage({ role: "assistant", text: `Không thể tạo proposal AutoCAD: ${message}` });
     } finally {
       setPageCadActionBusy("");
     }
@@ -577,11 +573,11 @@ export default function Page() {
       try {
         await persistDrawTarget("");
       } catch (error) {
-        setMessages((p) => [...p, {
+        appendMessage({
           role: "assistant",
           text: "Lỗi đổi đích vẽ: " +
             (error instanceof Error ? error.message : String(error)),
-        }]);
+        });
       }
       return;
     }
@@ -620,10 +616,10 @@ export default function Page() {
         await persistDrawTarget(pending.drawTargetTitle || pending.target);
         await loadDrawDocs();
       } else {
-        setMessages((messages) => [...messages, {
+        appendMessage({
           role: "assistant",
           text: String(body.hint || `Đã chọn layer ${pending.scopeLabel} trong AutoCAD.`),
-        }]);
+        });
       }
       setPendingPageCadAction(null);
     } catch (error) {
@@ -631,10 +627,7 @@ export default function Page() {
       setPendingPageCadAction(null);
       const message = stagedErrorText(error);
       setPageCadActionError(message);
-      setMessages((messages) => [
-        ...messages,
-        { role: "assistant", text: `AutoCAD không thay đổi: ${message}` },
-      ]);
+      appendMessage({ role: "assistant", text: `AutoCAD không thay đổi: ${message}` });
     } finally {
       setPageCadActionBusy("");
     }
@@ -657,11 +650,8 @@ export default function Page() {
    * stage → thẻ preview → chờ Chấp nhận → draw/apply.
    */
   async function runDrawStepInChat(text: string): Promise<boolean> {
-    setMessages((p) => [
-      ...p,
-      { role: "user", text },
-      { role: "assistant", text: "⏳ Đang vẽ lên layer preview…" },
-    ]);
+    appendMessage({ role: "user", text });
+    appendMessage({ role: "assistant", text: "⏳ Đang vẽ lên layer preview…" });
     try {
       const st = await (
         await fetch(`${DAEMON}/api/acad/draw/stage`, {
@@ -672,38 +662,32 @@ export default function Page() {
       ).json();
 
       if (!st.ok || !st.matched) {
-        setMessages((p) => [
-          ...p,
-          { role: "assistant", text: `✗ ${st.error || "Không khớp bước vẽ nào."}` },
-        ]);
+        appendMessage({ role: "assistant", text: `✗ ${st.error || "Không khớp bước vẽ nào."}` });
         return false;
       }
 
-      setMessages((p) => [
-        ...p,
-        {
-          role: "preview",
-          text: `${st.step?.title || text} (preview CAD)`,
-          fn: byId("drawpipes"),
-          pv: {
-            state: "staged",
-            live: true,
-            kind: "draw",
-            opId: st.opId,
-            count: st.count,
-            layer: st.previewLayer,
-            hint:
-              `Preview **${st.count}** đối tượng trên \`${st.previewLayer}\`` +
-              (st.expectCount ? ` (mẫu: ${st.expectCount})` : "") +
-              `. Đích: **${st.targetLabel}**. **Chưa commit** — bấm **Chấp nhận** / ` +
-              `**Không chấp nhận** trước lệnh «Vẽ …» tiếp theo.`,
-          },
+      appendMessage({
+        role: "preview",
+        text: `${st.step?.title || text} (preview CAD)`,
+        fn: byId("drawpipes"),
+        pv: {
+          state: "staged",
+          live: true,
+          kind: "draw",
+          opId: st.opId,
+          count: st.count,
+          layer: st.previewLayer,
+          hint:
+            `Preview **${st.count}** đối tượng trên \`${st.previewLayer}\`` +
+            (st.expectCount ? ` (mẫu: ${st.expectCount})` : "") +
+            `. Đích: **${st.targetLabel}**. **Chưa commit** — bấm **Chấp nhận** / ` +
+            `**Không chấp nhận** trước lệnh «Vẽ …» tiếp theo.`,
         },
-        { role: "assistant", text: st.agentOutput || `⏸ Preview «${text}» — chờ Chấp nhận.` },
-      ]);
+      });
+      appendMessage({ role: "assistant", text: st.agentOutput || `⏸ Preview «${text}» — chờ Chấp nhận.` });
       return true;
     } catch (e) {
-      setMessages((p) => [...p, { role: "assistant", text: "Lỗi vẽ: " + e }]);
+      appendMessage({ role: "assistant", text: "Lỗi vẽ: " + e });
       return false;
     }
   }
@@ -729,20 +713,20 @@ export default function Page() {
   }
 
   async function querySelection() {
-    setMessages((p) => [...p, { role: "function", text: "🎯 Đối tượng đang chọn trong AutoCAD", fn: byId("livedraw") }]);
+    const querySelectionMsgId = appendMessage({ role: "function", text: "🎯 Đối tượng đang chọn trong AutoCAD", fn: byId("livedraw") });
     try {
       const r = await (await fetch(`${DAEMON}/api/acad/livequery`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ what: "selection" }),
       })).json();
       if (r.state !== "done" || !r.result)
-        return patchLast((m) => { m.error = "Không đọc được — plugin chưa phản hồi (khởi động lại AutoCAD) hoặc chưa chọn đối tượng."; });
+        return patchMessage(querySelectionMsgId, (m) => { m.error = "Không đọc được — plugin chưa phản hồi (khởi động lại AutoCAD) hoặc chưa chọn đối tượng."; });
       const msg = String(r.result.message || "");
       const n = (msg.match(/selection=(\d+)/) || [])[1] || "0";
       const rows = msg.split("\n").slice(1).filter(Boolean).map((l) => l.split("|"));
-      patchLast((m) => { m.fnResult = { live: true, count: Number(n), hint: `Đang chọn ${n} đối tượng.` };
+      patchMessage(querySelectionMsgId, (m) => { m.fnResult = { live: true, count: Number(n), hint: `Đang chọn ${n} đối tượng.` };
         if (rows.length) m.fnResult.selRows = [["Loại", "Layer", "Handle"], ...rows]; });
-    } catch (e) { patchLast((m) => { m.error = "Lỗi: " + e; }); }
+    } catch (e) { patchMessage(querySelectionMsgId, (m) => { m.error = "Lỗi: " + e; }); }
   }
 
   function bomToResult(r: any) {
@@ -753,18 +737,18 @@ export default function Page() {
       selRows: pipeRows.concat(blkRows.length ? [["— Block —", "SL", ""]].concat(blkRows.map((x: string[]) => [x[0], x[1], ""])) : []) };
   }
   async function insertBomTable() {
-    setMessages((p) => [...p, { role: "function", text: "📋 Chèn bảng BOQ vào bản vẽ", fn: byId("livedraw") }]);
+    const insertBomTableMsgId = appendMessage({ role: "function", text: "📋 Chèn bảng BOQ vào bản vẽ", fn: byId("livedraw") });
     const { alive, docs } = await loadDocs();
-    if (!alive) return patchLast((m) => { m.error = "Plugin không phản hồi — khởi động lại AutoCAD."; });
+    if (!alive) return patchMessage(insertBomTableMsgId, (m) => { m.error = "Plugin không phản hồi — khởi động lại AutoCAD."; });
     const document = docs.find((entry: any) => entry.active) || docs[0] || {};
     const target = document.file || document.title || "";
     try {
       const r = await (await fetch(`${DAEMON}/api/acad/bomtable`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target, x: 0, y: 0 }),
       })).json();
-      if (!r.ok) return patchLast((m) => { m.error = r.error || "Không chèn được bảng."; });
-      patchLast((m) => { m.fnResult = { live: true, hint: r.hint }; });
-    } catch (e) { patchLast((m) => { m.error = "Lỗi: " + e; }); }
+      if (!r.ok) return patchMessage(insertBomTableMsgId, (m) => { m.error = r.error || "Không chèn được bảng."; });
+      patchMessage(insertBomTableMsgId, (m) => { m.fnResult = { live: true, hint: r.hint }; });
+    } catch (e) { patchMessage(insertBomTableMsgId, (m) => { m.error = "Lỗi: " + e; }); }
   }
   async function prepareBomLayerSelection(layer: string) {
     const { alive, docs } = await loadDocs();
@@ -793,22 +777,38 @@ export default function Page() {
     );
   }
   async function liveBom() {
-    let idx = -1;
-    setMessages((p) => { idx = p.length; return [...p, { role: "function", text: "📊 BOM live (bản vẽ đang mở)", fn: byId("livedraw") }]; });
-    bomIdxRef.current = idx;
+    const liveBomMsgId = appendMessage({
+      role: "function",
+      text: "📊 BOM live (bản vẽ đang mở)",
+      fn: byId("livedraw"),
+    });
+    bomMessageIdRef.current = liveBomMsgId;
     try {
       const r = await (await fetch(`${DAEMON}/api/acad/livebom`)).json();
-      if (!r.alive || r.error) return patchLast((m) => { m.error = r.error || "Plugin không phản hồi."; });
-      patchLast((m) => { m.fnResult = bomToResult(r); });
-    } catch (e) { patchLast((m) => { m.error = "Lỗi: " + e; }); }
+      if (!r.alive || r.error) {
+        return patchMessage(liveBomMsgId, (m) => { m.error = r.error || "Plugin không phản hồi."; });
+      }
+      patchMessage(liveBomMsgId, (m) => { m.fnResult = bomToResult(r); });
+    } catch (e) { patchMessage(liveBomMsgId, (m) => { m.error = "Lỗi: " + e; }); }
   }
   async function refreshBom() {   // gọi bởi event drawingModified khi auto-BOM bật
     try {
       const r = await (await fetch(`${DAEMON}/api/acad/livebom`)).json();
       if (!r.alive || r.error) return;
-      const i = bomIdxRef.current;
-      if (i == null) return liveBom();
-      setMessages((p) => p.map((m, k) => k === i ? { ...m, fnResult: bomToResult(r), error: undefined } : m));
+      // Bảng BOM tự cập nhật tại chỗ thay vì đẩy thêm một thẻ mới mỗi lần vẽ.
+      // Trước đây chỗ này nhớ CHỈ SỐ của thẻ; xoá một hội thoại hay chèn một
+      // thông báo là chỉ số trỏ sang message khác và BOM ghi đè lên nó.
+      //
+      // Thẻ có thể không còn trong danh sách hiện tại — người dùng đổi hội
+      // thoại, hoặc nạp lại lịch sử. `patchById` sẽ lặng lẽ không làm gì, nên
+      // phải kiểm sự hiện diện và dựng thẻ mới; nếu không, auto-BOM tắt câm ở
+      // hội thoại mới mà không báo gì.
+      const id = bomMessageIdRef.current;
+      if (!id || !messagesRef.current.some((m) => m.id === id)) return liveBom();
+      setMessages((p) => patchById(p, id, (m) => {
+        m.fnResult = bomToResult(r);
+        m.error = undefined;
+      }));
     } catch { /* */ }
   }
   function toggleAutoBom() {
@@ -817,10 +817,10 @@ export default function Page() {
   }
 
   async function runLive(fn: Fn, params: any, target?: string) {
-    setMessages((p) => [...p, { role: "function", text: `${fn.icon} ${fn.label}`, fn }]);
+    const runLiveMsgId = appendMessage({ role: "function", text: `${fn.icon} ${fn.label}`, fn });
     const { alive, docs } = await loadDocs();
-    if (!alive) return patchLast((m) => { m.error = "Plugin AcadBridge không phản hồi — khởi động lại AutoCAD (plugin tự nạp) rồi thử lại."; });
-    if (!docs.length) return patchLast((m) => { m.error = "AutoCAD chưa mở bản vẽ nào — mở 1 bản vẽ rồi thử lại."; });
+    if (!alive) return patchMessage(runLiveMsgId, (m) => { m.error = "Plugin AcadBridge không phản hồi — khởi động lại AutoCAD (plugin tự nạp) rồi thử lại."; });
+    if (!docs.length) return patchMessage(runLiveMsgId, (m) => { m.error = "AutoCAD chưa mở bản vẽ nào — mở 1 bản vẽ rồi thử lại."; });
     const document = docs.find((entry: any) => entry.active) || docs[0];
     const tgt = target || document.file || document.title;
     try {
@@ -830,9 +830,9 @@ export default function Page() {
       const r = await (await fetch(url, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       })).json();
-      if (r.error) return patchLast((m) => { m.error = r.error; });
-      patchLast((m) => { m.fnResult = { live: true, count: fn.native ? r.count : (params.pipes || []).length, hint: r.hint }; });
-    } catch (e) { patchLast((m) => { m.error = "Lỗi: " + e; }); }
+      if (r.error) return patchMessage(runLiveMsgId, (m) => { m.error = r.error; });
+      patchMessage(runLiveMsgId, (m) => { m.fnResult = { live: true, count: fn.native ? r.count : (params.pipes || []).length, hint: r.hint }; });
+    } catch (e) { patchMessage(runLiveMsgId, (m) => { m.error = "Lỗi: " + e; }); }
   }
 
   async function runFn(fn: Fn, vals: Record<string, string>) {
@@ -842,17 +842,17 @@ export default function Page() {
     delete body.params.__target;
     if (fn.live) return runLive(fn, body.params, target);
     if (fn.preview) return runPreview(fn, file, body.params);
-    setMessages((p) => [...p, { role: "function", text: `${fn.icon} ${fn.label}`, fn }]);
+    const runFnMsgId = appendMessage({ role: "function", text: `${fn.icon} ${fn.label}`, fn });
     try {
       const r = await (await fetch(`${DAEMON}/api/acad/mep/${fn.endpoint}`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       })).json();
-      patchLast((m) => { m.fnResult = r; if (r.error) m.error = r.error; });
-    } catch (e) { patchLast((m) => { m.error = "Lỗi gọi chức năng: " + e; }); }
+      patchMessage(runFnMsgId, (m) => { m.fnResult = r; if (r.error) m.error = r.error; });
+    } catch (e) { patchMessage(runFnMsgId, (m) => { m.error = "Lỗi gọi chức năng: " + e; }); }
   }
 
   async function runPreview(fn: Fn, file: string, params: any) {
-    setMessages((p) => [...p, { role: "preview", text: fn.label, fn, pv: { state: "loading" } }]);
+    const runPreviewMsgId = appendMessage({ role: "preview", text: fn.label, fn, pv: { state: "loading" } });
     try {
       // Prefer live on-AutoCAD preview when plugin is up and recipe supports it.
       const { alive, docs } = await loadDocs();
@@ -870,7 +870,7 @@ export default function Page() {
           body: JSON.stringify({ recipe: fn.endpoint, params, target }),
         })).json();
         if (lv.ok && lv.opId) {
-          patchLast((m) => {
+          patchMessage(runPreviewMsgId, (m) => {
             m.pv = {
               state: "staged",
               live: true,
@@ -901,17 +901,22 @@ export default function Page() {
         body: JSON.stringify({ sessionId: so.sessionId, recipe: fn.endpoint, params }),
       })).json();
       if (pv.error) throw new Error(pv.error);
-      patchLast((m) => { m.pv = { state: "staged", sessionId: so.sessionId, opId: pv.opId, diff: pv.diff, after: pv.geometry, before: pv.before, recipe: fn.endpoint, params, live: false }; });
-    } catch (e) { patchLast((m) => { m.pv = { state: "error", error: String(e) }; }); }
+      patchMessage(runPreviewMsgId, (m) => { m.pv = { state: "staged", sessionId: so.sessionId, opId: pv.opId, diff: pv.diff, after: pv.geometry, before: pv.before, recipe: fn.endpoint, params, live: false }; });
+    } catch (e) { patchMessage(runPreviewMsgId, (m) => { m.pv = { state: "error", error: String(e) }; }); }
   }
 
   /** Accept/decline must read latest message state (buttons fire after async stage). */
-  async function decide(pvMsgIdx: number, accept: boolean) {
+  /** Chấp nhận hoặc bỏ một thẻ xem trước.
+   *
+   * Nhận ID chứ không nhận chỉ số: giữa lúc gọi mạng, một thông báo AutoCAD
+   * hoặc một câu trả lời của agent có thể chen vào và làm mọi chỉ số lệch đi —
+   * lúc đó kết quả sẽ ghi trạng thái "đã áp dụng" lên một thẻ khác. */
+  async function decide(pvMsgId: string, accept: boolean) {
     if (decideBusy != null) return;
-    const m = messagesRef.current[pvMsgIdx];
+    const m = messagesRef.current.find((message) => message.id === pvMsgId);
     const pv = m?.pv;
     if (!pv || pv.state !== "staged" || !pv.opId) return;
-    setDecideBusy(pvMsgIdx);
+    setDecideBusy(pvMsgId);
     try {
       if (pv.kind === "draw") {
         // Kịch bản vẽ T1 → draw/apply|reject (cùng opId từ draw/stage)
@@ -921,7 +926,7 @@ export default function Page() {
           body: JSON.stringify({ opId: pv.opId }),
         })).json();
         if (r.error || r.ok === false) throw new Error(r.error || "draw decide failed");
-        if (r.agentOutput) setMessages((p) => [...p, { role: "assistant", text: r.agentOutput }]);
+        if (r.agentOutput) appendMessage({ role: "assistant", text: r.agentOutput });
       } else if (pv.live) {
         // Live CAD preview (/livepreview) → livepreview apply|reject (same opId from stage)
         const ep = accept ? "livepreview/apply" : "livepreview/reject";
@@ -938,29 +943,26 @@ export default function Page() {
         })).json();
         if (r.error || r.ok === false) throw new Error(r.error || "sandbox decide failed");
       }
-      setMessages((prev) =>
-        prev.map((x, i) =>
-          i === pvMsgIdx && x.pv
-            ? { ...x, pv: { ...x.pv, state: accept ? "applied" : "rejected" } }
-            : x,
-        ),
-      );
+      setMessages((prev) => patchById(prev, pvMsgId, (x) => {
+        if (x.pv) x.pv = { ...x.pv, state: accept ? "applied" : "rejected" };
+      }));
     } catch (e) {
-      setMessages((prev) =>
-        prev.map((x, i) =>
-          i === pvMsgIdx && x.pv ? { ...x, pv: { ...x.pv, state: "error", error: String(e) } } : x,
-        ),
-      );
+      setMessages((prev) => patchById(prev, pvMsgId, (x) => {
+        if (x.pv) x.pv = { ...x.pv, state: "error", error: String(e) };
+      }));
     } finally {
       setDecideBusy(null);
     }
   }
 
-  async function decideLispProposal(msgIdx: number, accept: boolean) {
-    const proposal = messagesRef.current[msgIdx]?.lispProposal;
+  /** Duyệt hoặc từ chối manifest LISP do agent đề xuất. Nhận ID vì cùng lý do
+   * với `decide` ở trên. */
+  async function decideLispProposal(msgId: string, accept: boolean) {
+    const proposal = messagesRef.current
+      .find((message) => message.id === msgId)?.lispProposal;
     if (!proposal || proposal.state === "applying" || proposal.state === "approved") return;
     if (!accept) {
-      setLispProposalBusy(msgIdx);
+      setLispProposalBusy(msgId);
       try {
         const proposalHash = await proposalFingerprint(proposal);
         const response = await fetch(`${DAEMON}/api/lisp-proposal-decision`, {
@@ -977,26 +979,29 @@ export default function Page() {
         if (!response.ok || result.ok === false) {
           throw new Error(result.error || "Không lưu được quyết định từ chối.");
         }
-        setMessages((prev) => prev.map((message, index) =>
-          index === msgIdx && message.lispProposal
-            ? { ...message, lispProposal: { ...message.lispProposal, state: "rejected", error: undefined } }
-            : message));
+        setMessages((prev) => patchById(prev, msgId, (message) => {
+            if (message.lispProposal) {
+              message.lispProposal = { ...message.lispProposal, state: "rejected", error: undefined };
+            }
+          }));
       } catch (error) {
-        setMessages((prev) => prev.map((message, index) =>
-          index === msgIdx && message.lispProposal
-            ? { ...message, lispProposal: { ...message.lispProposal, state: "error", error: String(error) } }
-            : message));
+        setMessages((prev) => patchById(prev, msgId, (message) => {
+            if (message.lispProposal) {
+              message.lispProposal = { ...message.lispProposal, state: "error", error: String(error) };
+            }
+          }));
       } finally {
         setLispProposalBusy(null);
       }
       return;
     }
 
-    setLispProposalBusy(msgIdx);
-    setMessages((prev) => prev.map((message, index) =>
-      index === msgIdx && message.lispProposal
-        ? { ...message, lispProposal: { ...message.lispProposal, state: "applying", error: undefined } }
-        : message));
+    setLispProposalBusy(msgId);
+    setMessages((prev) => patchById(prev, msgId, (message) => {
+        if (message.lispProposal) {
+          message.lispProposal = { ...message.lispProposal, state: "applying", error: undefined };
+        }
+      }));
     try {
       const analysisCoverage = proposal.analysisCoverage || "unknown";
       if (analysisCoverage === "unknown") {
@@ -1058,16 +1063,18 @@ export default function Page() {
           ? "File hoặc cấu hình đã đổi. Hãy yêu cầu agent phân tích lại."
           : `Không lưu được cấu hình (${response.status}).`));
       }
-      setMessages((prev) => prev.map((message, index) =>
-        index === msgIdx && message.lispProposal
-          ? { ...message, lispProposal: { ...message.lispProposal, state: "approved", error: undefined } }
-          : message));
+      setMessages((prev) => patchById(prev, msgId, (message) => {
+          if (message.lispProposal) {
+            message.lispProposal = { ...message.lispProposal, state: "approved", error: undefined };
+          }
+        }));
       setLispLibraryRefreshToken((token) => token + 1);
     } catch (error) {
-      setMessages((prev) => prev.map((message, index) =>
-        index === msgIdx && message.lispProposal
-          ? { ...message, lispProposal: { ...message.lispProposal, state: "error", error: String(error) } }
-          : message));
+      setMessages((prev) => patchById(prev, msgId, (message) => {
+          if (message.lispProposal) {
+            message.lispProposal = { ...message.lispProposal, state: "error", error: String(error) };
+          }
+        }));
     } finally {
       setLispProposalBusy(null);
     }
@@ -1105,8 +1112,10 @@ export default function Page() {
         }
       } catch { /* fall through to agent */ }
     }
-    setMessages((p) => [
-      ...p,
+    // Hai message này cần ID được cấp TRƯỚC: stream của agent điền dần vào
+    // message assistant trong lúc chạy, nên nơi gọi phải giữ ID từ đầu.
+    setMessages((previous) => [
+      ...previous,
       { id: userMessageId, role: "user", text: opts?.displayText || text },
       { id: assistantMessageId, role: "assistant", text: "" },
     ]);
@@ -1306,9 +1315,9 @@ export default function Page() {
                 <b>«Vẽ cầu thang bộ»</b>, <b>«Vẽ ống thoát xí DN140»</b>.</p>
                 <p>Mỗi bước hiện <b>preview</b> — bấm <b>Chấp nhận</b> mới ghi vào layer đích.</p></div>
             )}
-            {messages.map((m, i) => <MessageView key={m.id || `${activeConv || "new"}-${i}-${m.role}`} m={m} idx={i} onRun={openFn}
-              onDecide={decide} decideBusy={decideBusy === i}
-              onLispDecision={decideLispProposal} lispBusy={lispProposalBusy === i}
+            {messages.map((m, i) => <MessageView key={m.id} m={m} idx={i} onRun={openFn}
+              onDecide={decide} decideBusy={decideBusy === m.id}
+              onLispDecision={decideLispProposal} lispBusy={lispProposalBusy === m.id}
               onSend={(text) => send(text)} setMessages={setMessages}
               onHighlight={prepareBomLayerSelection}
               onOpenAcad={() => openAutoCAD()} />)}
@@ -1765,8 +1774,8 @@ function MessageView({
   m, idx, onRun, onDecide, decideBusy, onLispDecision, lispBusy,
   onSend, setMessages, onHighlight, onOpenAcad,
 }: {
-  m: Msg; idx: number; onRun: (f: Fn) => void; onDecide: (i: number, ok: boolean) => void; decideBusy?: boolean;
-  onLispDecision: (i: number, ok: boolean) => void; lispBusy?: boolean;
+  m: Msg; idx: number; onRun: (f: Fn) => void; onDecide: (id: string, ok: boolean) => void; decideBusy?: boolean;
+  onLispDecision: (id: string, ok: boolean) => void; lispBusy?: boolean;
   onSend: (t: string) => void; setMessages: (fn: (p: Msg[]) => Msg[]) => void;
   onHighlight: (layer: string) => void;
   onOpenAcad?: () => void;
@@ -1792,8 +1801,8 @@ function MessageView({
           <LispProposalCard
             proposal={m.lispProposal}
             busy={!!lispBusy}
-            onApprove={() => onLispDecision(idx, true)}
-            onReject={() => onLispDecision(idx, false)}
+            onApprove={() => onLispDecision(m.id, true)}
+            onReject={() => onLispDecision(m.id, false)}
           />
         )}
         {m.error && <div className="err">{m.error}</div>}
@@ -2157,7 +2166,7 @@ function DiffSvg({ ents, box, hl }: { ents: Geom[]; box: any; hl?: { added: Set<
 function PreviewView({
   m, idx, onDecide, decideBusy,
 }: {
-  m: Msg; idx: number; onDecide: (i: number, ok: boolean) => void; decideBusy?: boolean;
+  m: Msg; idx: number; onDecide: (id: string, ok: boolean) => void; decideBusy?: boolean;
 }) {
   const pv = m.pv!;
   const box = pv.before && pv.after ? mergeBox([...pv.before, ...pv.after], pv.diff?.removed) : null;
@@ -2202,7 +2211,7 @@ function PreviewView({
               data-action="decline"
               data-testid="preview-decline"
               disabled={!!decideBusy}
-              onClick={() => onDecide(idx, false)}
+              onClick={() => onDecide(m.id, false)}
               style={{ minWidth: 140, padding: "10px 16px", cursor: decideBusy ? "wait" : "pointer" }}
             >
               {decideBusy ? "Đang huỷ…" : "Không chấp nhận"}
@@ -2213,7 +2222,7 @@ function PreviewView({
               data-action="accept"
               data-testid="preview-accept"
               disabled={!!decideBusy}
-              onClick={() => onDecide(idx, true)}
+              onClick={() => onDecide(m.id, true)}
               style={{ minWidth: 180, padding: "10px 16px", cursor: decideBusy ? "wait" : "pointer" }}
             >
               {decideBusy ? "Đang áp dụng…" : "✓ Chấp nhận"}

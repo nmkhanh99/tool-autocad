@@ -153,6 +153,34 @@ assert.equal(
   "prepare/apply/reject phải đi qua features/staged-ops, không gọi thẳng endpoint",
 );
 
+/* Chat sửa message theo ID, không theo vị trí. Mọi handler đều có dạng "thêm
+ * chỗ giữ chỗ → await mạng → điền kết quả"; điền theo vị trí thì kết quả rơi
+ * vào nhầm message ngay khi có gì chen vào giữa lúc await. */
+assert.equal(countCode("patchLast\\("), 0, "không còn sửa message theo vị trí cuối");
+assert.equal(
+  countCode("messagesRef\\.current\\[") + countCode("bomIdxRef"),
+  0,
+  "không đọc message theo chỉ số mảng",
+);
+assert.doesNotMatch(
+  codeOnly,
+  /key=\{m\.id \|\|/,
+  "key của message không được có fallback theo chỉ số — id là bắt buộc",
+);
+assert.match(
+  page,
+  /^  id: string;$/m,
+  "Msg.id phải bắt buộc; `id?` mở lại đúng cửa cho lỗi kết quả rơi nhầm message",
+);
+/* `patchById` cố ý không làm gì khi ID đã biến mất. Nơi nào GIỮ một ID qua
+ * nhiều thao tác phải tự kiểm sự hiện diện, nếu không tính năng tắt câm khi
+ * người dùng đổi hội thoại. */
+assert.match(
+  page,
+  /!messagesRef\.current\.some\(\(m\) => m\.id === id\)\) return liveBom\(\)/,
+  "auto-BOM phải dựng thẻ mới khi thẻ cũ không còn trong hội thoại hiện tại",
+);
+
 /* Một EventSource duy nhất, và ở đúng chỗ. Chỉ đếm "= 1" thì không đủ: hôm
  * trước nó đã bằng 1 khi còn nằm trong page.tsx, nên tiêu chí đó pass mà không
  * đo được gì. Nhiều instance nghĩa là mỗi panel tự mở một kết nối SSE riêng. */

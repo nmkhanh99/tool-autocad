@@ -1,5 +1,58 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 2B: chat sửa message theo ID, không theo vị trí
+
+Mọi handler của chat đều có dạng "thêm chỗ giữ chỗ → await mạng 0,2–120 giây →
+điền kết quả". Bước cuối trước đây dùng `patchLast` — sửa phần tử **cuối mảng**.
+Giả định ngầm là không có message nào chen vào giữa lúc `await`; giả định đó sai
+bất cứ khi nào người dùng gõ tiếp, một sự kiện AutoCAD chèn thông báo, hay hai
+chức năng chạy song song. Hậu quả không phải crash mà là **kết quả rơi vào nhầm
+message** — người dùng thấy kết quả của thao tác này nằm dưới nhãn của thao tác
+khác.
+
+### Added
+
+- `features/assistant/messages.ts` — `newMessageId()` và `patchById()`.
+  `patchById` giữ nguyên identity của message không đụng tới (React dựa vào đó
+  để bỏ qua re-render) và trả lại danh sách cũ nguyên vẹn khi ID không còn.
+- `scripts/test-chat-messages.test.ts` — 7 test, gồm một test ghi lại **hành vi
+  sai của bản cũ** để sau này còn biết bất biến này tồn tại vì lý do gì.
+- `appendMessage()` trong `page.tsx`: thêm message và **trả về ID**, để handler
+  giữ ID từ bước đầu.
+
+### Changed
+
+- Xoá toàn bộ **28** lời gọi `patchLast`; 17 hàm nay patch theo ID.
+- `decide` và `decideLispProposal` nhận **ID** thay vì chỉ số mảng; chúng từng
+  đọc `messagesRef.current[idx]` sau `await`. `decideBusy` và
+  `lispProposalBusy` đổi từ `number | null` sang `string | null`.
+- `refreshBom` từng nhớ **chỉ số** thẻ BOM trong `bomIdxRef` rồi cập nhật theo
+  chỉ số đó — xoá một hội thoại hay chèn một thông báo là BOM ghi đè lên message
+  khác. Nay là `bomMessageIdRef`.
+- `key` của message bỏ fallback `m.id || <chỉ số>`.
+
+### Fixed
+
+- **`Msg.id` đổi từ tuỳ chọn sang bắt buộc.** Đây là thay đổi có sức nặng nhất:
+  ngay khi siết kiểu, TypeScript chỉ ra **13 chỗ** tạo message không có ID mà
+  grep không tìm ra hết. Để `id?` là mở lại đúng cái cửa vừa đóng.
+- **Auto-BOM tắt câm khi đổi hội thoại** (Codex review phát hiện). `patchById`
+  cố ý không làm gì khi ID đã biến mất, nên khi người dùng sang hội thoại khác,
+  `refreshBom` vẫn cầm ID của thẻ cũ và mọi sự kiện vẽ tiếp theo không hiện gì —
+  không lỗi, không thông báo. Nay `refreshBom` kiểm sự hiện diện của thẻ trước
+  khi patch và dựng thẻ mới nếu không còn, `newChat` cũng xoá ref. Bản cũ dùng
+  chỉ số cũng hỏng ở tình huống này, chỉ hỏng theo kiểu khác.
+
+### Technical
+
+- Bất biến mới: `patchLast(` = 0 · `messagesRef.current[` = 0 · `bomIdxRef` = 0 ·
+  `key={m.id ||` không tồn tại · `Msg.id` khai là bắt buộc.
+- Kiểm end-to-end bằng Chrome: chạy nối tiếp hai chức năng khi daemon tắt, **mỗi
+  lỗi rơi vào đúng message của nó**. Với `patchLast` cũ thì message đầu sẽ không
+  có lỗi còn message sau bị ghi hai lần.
+
+---
+
 ## 2026-08-10 — Giai đoạn 2A (phần 3): một EventSource, một nơi đọc danh sách bản vẽ
 
 ### Added
