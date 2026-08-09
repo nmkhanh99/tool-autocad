@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { asRecord, type JsonRecord } from "./json";
+import { asRecord, daemonRecord, type JsonRecord } from "../lib/daemon/client";
 
 export type LispReviewStatus = "unreviewed" | "approved" | "stale";
 
@@ -177,14 +177,6 @@ function sourceBadgeLabel(resource: LispResourceSummary): string {
   if (resource.extension === ".fas" || resource.extension === ".vlx") return "Đã biên dịch";
   if (resource.readable === false) return "Không đọc được source";
   return "Đọc source";
-}
-
-async function responseJson(response: Response): Promise<JsonRecord> {
-  const body = await response.json().catch(() => ({})) as JsonRecord;
-  if (!response.ok || body.ok === false) {
-    throw new Error(textValue(body.error) || `HTTP ${response.status}`);
-  }
-  return body;
 }
 
 function resourceMatches(resource: LispResourceSummary, query: string): boolean {
@@ -503,7 +495,7 @@ export default function LispLibraryPanel({
         `${baseUrl}/api/acad/lisp${force ? "?refresh=1" : ""}`,
         { cache: "no-store", signal },
       );
-      const body = await responseJson(response);
+      const body = await daemonRecord(response);
       const next = Array.isArray(body.resources) ? body.resources as LispResourceSummary[] : [];
       setResources(next);
       setRoots(Array.isArray(body.roots) ? body.roots as LispRoot[] : []);
@@ -522,7 +514,7 @@ export default function LispLibraryPanel({
   const loadDocuments = useCallback(async (signal?: AbortSignal) => {
     try {
       const response = await fetch(`${baseUrl}/api/acad/docs`, { cache: "no-store", signal });
-      const body = await responseJson(response);
+      const body = await daemonRecord(response);
       const docs = Array.isArray(body.docs) ? body.docs as AcadDocument[] : [];
       setDocuments(docs);
       setDocsAlive(body.alive === true);
@@ -572,7 +564,7 @@ export default function LispLibraryPanel({
           cache: "no-store",
           signal: controller.signal,
         });
-        const body = await responseJson(response);
+        const body = await daemonRecord(response);
         const resource = asRecord(body.resource) as LispResourceDetail | null;
         if (!resource) throw new Error("Response không có resource");
         setDetail(resource);
@@ -608,14 +600,14 @@ export default function LispLibraryPanel({
     setRootBusy(true);
     setNotice(null);
     try {
-      const picked = await responseJson(await fetch(`${baseUrl}/api/acad/pick`, {
+      const picked = await daemonRecord(await fetch(`${baseUrl}/api/acad/pick`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind: "folder", purpose: "lisp-library" }),
       }));
       const path = textValue(picked.path);
       if (!path) return;
-      await responseJson(await fetch(`${baseUrl}/api/acad/lisp/roots`, {
+      await daemonRecord(await fetch(`${baseUrl}/api/acad/lisp/roots`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path }),
@@ -635,7 +627,7 @@ export default function LispLibraryPanel({
     setRootBusy(true);
     setNotice(null);
     try {
-      const body = await responseJson(await fetch(
+      const body = await daemonRecord(await fetch(
         `${baseUrl}/api/acad/lisp/roots/import-autocad`,
         {
           method: "POST",
@@ -701,7 +693,7 @@ export default function LispLibraryPanel({
     setLoadBusy(true);
     setNotice(null);
     try {
-      const body = await responseJson(await fetch(
+      const body = await daemonRecord(await fetch(
         `${baseUrl}/api/acad/lisp/${encodeURIComponent(detail.id)}/load`,
         {
           method: "POST",

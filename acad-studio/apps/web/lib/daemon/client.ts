@@ -38,10 +38,19 @@ export function normalizeCode(code: string): string {
   return CODE_ALIASES[code] || code;
 }
 
+/** Chỉ nhận giá trị nguyên thuỷ làm thông điệp. Nếu daemon trả `error` là một
+ * object, `String()` sẽ cho ra "[object Object]" — vô nghĩa với người đọc, và
+ * tệ hơn cả việc hiện mã HTTP. */
+function messageOf(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+
 function failureOf(response: Response, record: JsonRecord): DaemonError {
   return new DaemonError(
-    String(record.error || record.message || `HTTP ${response.status}`),
-    normalizeCode(String(record.code || "")),
+    messageOf(record.error) || messageOf(record.message) || `HTTP ${response.status}`,
+    normalizeCode(messageOf(record.code)),
     response.status,
   );
 }

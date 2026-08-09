@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { asRecord, type JsonRecord } from "./json";
+import { asRecord, daemonJson, type JsonRecord } from "../lib/daemon/client";
 import {
   applyStagedOp,
   prepareStagedOp,
@@ -410,15 +410,6 @@ function severityLabel(severity: string): string {
   return "Cảnh báo";
 }
 
-async function responseJson<T>(response: Response): Promise<T> {
-  const body = await response.json().catch(() => ({}));
-  const record = asRecord(body);
-  if (!response.ok || record?.ok === false) {
-    throw new Error(String(record?.error || record?.message || `HTTP ${response.status}`));
-  }
-  return body as T;
-}
-
 function Section({
   title,
   description,
@@ -733,7 +724,7 @@ export default function DrawingStandardsPanel({
 
   async function loadDocuments(signal?: AbortSignal) {
     try {
-      const body = await responseJson<{
+      const body = await daemonJson<{
         alive?: boolean;
         docs?: AcadDocument[];
       }>(await fetch(`${baseUrl}/api/acad/docs`, { cache: "no-store", signal }));
@@ -762,7 +753,7 @@ export default function DrawingStandardsPanel({
 
   async function loadProfiles(preferredId?: string, signal?: AbortSignal) {
     try {
-      const body = await responseJson<{
+      const body = await daemonJson<{
         activeProfileId?: string;
         profiles?: unknown[];
       }>(await fetch(`${baseUrl}/api/acad/standards/profiles`, {
@@ -1001,7 +992,7 @@ export default function DrawingStandardsPanel({
     setProfileBusy(true);
     setNotice(null);
     try {
-      await responseJson(await fetch(
+      await daemonJson(await fetch(
         `${baseUrl}/api/acad/standards/profiles/${encodeURIComponent(draft.id)}`,
         {
           method: "PUT",
@@ -1026,7 +1017,7 @@ export default function DrawingStandardsPanel({
     setProfileBusy(true);
     setNotice(null);
     try {
-      const body = await responseJson<JsonRecord>(await fetch(
+      const body = await daemonJson<JsonRecord>(await fetch(
         `${baseUrl}/api/acad/standards/profiles`,
         {
           method: "POST",
@@ -1057,7 +1048,7 @@ export default function DrawingStandardsPanel({
     setNotice(null);
     setActionResult(null);
     try {
-      const body = await responseJson<JsonRecord>(await fetch(
+      const body = await daemonJson<JsonRecord>(await fetch(
         `${baseUrl}/api/acad/standards/scan`,
         {
           method: "POST",
@@ -1127,7 +1118,7 @@ export default function DrawingStandardsPanel({
     setApplyBusy(true);
     setNotice(null);
     try {
-      const body = await responseJson<JsonRecord>(await fetch(
+      const body = await daemonJson<JsonRecord>(await fetch(
         `${baseUrl}/api/acad/standards/apply`,
         {
           method: "POST",
@@ -1269,7 +1260,7 @@ export default function DrawingStandardsPanel({
     setActionBusy(action);
     setNotice(null);
     try {
-      const body = await responseJson<JsonRecord>(await fetch(
+      const body = await daemonJson<JsonRecord>(await fetch(
         `${baseUrl}/api/acad/standards/action`,
         {
           method: "POST",
@@ -1351,7 +1342,7 @@ export default function DrawingStandardsPanel({
     if (!silent) setNotice(null);
     try {
       const query = `?target=${encodeURIComponent(target)}`;
-      const body = await responseJson<JsonRecord>(await fetch(
+      const body = await daemonJson<JsonRecord>(await fetch(
         `${baseUrl}/api/acad/selection/current${query}`,
         { cache: "no-store" },
       ));
@@ -1399,7 +1390,7 @@ export default function DrawingStandardsPanel({
     setNotice(null);
     try {
       const query = `?target=${encodeURIComponent(target)}`;
-      const body = await responseJson<JsonRecord>(await fetch(
+      const body = await daemonJson<JsonRecord>(await fetch(
         `${baseUrl}/api/acad/drawing-info${query}`,
         { cache: "no-store" },
       ));

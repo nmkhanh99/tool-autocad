@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { asRecord, type JsonRecord } from "./json";
+import { asRecord, daemonRecord, type JsonRecord } from "../lib/daemon/client";
 
 type BlockType = "static" | "dynamic";
 type BlockSpace = "model" | "layout";
@@ -228,15 +228,6 @@ function emptyBlock(): BlockDefinition {
   };
 }
 
-async function responseJson(response: Response): Promise<JsonRecord> {
-  const body = await response.json().catch(() => ({}));
-  const record = asRecord(body) || {};
-  if (!response.ok || record.ok === false) {
-    throw new Error(textValue(record.error || record.message) || `HTTP ${response.status}`);
-  }
-  return record;
-}
-
 function catalogRecord(body: JsonRecord): JsonRecord {
   return asRecord(body.catalog) || asRecord(body.data) || body;
 }
@@ -297,7 +288,7 @@ export default function BlockLibraryPanel({
   });
 
   const loadCatalog = useCallback(async (signal?: AbortSignal) => {
-    const body = await responseJson(await fetch(`${baseUrl}/api/acad/blocks`, {
+    const body = await daemonRecord(await fetch(`${baseUrl}/api/acad/blocks`, {
       cache: "no-store",
       signal,
     }));
@@ -311,7 +302,7 @@ export default function BlockLibraryPanel({
     let nextSources = catalogSources;
     setSourceError("");
     try {
-      const sourceBody = await responseJson(await fetch(
+      const sourceBody = await daemonRecord(await fetch(
         `${baseUrl}/api/acad/blocks/sources`,
         { cache: "no-store", signal },
       ));
@@ -451,7 +442,7 @@ export default function BlockLibraryPanel({
     setBusy("save");
     setNotice(null);
     try {
-      const body = await responseJson(await fetch(
+      const body = await daemonRecord(await fetch(
         `${baseUrl}/api/acad/blocks/${encodeURIComponent(draft.id)}`,
         {
           method: "PUT",
@@ -476,7 +467,7 @@ export default function BlockLibraryPanel({
     setNotice(null);
     try {
       const { id: _id, ...block } = draft;
-      const body = await responseJson(await fetch(`${baseUrl}/api/acad/blocks/create`, {
+      const body = await daemonRecord(await fetch(`${baseUrl}/api/acad/blocks/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -504,7 +495,7 @@ export default function BlockLibraryPanel({
     setBusy(action);
     setNotice(null);
     try {
-      const body = await responseJson(await fetch(`${baseUrl}/api/acad/blocks/${action}`, {
+      const body = await daemonRecord(await fetch(`${baseUrl}/api/acad/blocks/${action}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -531,7 +522,7 @@ export default function BlockLibraryPanel({
     setBusy("scan");
     setNotice(null);
     try {
-      const body = await responseJson(await fetch(`${baseUrl}/api/acad/blocks/scan`, {
+      const body = await daemonRecord(await fetch(`${baseUrl}/api/acad/blocks/scan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ target: initialTarget, expectedRevision: revision }),
@@ -555,7 +546,7 @@ export default function BlockLibraryPanel({
     setBusy("source");
     setNotice(null);
     try {
-      const body = await responseJson(await fetch(`${baseUrl}/api/acad/blocks/sources`, {
+      const body = await daemonRecord(await fetch(`${baseUrl}/api/acad/blocks/sources`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source: sourceDraft, expectedRevision: revision }),

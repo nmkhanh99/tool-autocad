@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 2A (phần 2): một bộ đọc phản hồi daemon
+
+### Changed
+
+- Xoá 3 bản `responseJson` cục bộ trong `BlockLibraryPanel`, `LispLibraryPanel`,
+  `DrawingStandardsPanel`; cả ba nay dùng `daemonRecord` / `daemonJson` từ
+  `lib/daemon/client.ts`. Đổi tên tại chỗ dùng thay vì import kèm alias — một
+  cái tên nói dối buộc người đọc sau này phải nhảy lên đầu file mới biết mình
+  đang gọi gì.
+- Xoá `app/json.ts`; `asRecord` và `JsonRecord` chuyển về
+  `lib/daemon/client.ts`. Bốn panel đổi đường import.
+
+### Fixed
+
+- Thông điệp lỗi nay chỉ nhận giá trị nguyên thuỷ. Ba trong bốn bản cũ dùng
+  `String(record.error)`, nên khi daemon trả `error` là một object thì người
+  dùng nhận được `[object Object]` — vô nghĩa và tệ hơn cả mã HTTP. Lấy theo
+  bản an toàn nhất trong bốn bản (`LispLibraryPanel`): không phải chuỗi/số/bool
+  thì lùi về `HTTP <mã>`.
+
+### Technical
+
+- Bất biến mới: không panel nào được tự viết lại bộ đọc phản hồi
+  (`async function responseJson|responseRecord` = 0), và cả bốn panel phải
+  import từ `lib/daemon/client`.
+- Contract test đỏ đúng như thiết kế khi `app/json.ts` bị xoá (assert
+  `from "./json"`), và `tsc` bắt được một call site `responseJson` mà regex đổi
+  tên bỏ sót. Đây là hai lưới an toàn hoạt động đúng vai, không phải phiền toái.
+
+---
+
 ## 2026-08-10 — Giai đoạn 2A (phần 1): một luồng ghi duy nhất
 
 Gộp 3 bản sao của luồng ghi hai pha **trước khi** di chuyển bất kỳ file nào.

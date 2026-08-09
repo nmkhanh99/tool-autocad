@@ -465,6 +465,10 @@ assert.match(
   "navigation badges are positioned relative to their button",
 );
 
+/* Một cách đọc phản hồi daemon cho toàn app. Bốn bản cũ (`responseJson` ×3,
+ * `responseRecord` ×1) ném `Error` trần ở ba trong bốn bản, nên mã lỗi có kiểu
+ * bị vứt ngay tại chỗ nhận và UI không phân biệt được "bản vẽ đã đổi" với
+ * "AutoCAD chưa chạy". */
 for (const panel of [
   "BlockLibraryPanel.tsx",
   "DrawingInfoPanel.tsx",
@@ -472,9 +476,18 @@ for (const panel of [
   "LispLibraryPanel.tsx",
 ]) {
   const source = sourceAt(panel);
-  assert.match(source, /from "\.\/json";/, `${panel} uses the shared JSON record guard`);
+  assert.match(
+    source,
+    /from "\.\.\/lib\/daemon\/client";/,
+    `${panel} dùng client daemon chung`,
+  );
   assert.doesNotMatch(source, /function asRecord\(/, `${panel} has no local asRecord copy`);
 }
+assert.equal(
+  countCode("async function response(?:Json|Record)\\("),
+  0,
+  "không panel nào được tự viết lại bộ đọc phản hồi daemon",
+);
 
 console.log(
   `✓ web contract: ${sources.length} file · bất biến phủ định chạy toàn dự án, khẳng định gắn file`,

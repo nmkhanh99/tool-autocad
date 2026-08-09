@@ -39,12 +39,12 @@ Giao diện không đổi, đã kiểm bằng Chrome thật.
 chuyển; `confirmed: true` từ 3 → **1**; 62 mã guard đều có thái độ, khoá bằng
 `check:guards`.
 
-**Phần 2 còn lại:**
+**Phần 2 xong (2026-08-10):** gộp 4 bản `responseJson`/`responseRecord` về
+`lib/daemon/client.ts`; xoá `app/json.ts`; thông điệp lỗi không còn cho ra
+`[object Object]`.
 
-- Gộp 4 bản `responseJson`/`responseRecord` còn lại (`BlockLibraryPanel`,
-  `LispLibraryPanel`, `DrawingStandardsPanel`, và `app/json.ts`) về
-  `lib/daemon/client.ts`; xoá `app/json.ts`. Sẽ làm contract test đỏ ở assert
-  `from "./json"` — đó là tín hiệu đúng, sửa trong cùng commit.
+**Phần 3 còn lại:**
+
 - `ConfirmSheet.tsx` dùng chung, có checkbox ack và banner "không hoàn tác".
   Hiện mỗi màn hình vẫn tự dựng phần xác nhận của mình.
 - `features/acad-connection/events.ts` — event bus bằng ref, thay cho 6 lần

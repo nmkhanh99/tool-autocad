@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { asRecord, type JsonRecord } from "./json";
+import { asRecord, type JsonRecord } from "../lib/daemon/client";
 import {
   applyStagedOp,
   isStale,
