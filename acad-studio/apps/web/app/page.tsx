@@ -6,6 +6,7 @@ import DrawingStandardsPanel from "./DrawingStandardsPanel";
 import BlockLibraryPanel from "./BlockLibraryPanel";
 import LispLibraryPanel from "./LispLibraryPanel";
 import DocumentReviewPanel, { type ReviewWorkspaceView } from "./DocumentReviewPanel";
+import PreconstructionPanel, { type PreconstructionView } from "./PreconstructionPanel";
 import CadWebViewerPanel from "./CadWebViewerPanel";
 import {
   readLispProposal,
@@ -184,6 +185,9 @@ export default function Page() {
   const [reviewWorkspaceOpen, setReviewWorkspaceOpen] = useState(false);
   const [reviewWorkspaceView, setReviewWorkspaceView] =
     useState<ReviewWorkspaceView>("documents");
+  const [preconstructionOpen, setPreconstructionOpen] = useState(false);
+  const [preconstructionView, setPreconstructionView] =
+    useState<PreconstructionView>("overview");
   const [cadWebViewerOpen, setCadWebViewerOpen] = useState(false);
   const [lispProposalBusy, setLispProposalBusy] = useState<number | null>(null);
   /** Bản vẽ đang mở trong AutoCAD + đích vẽ đang chọn ("" = file .work mặc định). */
@@ -218,6 +222,12 @@ export default function Page() {
   function openReviewWorkspace(view: ReviewWorkspaceView) {
     setReviewWorkspaceView(view);
     setReviewWorkspaceOpen(true);
+    setPanel(false);
+  }
+
+  function openPreconstruction(view: PreconstructionView = "overview") {
+    setPreconstructionView(view);
+    setPreconstructionOpen(true);
     setPanel(false);
   }
 
@@ -1237,6 +1247,10 @@ export default function Page() {
       <main className="main">
         <div className="topbar">
           <button className="pillbtn" onClick={() => setPanel(!panel)}>🧰 Chức năng</button>
+          <button className="pillbtn" onClick={() => openPreconstruction()}
+            title="Bóc khối lượng, lập dự toán, quản lý hiện trường và AI">
+            ◇ Tiền thi công
+          </button>
           <button className="pillbtn" onClick={() => {
             setDrawingInfoTarget("");
             setDrawingInfoOpen(true);
@@ -1295,6 +1309,9 @@ export default function Page() {
           <div className="wrap">
             {messages.length === 0 && (
               <div className="empty"><h2>Acad Studio — AutoCAD Toolkit</h2>
+                <button className="drawing-empty-open" onClick={() => openPreconstruction()}>
+                  ◇ Mở Preconstruction Workspace
+                </button>
                 <button className="drawing-empty-open" onClick={() => {
                   setDrawingInfoTarget("");
                   setDrawingInfoOpen(true);
@@ -1369,6 +1386,33 @@ export default function Page() {
           </div>
 
           <div className="fngrouplbl workflowtitle">Quy trình công việc</div>
+          <div className="fngroup quickgroup preconstruction-entry-group">
+            <div className="fngrouplbl">Tiền thi công</div>
+            <button type="button" className="fnbtn quickfn" onClick={() => openPreconstruction("overview")}
+              title="Tổng quan chuỗi bóc khối lượng, dự toán và hiện trường">
+              <span className="fnicon">◇</span>
+              <div><div className="fnname">Preconstruction Workspace</div>
+                <div className="fndesc">Từ bản vẽ đến báo giá và kiểm soát hiện trường.</div></div>
+            </button>
+            <button type="button" className="fnbtn quickfn" onClick={() => openPreconstruction("takeoff")}
+              title="Đo bóc, AutoCount, template và hệ số hao hụt">
+              <span className="fnicon">⌁</span>
+              <div><div className="fnname">Bóc khối lượng số</div>
+                <div className="fndesc">Area, linear, arc, mái dốc, volume và count.</div></div>
+            </button>
+            <button type="button" className="fnbtn quickfn" onClick={() => openPreconstruction("estimating")}
+              title="Assembly, vật tư, nhân công, overhead, markup và thuế">
+              <span className="fnicon">₫</span>
+              <div><div className="fnname">Lập dự toán</div>
+                <div className="fndesc">Liên kết khối lượng với đơn giá và nhiều phương án.</div></div>
+            </button>
+            <button type="button" className="fnbtn quickfn" onClick={() => openPreconstruction("field")}
+              title="Issue, punch list và báo cáo ngày ngoài công trường">
+              <span className="fnicon">⚑</span>
+              <div><div className="fnname">Quản lý hiện trường</div>
+                <div className="fndesc">Markup, ảnh hiện trường, punch list và daily report.</div></div>
+            </button>
+          </div>
           <div className="fngroup quickgroup review-entry-group">
             <div className="fngrouplbl">Hồ sơ PDF & phối hợp AEC</div>
             <div className="fnbtn quickfn" onClick={() => openReviewWorkspace("documents")}
@@ -1640,6 +1684,18 @@ export default function Page() {
             agentOverride: reviewer.id,
           });
           return true;
+        }}
+        onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
+      />
+
+      <PreconstructionPanel
+        open={preconstructionOpen}
+        initialView={preconstructionView}
+        initialCadTarget={drawTarget}
+        onClose={() => setPreconstructionOpen(false)}
+        onOpenReview={(view) => {
+          setPreconstructionOpen(false);
+          openReviewWorkspace(view);
         }}
         onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
       />

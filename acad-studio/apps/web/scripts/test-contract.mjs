@@ -8,6 +8,7 @@ const page = readFileSync(join(appDir, "page.tsx"), "utf8");
 const functions = readFileSync(join(appDir, "functions.ts"), "utf8");
 const standards = readFileSync(join(appDir, "DrawingStandardsPanel.tsx"), "utf8");
 const drawingInfo = readFileSync(join(appDir, "DrawingInfoPanel.tsx"), "utf8");
+const preconstruction = readFileSync(join(appDir, "PreconstructionPanel.tsx"), "utf8");
 const styles = readFileSync(join(appDir, "globals.css"), "utf8");
 
 assert.match(
@@ -245,6 +246,100 @@ assert.match(
   styles,
   /\.drawing-object-picker-list \{[\s\S]*?overflow: auto;/,
   "the per-object chooser has a bounded scroll viewport",
+);
+
+assert.match(
+  page,
+  /<PreconstructionPanel[\s\S]*?initialCadTarget=\{drawTarget\}[\s\S]*?onOpenReview=/,
+  "the preconstruction workspace is wired to the active CAD target and review workspace",
+);
+assert.match(
+  page,
+  /<button type="button" className="fnbtn quickfn" onClick=\{\(\) => openPreconstruction\("overview"\)\}/,
+  "the preconstruction function-panel entry is keyboard accessible",
+);
+for (const view of [
+  "overview",
+  "takeoff",
+  "estimating",
+  "field",
+  "integrations",
+  "automation",
+]) {
+  assert.ok(preconstruction.includes(`"${view}"`), `preconstruction exposes the ${view} view`);
+}
+for (const capability of [
+  "Diện tích",
+  "Chiều dài",
+  "Cung",
+  "Mái dốc",
+  "Thể tích",
+  "Đếm",
+  "Hao hụt",
+  "Assembly",
+  "Nhân công",
+  "Overhead",
+  "Markup",
+  "Thuế",
+  "Punch list",
+  "Báo cáo ngày",
+  "Procore",
+  "Acumatica",
+  "QuickBooks",
+  "AutoCount",
+  "AI Trade Takeoff",
+  "Auto-naming",
+  "Smart suggestions",
+  "Template Library",
+  "Auto-hyperlinking",
+  "BUDGET VS ACTUAL",
+  "Non-measured costs",
+]) {
+  assert.ok(
+    preconstruction.includes(capability),
+    `preconstruction surfaces the requested capability: ${capability}`,
+  );
+}
+assert.match(
+  preconstruction,
+  /rateOverrides\[variant\][\s\S]*?\[variant\]: \{[\s\S]*?\[id\]: \{/,
+  "alternate estimates keep independent per-variant rate overrides",
+);
+assert.match(
+  preconstruction,
+  /INITIAL_ESTIMATE_SETTINGS[\s\S]*?"Cơ sở"[\s\S]*?"Tối ưu chi phí"[\s\S]*?"Thi công nhanh"/,
+  "the project contains three independently configured estimate alternatives",
+);
+assert.match(
+  preconstruction,
+  /function boundedNumber[\s\S]*?Math\.min\(max, Math\.max\(0, value\)\)/,
+  "quantity and costing inputs share a non-negative bounded numeric guard",
+);
+assert.match(
+  preconstruction,
+  /URL\.createObjectURL\(file\)/,
+  "uploaded drawings and photos retain local blob content",
+);
+assert.match(
+  preconstruction,
+  /URL\.revokeObjectURL\(url\)/,
+  "local uploaded blob content is released on unmount",
+);
+for (const accessibilityState of ["aria-current", "aria-pressed", "aria-selected"]) {
+  assert.ok(
+    preconstruction.includes(accessibilityState),
+    `preconstruction exposes ${accessibilityState} for keyboard and assistive technology users`,
+  );
+}
+assert.doesNotMatch(
+  preconstruction,
+  /https?:\/\/(?:[^/\s]+\.)?(?:procore|acumatica|quickbooks)\b/i,
+  "connector cards do not embed unreviewed external API endpoints",
+);
+assert.match(
+  styles,
+  /\.precon-backdrop \{[\s\S]*?\.precon-panel \{[\s\S]*?@media \(max-width: 640px\)/,
+  "the preconstruction workspace has scoped desktop and mobile styling",
 );
 
 for (const panel of [
