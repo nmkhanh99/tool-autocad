@@ -111,8 +111,9 @@ cd acad-studio/apps/web && pnpm verify
 | `pnpm check:css` | Va chạm class/token giữa `globals.css` và `design-system.css`; trần hex literal của `globals.css` |
 | `pnpm check:boundaries` | 3 ranh giới thư mục của kiến trúc mới |
 | `pnpm check:guards` | Mọi mã lỗi daemon phát ra đều có thái độ trong UI, và ngược lại |
-| `pnpm test:contract` | Bất biến an toàn của UI (xem §6) |
-| `pnpm build` | Next build + TypeScript |
+| `pnpm check:types` | `tsc --noEmit` trên **toàn** `tsconfig.json`, gồm cả `scripts/` |
+| `pnpm test:contract` | Bất biến an toàn của UI (xem §6) + test bus sự kiện |
+| `pnpm build` | Next build |
 | `pnpm test:routes` | Bản đóng gói phục vụ đúng route (khởi động daemon thật) |
 
 Ngoài ra:
@@ -122,6 +123,11 @@ pnpm --filter @acad/web test:cadweb-viewer   # 27 test cho pipeline .cadweb
 pnpm --filter @acad/daemon test:standards    # tiêu chuẩn bản vẽ
 pnpm --filter @acad/daemon test:cad-selection
 ```
+
+> **`pnpm build` một mình KHÔNG đủ để bắt lỗi kiểu.** `next build` chỉ typecheck
+> phần nằm trong đồ thị build của app, nên lỗi TypeScript trong `scripts/` lọt
+> qua dù `tsconfig.json` có include thư mục đó. Vì vậy `check:types` là một bước
+> riêng trong `verify` — đã có một lỗi thật lọt qua theo đúng đường này.
 
 Chưa có: lint và format. Repo không có cấu hình ESLint hay Prettier — ba ranh
 giới thư mục được kiểm bằng `scripts/check-import-boundaries.mjs` thay vì bằng

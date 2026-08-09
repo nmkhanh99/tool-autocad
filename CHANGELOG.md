@@ -1,5 +1,63 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 2A (phần 3): một EventSource, một nơi đọc danh sách bản vẽ
+
+### Added
+
+- `features/acad-connection/events.ts` — bus sự kiện AutoCAD. Một
+  `EventSource` cho toàn app, đếm tham chiếu (mở khi có listener đầu tiên, đóng
+  khi listener cuối rời đi), listener giữ trong `Set` cấp module chứ không
+  trong state. Một listener ném lỗi không làm câm các listener còn lại.
+  Chuẩn hoá dấu thời gian: daemon lúc gửi mili giây lúc gửi giây.
+- `lib/daemon/docs.ts` — một `fetchDocs()` cho cả ba màn hình từng tự fetch và
+  tự bóc payload `/api/acad/docs`.
+- `scripts/test-acad-events.test.ts` — 8 test cho vòng đời đăng ký, chạy trong
+  `test:contract` với một `EventSource` giả. Lỗi của bus không lộ ra ngay: nó
+  biểu hiện thành "màn hình kia bỗng ngừng nhận sự kiện" nhiều thao tác về sau,
+  nên phần này được khoá bằng test thay vì bằng đọc code.
+
+### Changed
+
+- `page.tsx` không còn tự mở `EventSource`; nó đăng ký qua `useAcadEvents`.
+  Hành vi xử lý sự kiện giữ nguyên từng nhánh.
+
+### Fixed
+
+- **Đăng ký trùng callback huỷ nhầm nhau** (Codex review phát hiện).
+  `subscribeAcadEvents` thêm thẳng `listener` vào `Set`, mà `Set` khoá theo
+  identity — nên cùng một hàm đăng ký hai lần chỉ tạo một entry, và hàm huỷ của
+  người này gỡ đăng ký của người kia rồi đóng luôn kết nối chung. Nay mỗi lần
+  đăng ký được bọc trong wrapper riêng, huỷ lặp không tính hai lần, và chỉ xoá
+  bus khỏi bảng nếu bus trong bảng vẫn đúng là bus đó.
+
+### Technical
+
+- Bất biến siết thêm: `new EventSource` không chỉ **= 1** mà còn phải **nằm
+  trong** `features/acad-connection/events.ts`. Tiêu chí "= 1" đơn thuần đã
+  đúng sẵn từ trước khi làm gì, nên nó không đo được gì. Tương tự, endpoint
+  `docs`/`events` chỉ được khai trong `lib/daemon/endpoints.ts`.
+- Negative test cho chính bản sửa: hoàn nguyên về `Set` khoá theo identity thì
+  đúng 1 trong 8 test đỏ (test đăng ký trùng), khôi phục thì xanh lại.
+- **Thêm `check:types` vào chuỗi `verify`.** Codex review lần hai bắt được một
+  lỗi TypeScript trong chính test mới mà `pnpm verify` lúc đó vẫn báo xanh:
+  `next build` **không** typecheck thư mục `scripts/`, dù `tsconfig.json` có
+  include nó. Nghĩa là suốt từ giai đoạn 0 tới giờ, mọi lỗi kiểu trong script
+  kiểm thử đều lọt. Nay `tsc --noEmit -p tsconfig.json` chạy như một bước riêng.
+- Contract test đỏ đúng vai lần thứ hai: đổi tên biến `eventAt` → `event.at`
+  làm assert về dấu thời gian drawing-info fail. Bất biến vẫn đúng, chỉ mẫu cần
+  cập nhật — đó chính là lúc con người phải xác nhận thay vì máy đoán.
+
+### Hai điều CỐ Ý không làm
+
+- **Không** chuyển bảy `setState` của handler SSE ra khỏi `Page()`. Cái lợi
+  re-render chỉ đến khi từng panel tự đăng ký, mà việc đó đổi hợp đồng props
+  của hai panel lớn nhất — thuộc về lúc migrate chúng sang route (GĐ5–6).
+- **Không** gộp quy tắc suy đích vẽ vào `fetchDocs`. Ba màn hình suy khác nhau
+  và gộp bừa sẽ làm đích vẽ nhảy sang bản vẽ khác trong im lặng. Chi tiết ba
+  quy tắc ghi trong `lib/daemon/docs.ts`.
+
+---
+
 ## 2026-08-10 — Giai đoạn 2A (phần 2): một bộ đọc phản hồi daemon
 
 ### Changed

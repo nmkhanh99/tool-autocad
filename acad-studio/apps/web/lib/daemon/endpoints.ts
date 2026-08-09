@@ -25,4 +25,8 @@ export const endpoints = {
 
   /** Bản vẽ AutoCAD ĐANG MỞ. Không phải danh sách tệp mở gần đây. */
   docs: (base: string) => `${trim(base)}/api/acad/docs`,
+
+  /** SSE sự kiện reactor từ plugin. Chỉ `features/acad-connection/events.ts`
+   * được mở kết nối này — xem lý do ở đó. */
+  acadEvents: (base: string) => `${trim(base)}/api/acad/events`,
 } as const;

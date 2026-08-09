@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { asRecord, daemonJson, type JsonRecord } from "../lib/daemon/client";
+import { fetchDocs } from "../lib/daemon/docs";
 import {
   applyStagedOp,
   prepareStagedOp,
@@ -724,13 +725,9 @@ export default function DrawingStandardsPanel({
 
   async function loadDocuments(signal?: AbortSignal) {
     try {
-      const body = await daemonJson<{
-        alive?: boolean;
-        docs?: AcadDocument[];
-      }>(await fetch(`${baseUrl}/api/acad/docs`, { cache: "no-store", signal }));
-      const docs = Array.isArray(body.docs) ? body.docs : [];
+      const { alive, docs } = await fetchDocs(baseUrl, signal);
       setDocuments(docs);
-      setDocsAlive(body.alive === true);
+      setDocsAlive(alive);
       setTarget((current) => {
         if (current && docs.some((doc) => targetOf(doc) === current)) return current;
         const desired = initialTarget?.trim() || current;

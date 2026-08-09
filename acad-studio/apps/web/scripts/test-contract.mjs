@@ -153,10 +153,23 @@ assert.equal(
   "prepare/apply/reject phải đi qua features/staged-ops, không gọi thẳng endpoint",
 );
 
-/* Một EventSource duy nhất. Hôm nay nó ở page.tsx; từ giai đoạn 2A trở đi nó
- * phải nằm trong features/acad-connection/events.ts. Đếm giữ nguyên bất biến
- * qua cả hai giai đoạn — nhiều instance nghĩa là mỗi panel tự nghe SSE riêng. */
-assert.equal(countAll("new EventSource"), 1, "chỉ được có MỘT EventSource trong toàn app");
+/* Một EventSource duy nhất, và ở đúng chỗ. Chỉ đếm "= 1" thì không đủ: hôm
+ * trước nó đã bằng 1 khi còn nằm trong page.tsx, nên tiêu chí đó pass mà không
+ * đo được gì. Nhiều instance nghĩa là mỗi panel tự mở một kết nối SSE riêng. */
+assert.equal(countCode("new EventSource"), 1, "chỉ được có MỘT EventSource trong toàn app");
+assert.ok(
+  sources.some((s) =>
+    s.path === "features/acad-connection/events.ts" && s.text.includes("new EventSource")),
+  "EventSource phải nằm trong features/acad-connection/events.ts",
+);
+
+/* Danh sách bản vẽ đang mở đọc qua một chỗ. Ba màn hình từng tự fetch và tự bóc
+ * payload; quy tắc suy đích vẽ thì vẫn thuộc về từng màn hình (xem lib/daemon/docs.ts). */
+assert.equal(
+  countCodeExcept("/api/acad/(?:docs|events)", "lib/daemon/endpoints.ts"),
+  0,
+  "endpoint docs/events chỉ được khai trong lib/daemon/endpoints.ts",
+);
 
 /* Nút ghi phải là primitive Button (disabled thật + aria-disabled), không phải
  * thẻ <button> thô dựa vào CSS pointer-events — CSS không chặn Tab+Enter. */
@@ -325,7 +338,7 @@ assert.doesNotMatch(
 
 assert.match(
   page,
-  /setDrawingInfoRefreshEventAt\(\(current\) => Math\.max\(current, eventAt\)\)[\s\S]*?refreshEventAt=\{drawingInfoRefreshEventAt\}/,
+  /setDrawingInfoRefreshEventAt\(\(current\) => Math\.max\(current, event\.at\)\)[\s\S]*?refreshEventAt=\{drawingInfoRefreshEventAt\}/,
   "drawing-info receives the timestamp of its latest invalidating AutoCAD event",
 );
 assert.match(

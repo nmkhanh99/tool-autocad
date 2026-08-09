@@ -1302,9 +1302,20 @@ node scripts/check-css-collisions.mjs && node scripts/test-route-serving.mjs</co
   <h2><span class="n">Phần 08</span>Sáu việc cần bạn chốt</h2>
   <p>Đây là những chỗ phải hỏi, không được đoán — mỗi cái đổi hướng một phần công việc.
     <strong>D1 và D6 chặn ngay giai đoạn đầu.</strong></p>
+  <div class="callout" data-kind="stop">
+    <span class="lbl">Cập nhật 10.08.2026 — cả sáu quyết định đã chốt</span>
+    <p>Không còn quyết định nào đang chặn. Lựa chọn thực tế nằm ở chip cạnh từng
+      tiêu đề bên dưới; phần so sánh phương án giữ nguyên để sau này còn tra
+      được vì sao chọn thế.</p>
+    <p><strong>Hệ quả:</strong> D3 + D4 + D5 đều chọn phương án build, nên phát
+      sinh khoảng <strong>21–33 ngày công backend</strong> tính riêng ngoài
+      95–140 ngày front-end. D2 chọn giữ hai panel prototype, nên 1.745 dòng CSS
+      của chúng <em>không</em> bị xoá ở giai đoạn 10.</p>
+  </div>
+
 
   <div class="dec">
-    <header><h3>D1 — Giao diện sáng hay tối?</h3><span class="when">chốt trước GĐ1</span></header>
+    <header><h3>D1 — Giao diện sáng hay tối?</h3><span class="chip" data-sev="ok">đã chốt 10.08 · (a) theo mẫu + khối dark</span></header>
     <p>App hiện <strong>dark-only cứng</strong> (<code>--bg #0f1216</code>, 1.516 hex literal, 0
       <code>prefers-color-scheme</code>). Mẫu <strong>light-only</strong>, bảng màu khoá vào bộ Apple, cũng
       0 <code>prefers-color-scheme</code>. Migrate nghĩa là toàn bộ ứng dụng đổi từ đen sang trắng.</p>
@@ -1321,7 +1332,7 @@ node scripts/check-css-collisions.mjs && node scripts/test-route-serving.mjs</co
   </div>
 
   <div class="dec">
-    <header><h3>D6 — Trạng thái “đã lưu / chưa lưu”: build hay cắt?</h3><span class="when">chốt trước GĐ3</span></header>
+    <header><h3>D6 — Trạng thái “đã lưu / chưa lưu”: build hay cắt?</h3><span class="chip" data-sev="ok">đã chốt 10.08 · (A) thêm dbmod vào writeDocs()</span></header>
     <p><code>dbmod</code> <strong>không</strong> có trong <code>/docs</code>; nó chỉ có trong snapshot
       <code>/drawing-info</code>, và mỗi lần đọc là một lời gọi nặng cho <em>một</em> bản vẽ. Ba chỗ trong
       mẫu phụ thuộc nó: chấm xanh/đỏ trên doctab, hộp thoại “Khởi động lại AutoCAD” liệt kê bản vẽ chưa lưu,
@@ -1345,7 +1356,7 @@ node scripts/check-css-collisions.mjs && node scripts/test-route-serving.mjs</co
   </div>
 
   <div class="dec">
-    <header><h3>D2 — Hai panel prototype: cắt hay giữ?</h3><span class="when">chốt trước GĐ4</span></header>
+    <header><h3>D2 — Hai panel prototype: cắt hay giữ?</h3><span class="chip" data-sev="ok">đã chốt 10.08 · (2) giữ, bê nguyên vào route + banner bản dựng thử</span></header>
     <p>2.437 dòng TSX + 1.745 dòng CSS, tổng cộng <strong>1</strong> lời gọi API. Mẫu không có gì tương ứng.
       Ảnh hưởng ~15% khối lượng và toàn bộ 1.745 dòng CSS ở GĐ10.</p>
     <p>Ba câu hỏi cần bạn trả lời:</p>
@@ -1363,7 +1374,7 @@ node scripts/check-css-collisions.mjs && node scripts/test-route-serving.mjs</co
   </div>
 
   <div class="dec">
-    <header><h3>D3 — <code>/publish</code>: cắt trường vượt năng lực hay build backend?</h3><span class="when">chốt trước GĐ8</span></header>
+    <header><h3>D3 — <code>/publish</code>: cắt trường vượt năng lực hay build backend?</h3><span class="chip" data-sev="ok">đã chốt 10.08 · (b) build 3 endpoint enumerate + onConflict</span></header>
     <p>Mẫu vẽ 5 trường mà backend sẽ từ chối và 4 dropdown không có nguồn dữ liệu.</p>
     <div class="tw"><table>
       <thead><tr><th>Phương án</th><th class="num">Chi phí</th><th>Kết quả</th></tr></thead>
@@ -1379,7 +1390,7 @@ node scripts/check-css-collisions.mjs && node scripts/test-route-serving.mjs</co
   </div>
 
   <div class="dec">
-    <header><h3>D4 — <code>/batch</code>: có đầu tư 4 endpoint mới không?</h3><span class="when">chốt trước GĐ8</span></header>
+    <header><h3>D4 — <code>/batch</code>: có đầu tư 4 endpoint mới không?</h3><span class="chip" data-sev="ok">đã chốt 10.08 · (b) 4 endpoint + (c) cầu nối Python</span></header>
     <div class="tw"><table>
       <thead><tr><th>Phương án</th><th class="num">Chi phí</th><th>Kết quả</th></tr></thead>
       <tbody>
@@ -1397,7 +1408,7 @@ node scripts/check-css-collisions.mjs && node scripts/test-route-serving.mjs</co
   </div>
 
   <div class="dec">
-    <header><h3>D5 — <code>/cadweb</code>: dựng sync server hay chỉ hiển thị trạng thái?</h3><span class="when">chốt trước GĐ8</span></header>
+    <header><h3>D5 — <code>/cadweb</code>: dựng sync server hay chỉ hiển thị trạng thái?</h3><span class="chip" data-sev="ok">đã chốt 10.08 · (b) dựng sync server</span></header>
     <p>Hiện sync <strong>mặc định tắt</strong>, cần 5 biến môi trường, và <strong>không có server nào
       nhận</strong>. Exporter Windows chưa compile/load trên máy Windows.</p>
     <div class="tw"><table>

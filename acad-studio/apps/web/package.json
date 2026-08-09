@@ -6,12 +6,13 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "test:cadweb-viewer": "node scripts/test-cadweb-viewer.mjs && pnpm --filter @acad/cadweb exec tsx --test ../web/scripts/test-cadweb-transform.test.ts ../web/scripts/test-cadweb-incremental.test.ts ../web/scripts/test-cadweb-recovery.test.ts",
-    "test:contract": "node scripts/test-contract.mjs && pnpm --filter @acad/cadweb exec tsx --test ../web/scripts/test-preconstruction.test.ts",
+    "test:contract": "node scripts/test-contract.mjs && pnpm --filter @acad/cadweb exec tsx --test ../web/scripts/test-preconstruction.test.ts ../web/scripts/test-acad-events.test.ts",
     "check:css": "node scripts/check-css-collisions.mjs",
     "check:boundaries": "node scripts/check-import-boundaries.mjs",
     "check:guards": "node scripts/extract-guard-codes.mjs",
+    "check:types": "tsc --noEmit -p tsconfig.json",
     "test:routes": "node scripts/test-route-serving.mjs",
-    "verify": "pnpm check:css && pnpm check:boundaries && pnpm check:guards && pnpm test:contract && pnpm build && pnpm test:routes",
+    "verify": "pnpm check:css && pnpm check:boundaries && pnpm check:guards && pnpm check:types && pnpm test:contract && pnpm build && pnpm test:routes",
     "start": "next start -p 3000"
   },
   "dependencies": {

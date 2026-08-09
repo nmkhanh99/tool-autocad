@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { asRecord, daemonRecord, type JsonRecord } from "../lib/daemon/client";
+import { fetchDocs } from "../lib/daemon/docs";
 
 export type LispReviewStatus = "unreviewed" | "approved" | "stale";
 
@@ -513,11 +514,9 @@ export default function LispLibraryPanel({
 
   const loadDocuments = useCallback(async (signal?: AbortSignal) => {
     try {
-      const response = await fetch(`${baseUrl}/api/acad/docs`, { cache: "no-store", signal });
-      const body = await daemonRecord(response);
-      const docs = Array.isArray(body.docs) ? body.docs as AcadDocument[] : [];
+      const { alive, docs } = await fetchDocs(baseUrl, signal);
       setDocuments(docs);
-      setDocsAlive(body.alive === true);
+      setDocsAlive(alive);
       setTarget((current) => {
         const requested = initialTarget?.trim() || current;
         const matched = requested

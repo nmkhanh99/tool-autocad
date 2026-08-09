@@ -7,6 +7,8 @@ import {
   rejectStagedOp,
   stagedErrorText,
 } from "../features/staged-ops/prepareApplyReject";
+import { useAcadEvents } from "../features/acad-connection/events";
+import { fetchDocs } from "../lib/daemon/docs";
 import DrawingInfoPanel from "./DrawingInfoPanel";
 import DrawingStandardsPanel from "./DrawingStandardsPanel";
 import BlockLibraryPanel from "./BlockLibraryPanel";
@@ -255,38 +257,33 @@ export default function Page() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [pendingPageCadAction, pageCadActionBusy]);
-  useEffect(() => {   // sự kiện realtime từ AutoCAD (plugin reactor → daemon SSE)
-    const es = new EventSource(`${DAEMON}/api/acad/events`);
-    es.onmessage = (e) => {
-      try {
-        const ev = JSON.parse(e.data);
-        const rawEventAt = Number(ev.t);
-        const eventAt = Number.isFinite(rawEventAt) && rawEventAt > 0
-          ? rawEventAt >= 1_000_000_000_000 ? rawEventAt / 1_000 : rawEventAt
-          : Date.now() / 1_000;
-        const invalidateDrawingInfo = () => {
-          setDrawingInfoRefreshToken((token) => token + 1);
-          setDrawingInfoRefreshEventAt((current) => Math.max(current, eventAt));
-        };
-        setAcadLive({ activeDoc: ev.activeDoc || "", last: `${ev.type}${ev.detail ? ": " + ev.detail : ""}` });
-        if (String(ev.type).startsWith("doc")) {
-          loadDocs();
-          loadDrawDocs();
-          setDrawingInfoTarget(ev.activeDoc || "");
-          invalidateDrawingInfo();
-          setStandardsTarget(ev.activeDoc || "");
-          setStandardsRefreshToken((token) => token + 1);
-        }
-        if (ev.type === "drawingModified" || ev.type === "pluginLoaded") {
-          invalidateDrawingInfo();
-          setStandardsRefreshToken((token) => token + 1);
-        }
-        if (ev.type === "drawingModified" && autoBomRef.current) refreshBom();   // BOM tự cập nhật khi vẽ
-      } catch { /* */ }
+  // Sự kiện realtime từ AutoCAD (plugin reactor → daemon SSE). Kết nối thuộc về
+  // features/acad-connection/events.ts — một EventSource cho toàn app, đếm tham
+  // chiếu. Màn hình này hiện là subscriber duy nhất; khi từng panel được migrate
+  // sang route, chúng tự đăng ký thay vì nhận refreshToken qua props.
+  useAcadEvents(DAEMON, (event) => {
+    const invalidateDrawingInfo = () => {
+      setDrawingInfoRefreshToken((token) => token + 1);
+      setDrawingInfoRefreshEventAt((current) => Math.max(current, event.at));
     };
-    es.onerror = () => { /* daemon restart — EventSource tự reconnect */ };
-    return () => es.close();
-  }, []);
+    setAcadLive({
+      activeDoc: event.activeDoc,
+      last: `${event.type}${event.detail ? ": " + event.detail : ""}`,
+    });
+    if (event.type.startsWith("doc")) {
+      loadDocs();
+      loadDrawDocs();
+      setDrawingInfoTarget(event.activeDoc);
+      invalidateDrawingInfo();
+      setStandardsTarget(event.activeDoc);
+      setStandardsRefreshToken((token) => token + 1);
+    }
+    if (event.type === "drawingModified" || event.type === "pluginLoaded") {
+      invalidateDrawingInfo();
+      setStandardsRefreshToken((token) => token + 1);
+    }
+    if (event.type === "drawingModified" && autoBomRef.current) refreshBom();   // BOM tự cập nhật khi vẽ
+  });
   useEffect(() => { chatRef.current?.scrollTo(0, chatRef.current.scrollHeight); }, [messages]);
 
   async function loadAgents() {
@@ -419,9 +416,9 @@ export default function Page() {
   // ─── Chạy 1 chức năng (nút bấm hoặc gợi ý) ───
   async function loadDocs(): Promise<{ alive: boolean; docs: any[] }> {
     try {
-      const r = await (await fetch(`${DAEMON}/api/acad/docs`)).json();
-      setDocsAlive(!!r.alive); setDocList(r.docs || []);
-      return { alive: !!r.alive, docs: r.docs || [] };
+      const snapshot = await fetchDocs(DAEMON);
+      setDocsAlive(snapshot.alive); setDocList(snapshot.docs as any[]);
+      return { alive: snapshot.alive, docs: snapshot.docs as any[] };
     } catch { setDocsAlive(false); setDocList([]); return { alive: false, docs: [] }; }
   }
 
