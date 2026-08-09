@@ -1,0 +1,1481 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kế hoạch chuyển đổi giao diện — AutoCAD Toolkit</title>
+
+<style>
+:root{
+  --bg:#ffffff; --surface:#f5f5f5; --panel:#ffffff;
+  --fg:#0a0a0a; --fg-72:#3d3d40; --muted:#6e6e73; --border:#dbdbdb; --border-soft:#ebebeb;
+  --accent:#0066cc; --accent-soft:#eaf2fb; --accent-line:#b8d4f0;
+  --sev-block:#d70015; --sev-block-bg:#fdecec;
+  --sev-high:#c93400; --sev-high-bg:#fdf0e9;
+  --sev-med:#946200;  --sev-med-bg:#fbf4e3;
+  --sev-low:#6e6e73;  --sev-low-bg:#f0f0f1;
+  --ok:#248a3d; --ok-bg:#e9f5ec;
+  --font:system-ui,-apple-system,"Segoe UI","Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,"IBM Plex Mono",monospace;
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--s7:48px;--s8:72px;
+  --r:8px; --r-sm:5px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1216; --surface:#0b0e11; --panel:#151a20;
+    --fg:#e6edf3; --fg-72:#b6c2cd; --muted:#8b949e; --border:#262d36; --border-soft:#1c222a;
+    --accent:#2997ff; --accent-soft:#132436; --accent-line:#28466a;
+    --sev-block:#ff6b6b; --sev-block-bg:#2a1517;
+    --sev-high:#ff9f5a; --sev-high-bg:#2a1d13;
+    --sev-med:#e0b64d;  --sev-med-bg:#26200f;
+    --sev-low:#8b949e;  --sev-low-bg:#191e24;
+    --ok:#57c97c; --ok-bg:#12241a;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1216; --surface:#0b0e11; --panel:#151a20;
+  --fg:#e6edf3; --fg-72:#b6c2cd; --muted:#8b949e; --border:#262d36; --border-soft:#1c222a;
+  --accent:#2997ff; --accent-soft:#132436; --accent-line:#28466a;
+  --sev-block:#ff6b6b; --sev-block-bg:#2a1517;
+  --sev-high:#ff9f5a; --sev-high-bg:#2a1d13;
+  --sev-med:#e0b64d;  --sev-med-bg:#26200f;
+  --sev-low:#8b949e;  --sev-low-bg:#191e24;
+  --ok:#57c97c; --ok-bg:#12241a;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+body{
+  margin:0; background:var(--surface); color:var(--fg);
+  font-family:var(--font); font-size:14.5px; line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,h4,p,ul,ol,figure,table{margin:0}
+a{color:var(--accent)}
+code,kbd{font-family:var(--mono); font-size:.86em}
+code{background:var(--surface); border:1px solid var(--border-soft); border-radius:4px; padding:.08em .34em; white-space:nowrap}
+
+/* ---- layout ---- */
+.wrap{max-width:1180px; margin:0 auto; padding:0 var(--s5) var(--s8)}
+.grid{display:grid; grid-template-columns:206px minmax(0,1fr); gap:var(--s7); align-items:start}
+@media (max-width:1000px){ .grid{grid-template-columns:1fr; gap:var(--s5)} .toc{position:static!important; max-height:none!important} }
+
+/* ---- masthead ---- */
+.mast{border-bottom:1px solid var(--border); background:var(--bg)}
+.mast .wrap{padding-top:var(--s7); padding-bottom:var(--s6)}
+.eyebrow{font-family:var(--mono); font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted)}
+h1{font-size:clamp(28px,4.4vw,44px); line-height:1.1; letter-spacing:-.022em; font-weight:640; text-wrap:balance; margin-top:var(--s3)}
+.dek{margin-top:var(--s4); font-size:16.5px; color:var(--fg-72); max-width:64ch; text-wrap:pretty}
+.mastmeta{display:flex; flex-wrap:wrap; gap:var(--s2) var(--s5); margin-top:var(--s5);
+  font-family:var(--mono); font-size:11.5px; color:var(--muted)}
+.mastmeta b{color:var(--fg-72); font-weight:500}
+
+/* ---- toc ---- */
+.toc{position:sticky; top:var(--s5); max-height:calc(100vh - 48px); overflow-y:auto; padding-top:var(--s7)}
+.toc ol{list-style:none; padding:0; display:flex; flex-direction:column; gap:1px}
+.toc a{display:flex; gap:var(--s2); padding:5px var(--s2); border-radius:var(--r-sm);
+  color:var(--fg-72); text-decoration:none; font-size:12.5px; line-height:1.35}
+.toc a:hover{background:var(--accent-soft); color:var(--accent)}
+.toc a span{font-family:var(--mono); font-size:10.5px; color:var(--muted); padding-top:1px; flex:none}
+.toc a:hover span{color:var(--accent)}
+
+/* ---- sections ---- */
+section{padding-top:var(--s7); scroll-margin-top:var(--s4)}
+h2{font-size:24px; letter-spacing:-.015em; font-weight:620; text-wrap:balance;
+  padding-bottom:var(--s3); border-bottom:1px solid var(--border)}
+h2 .n{font-family:var(--mono); font-size:12px; color:var(--muted); font-weight:400;
+  display:block; letter-spacing:.08em; margin-bottom:var(--s2)}
+h3{font-size:16.5px; font-weight:600; letter-spacing:-.008em; margin-top:var(--s6); text-wrap:balance}
+h4{font-size:14px; font-weight:600; margin-top:var(--s5)}
+section > p, section > ul, section > ol{margin-top:var(--s4); max-width:74ch; text-wrap:pretty}
+h3 + p, h4 + p, h3 + ul, h4 + ul{margin-top:var(--s3)}
+ul,ol{padding-left:var(--s5); display:flex; flex-direction:column; gap:var(--s2)}
+li{text-wrap:pretty}
+
+/* ---- panels ---- */
+.panel{background:var(--panel); border:1px solid var(--border); border-radius:var(--r);
+  padding:var(--s4) var(--s5); margin-top:var(--s4)}
+.panel > :first-child{margin-top:0}
+.callout{border-left:3px solid var(--accent); background:var(--accent-soft);
+  border-radius:0 var(--r-sm) var(--r-sm) 0; padding:var(--s3) var(--s4); margin-top:var(--s4)}
+.callout[data-kind="stop"]{border-left-color:var(--sev-block); background:var(--sev-block-bg)}
+.callout[data-kind="warn"]{border-left-color:var(--sev-high); background:var(--sev-high-bg)}
+.callout .lbl{font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--accent); display:block; margin-bottom:var(--s1)}
+.callout[data-kind="stop"] .lbl{color:var(--sev-block)}
+.callout[data-kind="warn"] .lbl{color:var(--sev-high)}
+.callout p{max-width:none}
+.callout p + p{margin-top:var(--s2)}
+
+/* ---- chips ---- */
+.chip{display:inline-flex; align-items:center; gap:5px; font-family:var(--mono);
+  font-size:10.5px; letter-spacing:.02em; padding:2px 7px; border-radius:var(--r-sm);
+  border:1px solid transparent; white-space:nowrap; vertical-align:1px}
+.chip[data-sev="chan"]{color:var(--sev-block); background:var(--sev-block-bg); border-color:currentColor}
+.chip[data-sev="cao"]{color:var(--sev-high); background:var(--sev-high-bg); border-color:currentColor}
+.chip[data-sev="tb"]{color:var(--sev-med); background:var(--sev-med-bg); border-color:currentColor}
+.chip[data-sev="thap"]{color:var(--sev-low); background:var(--sev-low-bg); border-color:var(--border)}
+.chip[data-sev="ok"]{color:var(--ok); background:var(--ok-bg); border-color:currentColor}
+.chip[data-sev="nb"]{color:var(--muted); background:transparent; border:1px dashed var(--muted)}
+
+/* verified-claim stamp — the plan's discipline made visible */
+.src{font-family:var(--mono); font-size:10.5px; color:var(--muted); white-space:nowrap}
+.src::before{content:"✓ "; color:var(--ok); font-weight:700}
+
+/* ---- tables ---- */
+.tw{overflow-x:auto; margin-top:var(--s4); border:1px solid var(--border);
+  border-radius:var(--r); background:var(--panel)}
+table{border-collapse:collapse; width:100%; font-size:13px; min-width:560px}
+th,td{text-align:left; padding:9px var(--s3); border-bottom:1px solid var(--border-soft); vertical-align:top}
+thead th{position:sticky; top:0; background:var(--panel); font-family:var(--mono); font-weight:500;
+  font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted);
+  border-bottom:1px solid var(--border); z-index:1}
+tbody tr:last-child td{border-bottom:0}
+td.num,th.num{font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap}
+td.mono{font-family:var(--mono); font-size:11.5px; white-space:nowrap}
+tbody tr:hover td{background:var(--surface)}
+
+/* ---- phase rail ---- */
+.phases{display:flex; flex-direction:column; gap:0; margin-top:var(--s5); padding:0; list-style:none}
+.ph{display:grid; grid-template-columns:52px minmax(0,1fr); gap:var(--s4);
+  padding:var(--s4) 0; border-top:1px solid var(--border)}
+.ph:last-child{border-bottom:1px solid var(--border)}
+.ph .id{font-family:var(--mono); font-size:11px; color:var(--muted); letter-spacing:.04em; padding-top:3px}
+.ph .id b{display:block; font-size:20px; color:var(--accent); font-weight:600; letter-spacing:-.02em; line-height:1.1}
+.ph h3{margin:0; font-size:15.5px}
+.ph .goal{margin-top:var(--s2); color:var(--fg-72); font-size:13.5px; max-width:70ch}
+.ph .est{float:right; font-family:var(--mono); font-size:11px; color:var(--muted); margin-left:var(--s4)}
+.ph .tasks{margin-top:var(--s3); font-size:13.5px}
+.gate{margin-top:var(--s3); background:var(--surface); border:1px solid var(--border-soft);
+  border-radius:var(--r-sm); padding:var(--s3)}
+.gate .lbl{font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--muted); display:block; margin-bottom:var(--s2)}
+.gate ul{margin:0; padding-left:18px; gap:4px; font-size:13px}
+pre{margin:var(--s3) 0 0; background:var(--surface); border:1px solid var(--border-soft);
+  border-radius:var(--r-sm); padding:var(--s3); overflow-x:auto; font-family:var(--mono);
+  font-size:11.5px; line-height:1.6}
+pre code{background:none; border:0; padding:0; white-space:pre}
+
+/* ---- decisions ---- */
+.dec{border:1px solid var(--border); border-radius:var(--r); background:var(--panel);
+  padding:var(--s4) var(--s5); margin-top:var(--s4)}
+.dec > header{display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--s3); padding-bottom:var(--s3);
+  border-bottom:1px solid var(--border-soft)}
+.dec > header h3{margin:0; font-size:16px; flex:1 1 240px}
+.dec .when{font-family:var(--mono); font-size:10.5px; color:var(--sev-high);
+  background:var(--sev-high-bg); border:1px solid currentColor; border-radius:var(--r-sm); padding:2px 7px}
+.dec .rec{margin-top:var(--s3); font-size:13.5px; padding:var(--s2) var(--s3);
+  background:var(--accent-soft); border-radius:var(--r-sm); color:var(--fg)}
+.dec .rec b{color:var(--accent)}
+
+.kv{display:grid; grid-template-columns:auto minmax(0,1fr); gap:var(--s2) var(--s4);
+  margin-top:var(--s3); font-size:13.5px}
+.kv dt{font-family:var(--mono); font-size:11px; color:var(--muted); padding-top:3px; white-space:nowrap}
+.kv dd{margin:0}
+
+.foot{margin-top:var(--s8); padding-top:var(--s5); border-top:1px solid var(--border);
+  font-size:12.5px; color:var(--muted); max-width:74ch}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:3px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+</head>
+<body>
+<header class="mast">
+  <div class="wrap">
+    <div class="eyebrow">Kế hoạch kỹ thuật · acad-studio/apps/web</div>
+    <h1>Chuyển giao diện AutoCAD Toolkit sang bộ mẫu thiết kế</h1>
+    <p class="dek">Từ một trang chat 2.290 dòng với 7 panel luôn mount, sang 14 route độc lập theo
+      <code>mau-thiet-ke/</code> — trong đó mọi đường ghi vào bản vẽ đi qua một hàng chờ có xác nhận,
+      và mọi nút chưa có endpoint được đánh dấu thay vì vẽ như đã có.</p>
+    <div class="mastmeta">
+      <span>Lập ngày <b>09.08.2026</b></span>
+      <span>Nguồn: <b>5 khảo sát + 3 đối chiếu + 2 phản biện</b></span>
+      <span>Đã sửa theo <b>37 phát hiện phản biện</b></span>
+      <span>Ước lượng <b>95–140 ngày công</b> front-end</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+<div class="grid">
+
+<nav class="toc" aria-label="Mục lục">
+  <ol>
+    <li><a href="#s0"><span>00</span>Tóm tắt &amp; điều đã sửa</a></li>
+    <li><a href="#s1"><span>01</span>Nguyên tắc</a></li>
+    <li><a href="#s2"><span>02</span>Quyết định kiến trúc</a></li>
+    <li><a href="#s3"><span>03</span>Lộ trình 11 giai đoạn</a></li>
+    <li><a href="#s4"><span>04</span>Bảng 14 màn hình</a></li>
+    <li><a href="#s5"><span>05</span>Danh sách bỏ</a></li>
+    <li><a href="#s6"><span>06</span>Backend cần thêm</a></li>
+    <li><a href="#s7"><span>07</span>Rủi ro</a></li>
+    <li><a href="#s8"><span>08</span>6 việc cần bạn chốt</a></li>
+    <li><a href="#s9"><span>09</span>Bất biến khoá bằng CI</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<!-- ═══════════════════════════ 0 ═══════════════════════════ -->
+<section id="s0">
+  <h2><span class="n">Phần 00</span>Tóm tắt &amp; những gì bản nháp đã sai</h2>
+
+  <p>Mẫu thiết kế và app hiện tại không lệch nhau ở lớp vỏ — chúng lệch ở <em>mô hình sản phẩm</em>.
+    App hôm nay coi chat là trung tâm, mọi thứ khác là panel bật lên từ đó. Mẫu coi chat là một mục
+    ngang hàng trong 14 mục, và đặt <strong>hàng chờ thay đổi</strong> vào vị trí trung tâm: mọi lệnh
+    ghi đều stage rồi mới được người xác nhận. Đó là thay đổi kiến trúc, không phải thay đổi CSS.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Chỉ số</th><th class="num">Hiện tại</th><th class="num">Mục tiêu</th><th>Ghi chú</th></tr></thead>
+      <tbody>
+        <tr><td>Route</td><td class="num">1</td><td class="num">14</td><td>+ tối đa 2 route phụ thuộc quyết định D2</td></tr>
+        <tr><td><code>globals.css</code></td><td class="num">3.500 dòng · 1.516 hex</td><td class="num">~850–900 dòng · ≤10 hex</td><td>cộng 1 CSS Module viewer ~300–400 dòng, 6 literal có chú thích</td></tr>
+        <tr><td>Bản sao luồng <code>prepare→apply</code></td><td class="num">3</td><td class="num">1</td><td><span class="src">grep "confirmed: true" = 3</span></td></tr>
+        <tr><td>Nơi lấy danh sách bản vẽ</td><td class="num">3 fetch + 2 state</td><td class="num">1 hook</td><td>trừ <code>DrawingInfoPanel</code> — xem §2.5</td></tr>
+        <tr><td>Panel không có backend</td><td class="num">2.437 dòng (21%)</td><td class="num">0 hoặc gắn nhãn</td><td>quyết định D2</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Bản nháp đầu đã sai 5 chỗ — đã sửa</h3>
+  <p>Kế hoạch này là bản thứ hai. Hai vòng phản biện độc lập đã grep lại từng khẳng định và tìm ra
+    5 chỗ bản đầu nói sai so với code. Tôi đã kiểm chứng lại toàn bộ 5 chỗ đó trước khi viết bản này.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Bản nháp nói</th><th>Thực tế trong code</th><th>Hệ quả nếu không sửa</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>/docs</code> trả <code>dbmod</code> (đã lưu / chưa lưu)</td>
+          <td><strong>Không có.</strong> <code>OpenAcadDocument</code> đúng 5 field <code>{title,file,active,instance?,revision?}</code> <span class="src">acadBridge.ts:290-296</span>. <code>dbmod</code> chỉ có trong snapshot <code>/drawing-info</code> <span class="src">mepbridge.cpp:1426,1569</span></td>
+          <td>Hộp thoại “Khởi động lại AutoCAD” liệt kê <em>sai</em> bản vẽ chưa lưu — đường mất dữ liệu. Xem <strong>D6</strong>.</td>
+        </tr>
+        <tr>
+          <td>Phải cắt cột <em>Revision</em> ở Tổng quan vì tốn N lời gọi</td>
+          <td><strong>Ngược lại.</strong> <code>/docs</code> đã trả <code>revision</code> cho từng bản vẽ <span class="src">mepbridge.cpp:241</span></td>
+          <td>Bỏ một cột dùng được. Cột thật sự không có nguồn là <em>Bộ môn</em> — không endpoint nào trả discipline.</td>
+        </tr>
+        <tr>
+          <td>Thay <code>scopeMatches()</code> bằng <code>issue.kind</code> (7 loại)</td>
+          <td><strong>Không có <code>kind</code>.</strong> <code>StandardsAuditIssue</code> chỉ có <code>scope</code>, và engine phát đúng <strong>6</strong> giá trị <span class="src">standardsEngine.ts:53-64</span></td>
+          <td><code>issue.kind === undefined</code> cho 100% issue → mọi tab lọc rỗng, im lặng.</td>
+        </tr>
+        <tr>
+          <td>Nút “Nhập thư mục nguồn từ AutoCAD” là <em>thêm mới</em></td>
+          <td><strong>Đã có UI.</strong> <code>importAutoCADSupportPaths()</code> <span class="src">LispLibraryPanel.tsx:633, 838</span></td>
+          <td>Backlog phồng. Mọi mục “UI chưa vẽ” phải grep lại trước khi ước lượng.</td>
+        </tr>
+        <tr>
+          <td><code>/workspace</code> “🟡 có, chỉ cần thay vỏ”</td>
+          <td><strong>Chưa có tương tác nào.</strong> <code>pointerdown|hitTest|raycast|picking|selectedEntity</code> = <strong>0 hit</strong> trên <code>CadWebViewerPanel.tsx</code> + <code>cadweb.worker.ts</code></td>
+          <td>Inspector, 5 nút hành động, live-query đều phụ thuộc bấm được vào entity. Đây là màn đắt thứ hai, không phải rẻ nhất.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ 1 ═══════════════════════════ -->
+<section id="s1">
+  <h2><span class="n">Phần 01</span>Nguyên tắc không được nới lỏng</h2>
+
+  <ol>
+    <li><strong>Mọi lệnh ghi là hai pha.</strong> Không có gì tự chạy — nó <em>stage</em> rồi con người
+      <em>xác nhận</em>. Một toast không bao giờ là mô hình của một lệnh ghi.</li>
+    <li><strong>Không có hoàn tác.</strong> Không journal, không inverse-op, không endpoint. Cách duy nhất
+      quay lại là gõ <code>UNDO</code> trong AutoCAD. Câu này phải xuất hiện ở mọi sheet xác nhận.</li>
+    <li><strong>Vẽ trước endpoint thì phải gắn nhãn.</strong> Trước khi vẽ một phần tử mới,
+      <code>grep</code> endpoint tương ứng trong <code>acad-studio/apps/daemon/src/</code>; không thấy →
+      <code>.needs-backend</code>, không vẽ như đã có.
+      <em>Đây là mở rộng của mẫu, không phải kế thừa</em> — bản thân mẫu chỉ dùng nhãn này 2 lần
+      <span class="src">drawing-info.html:115 · settings.html:722</span>.</li>
+    <li><strong>Mỗi lời gọi backend có tối thiểu 3 trạng thái:</strong> đang chạy (0,2–120 s) · lỗi có kiểu
+      (33+ mã 409 và 503/504/502/403/412) · trạng thái mơ hồ (<code>state:"sent"</code>).</li>
+    <li><strong>Disable tiền-kiểm, không báo lỗi hậu-kiểm.</strong> Nút chính đổi nhãn giải thích
+      (“Chưa đủ điều kiện in”), không cho bấm rồi mới 409.</li>
+    <li><strong>Trạng thái mã hoá bằng hình dạng và độ đậm, không bằng màu.</strong></li>
+    <li><strong>Trung thực về ranh giới ứng dụng.</strong> Khi luồng thật kết thúc trong AutoCAD
+      (SECURELOAD, điểm chèn block, <code>CADWEBEXPORT</code>), UI bảo người dùng nhìn sang AutoCAD,
+      không giả vờ làm hộ.</li>
+    <li><strong>Một định nghĩa cho mỗi khái niệm.</strong> Một <code>icons.tsx</code>, một bảng
+      <code>guards</code>, một <code>useDocs()</code>.</li>
+    <li><strong>Mọi câu giới hạn của mẫu phải được port nguyên văn hoặc thay bằng câu đúng hơn.</strong>
+      Mẫu ghi giới hạn ngay tại chỗ bằng <code>.hint</code>. Xoá một câu là hứa thứ backend không có.</li>
+  </ol>
+</section>
+
+<!-- ═══════════════════════════ 2 ═══════════════════════════ -->
+<section id="s2">
+  <h2><span class="n">Phần 02</span>Quyết định kiến trúc</h2>
+
+  <h3>2.1 · Routing — Next.js App Router, multi-route</h3>
+  <p>Mẫu <em>là</em> 14 document độc lập: mỗi cái mang <code>data-screen</code>, rail dùng
+    <code>&lt;a href&gt;</code>, palette ⌘K điều hướng bằng URL. Map 1-1 với multi-route. Deep-link còn là
+    yêu cầu nghiệp vụ, không phải tiện nghi: các CTA trong guard đều nhảy route
+    (<code>confirmation_required → /changes</code>, <code>profile_stale → /review</code>).</p>
+
+  <div class="callout" data-kind="stop">
+    <span class="lbl">Chặn — hai lỗi im lặng phải xử lý trước mọi thứ khác</span>
+    <p><strong>1. Bản đóng gói phục vụ sai HTML.</strong> <code>next.config.mjs</code> có
+      <code>output:"export"</code> nhưng thiếu <code>trailingSlash</code>. Next sinh
+      <code>out/changes.html</code>, còn daemon dùng <code>express.static</code> (không có
+      <code>extensions</code>) rồi catch-all <code>app.get("*") → index.html</code>
+      <span class="src">server.ts:307-309</span>. Kết quả: <code>/changes</code> trả HTTP <strong>200</strong>
+      với nội dung route <code>/</code>. <code>next dev</code> chạy đúng nên bug chỉ lộ khi đóng gói.
+      Sửa: <code>trailingSlash: true</code>.
+      <em>Phản biện đã dựng repro Next 16.2.10 thật và xác nhận phương án thay thế trực giác
+      (<code>express.static(dir,{extensions:["html"]})</code>) KHÔNG chạy — đừng thay.</em></p>
+    <p><strong>2. Hai <code>page.tsx</code> cùng resolve về <code>/</code> và Next im lặng nuốt một cái.</strong>
+      Nếu tạo <code>app/(shell)/page.tsx</code> trong khi <code>app/page.tsx</code> legacy còn sống,
+      Next 16 <em>không báo lỗi</em> — nó bỏ file trong route group. Grep log build cho
+      <code>warn|conflict|duplicate</code>: 0 dòng. Hệ quả: cả giai đoạn dựng Tổng quan sẽ build xanh mà
+      không ai xem được.</p>
+    <p><strong>Quy tắc:</strong> route group <em>chỉ</em> chứa 13 route con cho tới GĐ 8. Màn Tổng quan được
+      tạo trong <em>cùng một commit</em> với <code>git mv app/page.tsx app/legacy/page.tsx</code>.</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Route</th><th>Màn hình</th><th class="mono">data-screen</th><th>Giai đoạn</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">/</td><td>Tổng quan</td><td class="mono">home</td><td>8 — sau khi legacy dời đi</td></tr>
+        <tr><td class="mono">/workspace</td><td>Khung bản vẽ</td><td class="mono">workspace</td><td>5</td></tr>
+        <tr><td class="mono">/drawing-info</td><td>Thông tin bản vẽ</td><td class="mono">info</td><td>6</td></tr>
+        <tr><td class="mono">/assistant</td><td>Trợ lý AI</td><td class="mono">assistant</td><td>9</td></tr>
+        <tr><td class="mono">/changes</td><td>Thay đổi chờ duyệt</td><td class="mono">changes</td><td>7</td></tr>
+        <tr><td class="mono">/review</td><td>Kiểm tra bản vẽ</td><td class="mono">review</td><td>6</td></tr>
+        <tr><td class="mono">/takeoff</td><td>Bóc tách khối lượng</td><td class="mono">takeoff</td><td>7</td></tr>
+        <tr><td class="mono">/publish</td><td>Xuất bản PDF</td><td class="mono">publish</td><td>8</td></tr>
+        <tr><td class="mono">/batch</td><td>Xử lý thư mục</td><td class="mono">batch</td><td>8</td></tr>
+        <tr><td class="mono">/library/blocks</td><td>Thư viện block</td><td class="mono">blocks</td><td>4</td></tr>
+        <tr><td class="mono">/library/lisp</td><td>Thư viện LISP</td><td class="mono">lisp</td><td>4</td></tr>
+        <tr><td class="mono">/standards</td><td>Hồ sơ tiêu chuẩn</td><td class="mono">standards</td><td>6</td></tr>
+        <tr><td class="mono">/settings</td><td>Kết nối AutoCAD</td><td class="mono">settings</td><td>7</td></tr>
+        <tr><td class="mono">/cadweb</td><td>Đồng bộ CadWeb</td><td class="mono">cadweb</td><td>8</td></tr>
+        <tr><td class="mono">/preconstruction</td><td colspan="2">mẫu không có — chỉ tạo nếu D2 = giữ</td><td>10</td></tr>
+        <tr><td class="mono">/review-pdf</td><td colspan="2">mẫu không có — chỉ tạo nếu D2 = giữ</td><td>10</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>2.2 · Thư mục</h3>
+<pre><code>acad-studio/apps/web/
+├── next.config.mjs                    ← trailingSlash: true
+├── app/
+│   ├── layout.tsx        [server]     &lt;html lang="vi"&gt; + CSS + script chống nháy rail
+│   ├── globals.css                    LEGACY — xoá ở GĐ10
+│   ├── design-system.css              ← copy nguyên văn mau-thiet-ke/css/app.css
+│   ├── page.tsx          [LEGACY]     giữ tới GĐ8, rồi git mv → app/legacy/page.tsx
+│   └── (shell)/
+│       ├── layout.tsx    "use client"; export default AppShell
+│       └── {workspace,drawing-info,assistant,changes,review,takeoff,
+│            publish,batch,standards,settings,cadweb,library/*}/page.tsx
+│
+├── components/
+│   ├── shell/  AppShell · Titlebar · Rail · Statusbar · ActivityDrawer · CommandPalette · nav.ts
+│   └── ui/     GĐ4 chỉ 5 primitive: Button Tag Panel Modal GuardStrip
+│               (20 primitive còn lại: tạo khi màn hình THỨ HAI cần, không sớm hơn)
+│
+├── features/
+│   ├── staged-ops/      types · store · guards · prepareApplyReject · ConfirmSheet
+│   ├── acad-connection/ events.ts (bus) · useAcadState · useDocs · useDrawTarget
+│   └── {drawing-info,standards,review,blocks,lisp,takeoff,publish,batch,cadweb,settings,assistant}/
+│
+├── lib/
+│   ├── daemon/ client.ts · endpoints.ts   (useDaemonQuery/usePolling: chỉ viết khi ≥5 call site lặp)
+│   ├── storage.ts   4 khoá, bọc try/catch
+│   └── format.ts
+│
+└── scripts/
+    ├── test-contract.mjs           ← VIẾT LẠI theo glob ở GĐ0
+    ├── check-css-collisions.mjs    ← MỚI (so trên selector chuẩn hoá)
+    ├── check-import-boundaries.mjs ← MỚI (~30 dòng node, không cần ESLint)
+    ├── extract-guard-codes.mjs     ← MỚI
+    └── test-route-serving.mjs      ← MỚI</code></pre>
+
+  <p>Ba ranh giới, khoá bằng script chứ không bằng quy ước: <code>components/ui/*</code> không import
+    <code>features/</code> hay <code>lib/daemon/</code>; <code>features/*</code> không import chéo nhau;
+    chuỗi <code>"/api/…"</code> chỉ tồn tại trong <code>lib/daemon/endpoints.ts</code>
+    (hiện <strong>32</strong> path duy nhất nằm rải trong <code>page.tsx</code>).</p>
+
+  <h3>2.3 · CSS — đổi tên phía sẽ chết, không đổi phía sẽ sống</h3>
+  <p>Copy <strong>nguyên văn</strong> <code>mau-thiet-ke/css/app.css</code> → <code>app/design-system.css</code>,
+    ghi commit hash nguồn ở đầu file để về sau còn diff được. Không đổi tên class phía design system —
+    đổi là fork khỏi mẫu và không đồng bộ lại được nữa.</p>
+
+  <p>Giao thật của hai file là <strong>8</strong> class, không phải 6 như bản nháp liệt kê:</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Class / token</th><th>Legacy</th><th>Design system</th><th>Xử lý</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">--bg</td><td><code>#0f1216</code> đen</td><td><code>#ffffff</code> trắng</td><td>đổi tên legacy · 1 usage</td></tr>
+        <tr><td class="mono">--accent</td><td><code>#4a9eff</code></td><td><code>#0066cc</code></td><td>đổi tên legacy · 40 usage, 0 trong <code>.tsx</code></td></tr>
+        <tr><td class="mono">.app</td><td>grid 240/1fr/auto</td><td>grid 46/1fr/28</td><td>→ <code>.legacy-app</code></td></tr>
+        <tr><td class="mono">.modal</td><td><em>backdrop</em></td><td><em>hộp dialog</em> — đảo nghĩa</td><td>→ <code>.legacy-modal</code></td></tr>
+        <tr><td class="mono">.field</td><td><code>.field span</code> là nhãn</td><td><code>.field &gt; label</code></td><td>→ <code>.legacy-field</code></td></tr>
+        <tr><td class="mono">.empty</td><td><code>text-align:center</code></td><td><code>display:grid</code></td><td>→ <code>.legacy-empty</code></td></tr>
+        <tr><td class="mono">.main</td><td>flex column</td><td>+ <code>background</code></td><td>→ <code>.legacy-main</code></td></tr>
+        <tr><td class="mono">.count</td><td><code>.review-markup-shape.count</code>, <code>.precon-…</code>, <code>i.count</code></td><td><code>.rail-link .count</code> — badge của Rail</td><td><strong>không xung đột</strong> — cả hai đã có tổ tiên riêng</td></tr>
+        <tr><td class="mono">.spacer</td><td><code>.topbar .spacer</code></td><td><code>.modal &gt; footer .spacer</code></td><td><strong>không xung đột</strong> — đã scope</td></tr>
+        <tr><td class="mono">.check</td><td><code>.standards-table td.check</code></td><td><code>inline-flex</code></td><td><strong>không xung đột</strong> — đã scope</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout" data-kind="warn">
+    <span class="lbl">Bộ dò va chạm phải so trên selector, không trên token class rời</span>
+    <p>Nếu <code>check-css-collisions.mjs</code> chỉ “trích class, fail nếu giao ≠ ∅” thì nó báo
+      <strong>3 dương tính giả</strong> (<code>.count</code>, <code>.spacer</code>, <code>.check</code>) và
+      chặn GĐ1 ngay lần chạy đầu — rồi áp lực thực tế sẽ là nới lỏng script, tức vứt bỏ chính guardrail.
+      Chỉ báo va chạm khi một class xuất hiện ở <em>cả hai</em> file dưới dạng selector đơn <code>.x</code>.</p>
+  </div>
+
+  <p><strong>Reset cấp element đè hai chiều — bản nháp chỉ xử lý một chiều.</strong>
+    <code>globals.css</code> import ở root layout nên áp cho <em>mọi</em> route, và nó có
+    <code>body{background:var(--bg); font:15px…}</code>. Nếu bọc reset của design system vào một class
+    <code>.ds</code> trên <code>&lt;div&gt;</code>, thì <code>body{…}</code> của mẫu <em>không match gì cả</em>
+    còn <code>body{…}</code> của legacy vẫn thắng → toàn bộ route mới nền tối, font 15px.</p>
+  <p>Cách đúng, dùng đúng ngôn ngữ mẫu đã dùng (mẫu vốn đã gate bằng <code>body[data-*]</code>):
+    gate design system bằng <code>body[data-ds]</code>, gate legacy bằng <code>body[data-legacy]</code>.
+    Không thêm div, không fork selector nào, và trang legacy sạch tuyệt đối. GĐ10 chỉ cần xoá tiền tố.</p>
+
+  <p><strong>Bổ sung bắt buộc so với mẫu:</strong> mở rộng selector khoá lệnh ghi cho
+    <code>missing</code>/<code>no-plugin</code>/<code>mute</code> — mẫu hiện chỉ khoá <code>busy</code> và
+    <code>off</code> <span class="src">app.css:799-800</span>; token hoá 10 shadow và 4 tầng z-index;
+    thêm <code>color-scheme</code> (thiếu ở mẫu, scrollbar OS sẽ lệch).</p>
+
+  <h3>2.4 · Khoá lệnh ghi phải là <code>disabled</code> thật, không phải CSS</h3>
+  <div class="callout" data-kind="stop">
+    <span class="lbl">Lỗ hổng thật trong chính mẫu</span>
+    <p>Quy tắc duy nhất khoá lệnh ghi là
+      <code>body[data-acad="busy"] [data-write]{opacity:.4; pointer-events:none}</code>.
+      <code>pointer-events:none</code> <strong>không</strong> gỡ nút khỏi tab order và
+      <strong>không</strong> chặn Enter/Space. Với nguyên tắc “không có hoàn tác”, một nút ghi vẫn kích
+      hoạt được bằng <kbd>Tab</kbd>+<kbd>Enter</kbd> khi AutoCAD đã tắt.</p>
+    <p>Ba tầng phòng thủ, CSS chỉ còn là trang trí: (a) primitive <code>Button</code> nhận prop
+      <code>write</code>, đọc <code>useAcadState()</code>, render <code>disabled</code> +
+      <code>aria-disabled</code> thật; (b) <code>prepareApplyReject.ts</code> tự kiểm lại state ngay trước
+      <code>fetch</code> và ném sớm; (c) contract test cấm <code>data-write</code> trên thẻ
+      <code>&lt;button&gt;</code> thô.</p>
+  </div>
+
+  <h3>2.5 · State &amp; data-fetching</h3>
+  <p><strong>Chọn:</strong> SSE làm tín hiệu invalidate + <code>lib/daemon/client.ts</code> (fetch +
+    <code>DaemonError</code> có kiểu) + một event bus bằng <code>ref</code>. <strong>Không</strong> thêm
+    SWR/TanStack Query — app là static export chạy loopback, không latency, không multi-tab, không offline.
+    Nhưng cũng <strong>không</strong> tự xây tầng query sớm: <code>useDaemonQuery</code>/<code>usePolling</code>
+    chỉ viết khi đã có ≥5 call site lặp cùng bộ ba loading/error/data, dự kiến giữa GĐ6.</p>
+
+  <p><strong>Event bus bằng ref, không đưa event vào state.</strong> Hôm nay mỗi sự kiện SSE gọi 6 lần
+    <code>setState</code>, cascade xuống 7 panel đang mount. Thay bằng <code>Set&lt;callback&gt;</code>:
+    component nào cần thì tự đăng ký và chỉ nó re-render. Việc này xoá luôn 3 biến
+    <code>refreshToken</code> thủ công — <em>giữ</em> <code>refreshEventAt</code>, nó là một phần của logic
+    race phải bảo toàn.</p>
+
+  <div class="callout">
+    <span class="lbl">Một ngoại lệ phải viết ra, không phải bản sao cần xoá</span>
+    <p><code>DrawingInfoPanel</code> lấy <code>documents</code> từ payload <code>/drawing-info</code> chứ
+      không fetch <code>/docs</code> — vì nó cần danh sách <em>cùng revision</em> với snapshot đang hiển thị.
+      Thay bằng <code>useDocs()</code> là đổi ngữ nghĩa và có thể hỏng logic race
+      <span class="src">DrawingInfoPanel.tsx:856-862</span>. Panel này <strong>không</strong> dùng
+      <code>useDocs()</code>.</p>
+  </div>
+
+  <p><strong>Bảng mã lỗi phải sinh tự động, không chép tay.</strong> Bản nháp nói “11 mã của mẫu + 5 mã
+    thiếu”. Thực tế riêng <code>cadSelection.ts</code> ném <strong>33</strong> mã qua
+    <code>SelectionApiError</code>, chưa kể <code>standardsProfile</code>, <code>acadBridge</code>,
+    <code>lispLibrary</code>. Bốn mã <code>operation_expired</code> / <code>operation_not_found</code> /
+    <code>operation_not_pending</code> / <code>operation_revision_mismatch</code> chính là thứ
+    <code>/changes</code> sẽ gặp nhiều nhất, và không có trong danh sách của mẫu.
+    <code>selection_too_large</code> (ngưỡng cứng 5.000 đối tượng) cũng không.</p>
+  <p>Cách làm: <code>scripts/extract-guard-codes.mjs</code> quét daemon, mỗi mã phải có <em>một</em> trong
+    ba trạng thái — entry đầy đủ trong <code>guards[]</code>, hoặc nằm trong <code>GENERIC_CODES</code>
+    (lỗi lập trình), hoặc fail build. Hai bất nhất phía backend phải chuẩn hoá ở client:
+    <code>ambiguous_target</code> ↔ <code>target_ambiguous</code> (backend dùng cả hai), và
+    <code>selection_empty</code> → khoá copy <code>no_match</code> của mẫu.</p>
+
+  <h3>2.6 · Strangler — URL chính là feature flag</h3>
+  <p><code>app/page.tsx</code> (2.290 dòng) giữ nguyên, không đụng, tới GĐ8. Route mới sống trong
+    <code>(shell)/</code>. Hai thế giới không biết nhau: route cũ gate bằng
+    <code>body[data-legacy]</code>, route mới gate bằng <code>body[data-ds]</code>. Cầu nối tạm hai
+    chiều (xoá ở GĐ8): topbar cũ thêm link “Giao diện mới →”, rail mới thêm mục cuối “Màn hình cũ”.</p>
+  <p><code>AppShell</code> ghi <code>data-ds</code>/<code>data-acad</code>/<code>data-screen</code>/<code>data-rail</code>
+    lên <code>document.body</code> và <strong>phải cleanup khi unmount</strong> — nếu không, điều hướng
+    shell → legacy để lại <code>body[data-acad="off"]</code> treo trên trang cũ.</p>
+
+  <p>Script chống nháy rail: đặt làm <strong>con đầu tiên của <code>&lt;body&gt;</code></strong> (trong
+    <code>&lt;head&gt;</code> thì <code>document.body</code> là <code>null</code> → TypeError, và khối
+    <code>catch</code> ghi DOM sẽ ném tiếp mà không ai bắt); khối <code>catch</code> để trống vì CSS đã có
+    mặc định; <code>&lt;body suppressHydrationWarning&gt;</code>.</p>
+</section>
+
+<!-- ═══════════════════════════ 3 ═══════════════════════════ -->
+<section id="s3">
+  <h2><span class="n">Phần 03</span>Lộ trình — 11 giai đoạn, app luôn chạy được</h2>
+
+  <p>Thứ tự không tuỳ ý: gỡ blocker → dọn va chạm → gộp code nguy hiểm → dựng shell → rồi mới di chuyển
+    màn hình. Gộp 3 bản sao luồng ghi <em>trước</em> khi di chuyển file là bắt buộc — một bản port sót
+    <code>confirmed:true</code> nghĩa là một lệnh ghi không hoàn tác được chạy im lặng.</p>
+
+  <p>Ước lượng là ngày công thô cho 1 dev full-time. Đã cộng chi phí quy trình bắt buộc của dự án
+    (Codex review trước commit + cập nhật 4 file tài liệu mỗi giai đoạn ≈ 0,5 ngày × 11).
+    <strong>Chưa hiệu chuẩn với vận tốc thật của team — coi là bậc độ lớn, không phải cam kết.</strong>
+    Mọi giai đoạn kết thúc bằng <code>pnpm build</code> + <code>pnpm test:contract</code> +
+    <code>pnpm test:cadweb-viewer</code> + Codex review + cập nhật
+    <code>CHANGELOG.md</code>/<code>ROADMAP.md</code>/<code>DEVELOPMENT.md</code>.</p>
+
+  <ol class="phases">
+
+    <li class="ph">
+      <div class="id"><b>0</b>GĐ</div>
+      <div>
+        <h3><span class="est">2–3 ngày</span>Gỡ blocker &amp; dựng guardrail</h3>
+        <p class="goal">Route mới phục vụ đúng trong bản đóng gói; có test chống regression.
+          Giao diện chưa đổi gì.</p>
+        <ul class="tasks">
+          <li><code>trailingSlash: true</code> vào <code>next.config.mjs</code>.</li>
+          <li>Sửa catch-all daemon: <code>req.path</code> bắt đầu <code>/_next/</code> hoặc kết thúc
+            <code>.txt</code> → <strong>404</strong>, không sendFile. Next 16 sinh payload RSC cho điều
+            hướng client; nếu catch-all trả HTML 200 cho payload miss thì điều hướng client hỏng trong khi
+            test curl HTML vẫn xanh.</li>
+          <li>Tạo <strong>một</strong> route con thật để kiểm chứng — <code>(shell)/changes/page.tsx</code>.
+            <strong>Tuyệt đối không tạo <code>(shell)/page.tsx</code></strong> (xem §2.1).</li>
+          <li><code>test-route-serving.mjs</code>: build → chạy daemon với <code>ACAD_WEB_DIR</code> → curl
+            <code>/changes</code> và <code>/changes/</code> → assert <code>data-screen</code>; assert
+            <code>out/index.html</code> mang <code>data-screen</code> đúng với giai đoạn hiện tại;
+            assert payload <code>.txt</code> trả <code>text/plain</code>; assert
+            <code>/_next/khong-ton-tai.js</code> trả 404.</li>
+          <li><code>check-css-collisions.mjs</code> so trên <em>selector chuẩn hoá</em> (§2.3).</li>
+          <li><code>check-import-boundaries.mjs</code> — script node ~30 dòng, không dựng ESLint
+            (<code>@acad/web</code> hiện không có config lint nào).</li>
+          <li><strong>Viết lại</strong> <code>test-contract.mjs</code>: hiện nó đọc 6 file theo path cứng
+            <span class="src">dòng 7-12</span> và assert trên chuỗi nội dung. Các assert dạng phủ định
+            (<code>!includes</code>) sẽ <em>tự động xanh</em> khi code chuyển sang file khác — tức bất biến
+            an toàn âm thầm biến mất. Đổi sang glob <code>app/**</code> + <code>features/**</code>, nối
+            thành một chuỗi, assert trên đó.</li>
+          <li>Ghi vào <code>DEVELOPMENT.md</code>: origin guard chỉ cho <code>127.0.0.1:8788</code>,
+            <code>localhost:8788</code>, <code>:3000</code>, <code>ACAD_WEB_URL</code> — mở <code>out/</code>
+            bằng <code>file://</code> sẽ 403 <code>origin_not_allowed</code> cho mọi request.</li>
+        </ul>
+        <div class="gate"><span class="lbl">Nghiệm thu — chạy được</span>
+<pre><code>pnpm --filter @acad/web build
+test -f out/changes/index.html
+ACAD_WEB_DIR=$PWD/out pnpm --filter @acad/daemon start &
+curl -sL 127.0.0.1:8788/changes/ | grep -c 'data-screen="changes"'   # = 1
+curl -so /dev/null -w '%{http_code}' 127.0.0.1:8788/_next/x.js       # = 404
+node scripts/check-css-collisions.mjs && node scripts/test-route-serving.mjs</code></pre>
+        </div>
+      </div>
+    </li>
+
+    <li class="ph">
+      <div class="id"><b>1</b>GĐ</div>
+      <div>
+        <h3><span class="est">3–4 ngày</span>Dọn va chạm CSS — giao diện KHÔNG đổi</h3>
+        <p class="goal">Điều kiện nghiệm thu chính: sau giai đoạn này giao diện phải <em>giống hệt</em> hiện tại.</p>
+        <ul class="tasks">
+          <li>Đổi tên phía legacy: <code>--bg</code>→<code>--legacy-bg</code> (1),
+            <code>--accent</code>→<code>--legacy-accent</code> (40), <code>.app</code>,
+            <code>.modal</code>, <code>.field</code>, <code>.empty</code>, <code>.main</code> → tiền tố
+            <code>legacy-</code>. <strong>Bỏ</strong> việc đổi <code>td.check</code> — đã scope, không xung đột.</li>
+          <li>Gate <code>body</code>: legacy <code>body{…}</code> →
+            <code>body[data-legacy="1"]{…}</code>; 3 rule element còn lại
+            (<code>select</code>, <code>textarea</code>, <code>code</code>) prefix
+            <code>.legacy-app</code>. <code>html,body{height}</code> và <code>*{box-sizing}</code> giữ
+            global ở cả hai file (trùng nhau vô hại).</li>
+          <li>Xoá dead code đã xác minh: <code>.chips</code>/<code>.chip</code>, <code>.log</code>,
+            gộp 3 <code>@keyframes</code> xoay trùng.
+            <strong>Không xoá</strong> <code>.review-sheet-grid.views-2/4/16</code> — dùng qua template
+            literal <code>`views-${n}`</code>.</li>
+          <li>Copy <code>app.css</code> → <code>design-system.css</code>, gate reset bằng
+            <code>body[data-ds]</code>, mở rộng selector khoá <code>[data-write]</code> cho 3 trạng thái thiếu.</li>
+        </ul>
+        <div class="callout" data-kind="warn">
+          <span class="lbl">Một PR duy nhất</span>
+          <p>Đổi tên legacy và thêm <code>design-system.css</code> phải nằm <strong>cùng một PR</strong>.
+            Tách ra sẽ tạo một giai đoạn giao diện lai sáng-trên-tối không đọc được.</p>
+        </div>
+        <div class="gate"><span class="lbl">Nghiệm thu</span>
+          <ul>
+            <li><code>grep -c "var(--accent)" globals.css</code> = 0 và <code>var(--bg)</code> = 0</li>
+            <li>Với <em>mỗi</em> class/token đổi tên: số usage sau = số usage trước (script đếm trong
+              <code>globals.css</code> + <code>*.tsx</code>) — đây là thứ đo được, thay cho “khác một pixel”</li>
+            <li>Ở route <code>(shell)</code>: <code>getComputedStyle(document.body).backgroundColor</code>
+              = <code>rgb(245,245,245)</code></li>
+            <li>Checklist 7 ảnh chụp panel trước/sau, có người ký</li>
+          </ul>
+        </div>
+      </div>
+    </li>
+
+    <li class="ph">
+      <div class="id"><b>2A</b>GĐ</div>
+      <div>
+        <h3><span class="est">4–6 ngày</span>Gộp luồng ghi về một bản duy nhất</h3>
+        <p class="goal">Xoá 3 bản sao nguy hiểm nhất <em>trước khi</em> di chuyển bất cứ file nào.
+          Giao diện vẫn không đổi.</p>
+        <ul class="tasks">
+          <li><code>features/staged-ops/types.ts</code> — <code>StagedOp</code>, <code>OpState</code> 6 giá trị,
+            <code>source</code> 6 giá trị.</li>
+          <li><code>guards.ts</code> sinh từ <code>extract-guard-codes.mjs</code> (§2.5), không chép tay;
+            ánh xạ <code>selection_empty→no_match</code>,
+            <code>target_ambiguous|ambiguous_target→ambiguous_target</code>.</li>
+          <li><code>prepareApplyReject.ts</code> + <code>ConfirmSheet.tsx</code> — một bản duy nhất, có
+            checkbox ack và banner “không hoàn tác”.</li>
+          <li>Thay 3 bản cũ bằng lời gọi module mới, <strong>không đổi hành vi</strong>
+            <span class="src">page.tsx:529-674 · DrawingInfoPanel.tsx:1073-1201 · DrawingStandardsPanel.tsx:1154-1282</span></li>
+          <li>Gộp 4 bản <code>responseJson</code>/<code>responseRecord</code> → <code>lib/daemon/client.ts</code>;
+            xoá <code>app/json.ts</code>.</li>
+          <li><code>features/acad-connection/events.ts</code> — event bus; <code>useDocs()</code> thay 3 fetch
+            (trừ ngoại lệ ở §2.5); xoá <strong>3</strong> <code>refreshToken</code>,
+            <strong>giữ</strong> <code>refreshEventAt</code>.</li>
+        </ul>
+        <div class="gate"><span class="lbl">Nghiệm thu</span>
+          <ul>
+            <li><code>grep -rc "confirmed: true" app/ features/</code> = <strong>1</strong> (hiện 3)</li>
+            <li><code>new EventSource</code> = 1 <em>và</em> file chứa nó là
+              <code>features/acad-connection/events.ts</code> — tiêu chí “= 1” đơn thuần đã đúng sẵn nên
+              không đo được gì</li>
+            <li><code>/api/acad/docs</code> = 1</li>
+            <li>Contract test: 33 mã guard đều có trạng thái; <code>ConfirmSheet</code> chứa cụm
+              “không hoàn tác”; không <code>data-write</code> trên <code>&lt;button&gt;</code> thô</li>
+            <li>Thủ công: gán lại layer từ Thông tin bản vẽ vẫn hiện sheet đầy đủ và ghi được</li>
+          </ul>
+        </div>
+      </div>
+    </li>
+
+    <li class="ph">
+      <div class="id"><b>2B</b>GĐ</div>
+      <div>
+        <h3><span class="est">4–6 ngày</span>Chat sang id-based</h3>
+        <p class="goal">Tách khỏi 2A để có thể trượt mà không chặn GĐ3. Làm <em>khi chat còn đứng yên
+          trong <code>page.tsx</code></em> — không bao giờ cùng PR với việc di chuyển nó.</p>
+        <ul class="tasks">
+          <li><strong>Trước tiên:</strong> viết 5–8 test cho <code>decide</code>/<code>decideLispProposal</code>/
+            <code>patchLast</code>. Hiện <em>không có test nào</em> phủ chat; đổi ~68 điểm gọi không lưới
+            an toàn là đánh bạc.</li>
+          <li>Gán <code>id</code> cho mọi message do handler tạo (<code>role:"function"</code>,
+            <code>"preview"</code>) qua một factory duy nhất; đổi
+            <code>decide(pvMsgIdx)</code>/<code>decideLispProposal(msgIdx)</code>/<code>patchLast()</code>
+            sang <code>patchMessage(id,…)</code>; <code>key={m.id}</code> không fallback index.</li>
+        </ul>
+        <div class="gate"><span class="lbl">Nghiệm thu</span>
+          <ul>
+            <li><code>grep -c "patchLast("</code> = 0 · <code>grep -c "messagesRef.current\["</code> = 0</li>
+            <li>Contract test: mọi message <code>role:"function"|"preview"</code> có trường <code>id</code></li>
+          </ul>
+        </div>
+      </div>
+    </li>
+
+    <li class="ph">
+      <div class="id"><b>3</b>GĐ</div>
+      <div>
+        <h3><span class="est">6–9 ngày</span>Shell dùng chung</h3>
+        <p class="goal">Shell mẫu chạy được ở route <code>(shell)</code>; route <code>/</code> legacy nguyên vẹn.</p>
+        <ul class="tasks">
+          <li><code>icons.tsx</code> — port <strong>27</strong> glyph <span class="src">js/app.js:20</span>;
+            <code>nav.ts</code> — NAV 5 nhóm/14 mục + 15 lệnh palette.</li>
+          <li><code>AppShell</code> (grid 3 hàng, ghi + <strong>cleanup</strong> <code>data-*</code>,
+            3 provider hẹp, ⌘K/⌘B/Esc bỏ qua khi focus ở input) · <code>Titlebar</code> ·
+            <code>Rail</code> · <code>Statusbar</code> · <code>ActivityDrawer</code> · <code>CommandPalette</code>.</li>
+          <li><code>StagedProvider</code> + <code>acad.staged.v1</code>; <code>useAcadState()</code> suy
+            6 trạng thái từ <code>/health</code>+<code>/status</code>; 4 khoá lưu trữ bọc try/catch
+            (app hiện dùng <strong>0</strong> khoá).</li>
+          <li><strong>Chỉ 5 primitive</strong>: <code>Button</code> (có prop <code>write</code>, §2.4),
+            <code>Tag</code>, <code>Panel</code>, <code>Modal</code>, <code>GuardStrip</code>.
+            20 primitive còn lại tạo khi màn hình thứ hai cần.</li>
+          <li><code>useDrawTarget</code> phải giữ lựa chọn đặc biệt <code>""</code> = file
+            <code>.work</code> <span class="src">page.tsx:1287-1298</span> — đây là đường duy nhất vẽ được
+            khi AutoCAD chưa mở bản vẽ nào. Hiển thị thành doctab ghim đầu dãy, nhãn “File .work
+            (không mở trong AutoCAD)”.</li>
+        </ul>
+        <div class="gate"><span class="lbl">Nghiệm thu</span>
+          <ul>
+            <li>Rail thu/mở bằng ⌘B, persist qua reload, khoá cứng &lt;900px; reload không nháy</li>
+            <li>⌘K mở palette, ↓↑/Enter/Esc, 15 lệnh điều hướng đúng</li>
+            <li><strong>Focus nút ghi bằng Tab, bấm Enter khi <code>data-acad="off"</code> → không có
+              network request</strong> (không phải chỉ đổi attribute trong DevTools)</li>
+            <li>Điều hướng shell → legacy → shell: <code>body</code> không còn attribute thừa</li>
+            <li>React DevTools Profiler: một nhịp SSE không re-render toàn cây</li>
+          </ul>
+        </div>
+      </div>
+    </li>
+
+    <li class="ph">
+      <div class="id"><b>4</b>GĐ</div>
+      <div>
+        <h3><span class="est">7–10 ngày</span>Hai thư viện — PR mẫu chốt convention</h3>
+        <p class="goal">Hai màn rủi ro thấp, tự chứa, để chốt cách làm trước khi đụng màn khó.</p>
+        <ul class="tasks">
+          <li><strong><code>/library/blocks</code></strong> ← <code>BlockLibraryPanel.tsx</code> (896 dòng).
+            <strong>Giữ 5 trạng thái sync</strong> của app (<code>synced</code>/<code>cad_only</code>/
+            <code>outdated</code>/<code>conflict</code>/app-only) — không ép xuống 3 như mẫu, app mạnh hơn.
+            Vẽ 3 kết cục insert thành state riêng. Modal “chuyển sang cửa sổ AutoCAD chỉ điểm chèn” +
+            cảnh báo 120 s. Port nút <code>btn-sources</code> (quản lý thư mục nguồn — endpoint
+            <code>/blocks/sources</code> đã có và đã được gọi). Xoá 281 dòng
+            <code>blocklib-*</code> khỏi <code>globals.css</code>.</li>
+          <li><strong><code>/library/lisp</code></strong> ← <code>LispLibraryPanel.tsx</code> (1.008) +
+            card duyệt đang nằm trong chat. <strong>Gom 2 nơi về 1.</strong>
+            <strong>Giữ nguyên <code>askAgent()</code></strong> — budget 180 KB, cắt đôi 12 lần, chống
+            prompt-injection; đây là code tốt nhất repo. Thêm <code>.countdown</code> 2 phút thật
+            (backend trả <code>expiresInMs:120000</code>, app hiện <em>không đếm ngược</em> → người dùng
+            bấm nạp lúc token đã chết). Hiện rõ radio <code>analysisCoverage</code> (app đang tự phân loại
+            ngầm). <em>Port</em> — không phải thêm mới — nút <code>importAutoCADSupportPaths</code>.
+            Xoá 407 dòng <code>lisp-*</code>.</li>
+        </ul>
+        <div class="gate"><span class="lbl">Nghiệm thu</span>
+          <ul>
+            <li>Unit test hàm phân loại kết cục insert: 3 payload mẫu (thành công /
+              <code>BlockLibraryConflictError</code> / phản hồi thiếu định nghĩa mới) → 3 state khác nhau.
+              <em>Không</em> dùng <code>BOM-TANK</code>/<code>BOM-ELBOW</code> — đó là dữ liệu giả của
+              mockup, không tồn tại trong app hay fixture nào.</li>
+            <li>Token LISP đếm ngược thật; hết hạn thì nút disable kèm lý do</li>
+            <li><code>globals.css</code> giảm ≥ 688 dòng · <code>test-route-serving.mjs</code> PASS cho 2 route</li>
+          </ul>
+        </div>
+      </div>
+    </li>
+
+    <li class="ph">
+      <div class="id"><b>5</b>GĐ</div>
+      <div>
+        <h3><span class="est">8–12 ngày</span>Khung bản vẽ — xây mới lớp tương tác</h3>
+        <p class="goal">Tách riêng vì đây <em>không</em> phải “thay vỏ”. Viewer hiện là trình <em>xem</em>
+          tệp <code>.cadweb</code>: nạp ZIP, verify FlatBuffers, render, hiện metadata. Không có
+          hit-testing, không selection state, không tool pan/zoom.</p>
+        <ul class="tasks">
+          <li><strong>Hit-test entity trên canvas WebGL2</strong> — transform screen→world, spatial index
+            (grid/R-tree) trên <code>CadWebEntity[]</code>, selection state, highlight pass.
+            Code mới hoàn toàn, không tái sử dụng được gì.</li>
+          <li>4 tool mode pan / zoom-in / zoom-out / fit + phím tắt <kbd>F</kbd> và <kbd>H</kbd> — thẻ
+            “Phím tắt” ở Tổng quan quảng cáo 4 phím này, nếu không làm thì thẻ đó nói dối.</li>
+          <li><strong>Giữ nguyên canvas WebGL2</strong> và <code>CadWebViewerPanel.module.css</code>
+            — chỉ sửa để tiêu thụ token design system, giữ riêng 6 token <code>--viewer-*</code> tối làm
+            “viewport chrome”. Canvas CAD tối là quyết định thiết kế hợp lệ, không phải nợ. Hoà CSS Module
+            vào global là xoá một lớp cô lập đã có để đổi lấy đúng một chỉ số đếm dòng.</li>
+          <li>Vỏ 3 cột; layer pane + hint “chỉ ẩn trong khung xem, không có endpoint bật/tắt layer”;
+            inspector 6 hàng lấy từ <strong>snapshot <code>.cadweb</code></strong> (không phải payload bridge).
+            <code>sourceHandle</code> là optional → phải có state “snapshot không mang handle → nút ‘Chọn
+            trong AutoCAD’ và ‘Sao chép handle’ disable kèm lý do”.</li>
+          <li>Live-query 4 truy vấn (app hiện chỉ có <code>selection</code>); bàn giao ngữ cảnh sang
+            <code>/assistant</code> qua <code>sessionStorage["acad.askContext"]</code>; modal “Nạp snapshot”
+            + banner 7 entity không hỗ trợ; <code>.revstrip</code> gắn <code>.needs-backend</code>.</li>
+        </ul>
+        <div class="callout">
+          <span class="lbl">Đừng xoá nhầm — đây là nguyên liệu, không phải rác</span>
+          <p><code>cadweb-revision-recovery.ts</code> (340 dòng, 0 importer production),
+            <code>cadweb-viewer-state.ts</code> (183 dòng) và 4 request type worker chưa dùng
+            (<code>loadSnapshot</code>/<code>applyDelta</code>/<code>resetToSnapshot</code>/<code>reset</code>)
+            chính là pipeline cho <code>.revstrip</code>. Năng lực đã build xong, chỉ thiếu UI kích hoạt.</p>
+        </div>
+      </div>
+    </li>
+
+    <li class="ph">
+      <div class="id"><b>6</b>GĐ</div>
+      <div>
+        <h3><span class="est">11–15 ngày</span>Thông tin bản vẽ + tách Kiểm tra / Tiêu chuẩn</h3>
+        <p class="goal">Ba route từ hai file lớn nhất repo (1.841 + 2.452 dòng).</p>
+        <ul class="tasks">
+          <li><strong><code>/drawing-info</code></strong> — 7 panel chỉ đọc, đánh số nhóm trường 1–18,
+            histogram entity, cây NOD mở/đóng, guardstrip 5 điều kiện tính động (kèm ngưỡng
+            <code>selection_too_large</code> = 5.000 đối tượng, tiền-kiểm).
+            <strong>Giữ nguyên</strong> logic race <code>snapshotCollectedAt</code> vs
+            <code>refreshEventAt</code> <span class="src">:856-862</span> — tinh vi nhất codebase.
+            <strong>Xoá được</strong> 3 ref cache thủ công <span class="src">:764-766</span>: chúng tồn tại
+            chỉ vì panel không unmount; thành route thì unmount thật.</li>
+          <li><strong><code>/review</code></strong> — chẻ phần scan khỏi <code>DrawingStandardsPanel</code>.
+            <strong>Xoá <code>scopeMatches()</code></strong> <span class="src">:391-399</span>: nó lọc issue
+            vào tab bằng <em>regex tiếng Việt trên chuỗi tự do</em>
+            (<code>/frame|paper|scale|khung|tỷ lệ|ty le/</code>) — backend đổi một chữ là issue biến mất
+            im lặng. Thay bằng <strong>bảng tra đẳng thức trên <code>issue.scope</code> với đúng 6 hằng số
+            của engine</strong>: <code>unit</code>→Đơn vị, <code>layer</code>→Layer,
+            <code>dimstyle</code>+<code>dim-row</code>→Kích thước, <code>frame</code>→Khung,
+            <code>mapping-required</code>→Đối tượng. Không regex, không <code>includes</code>.
+            Lưu ý <code>frame-unmeasurable</code> là <em>tiền tố của <code>issue.id</code></em>, không phải
+            scope. Thêm thanh phiên quét (<code>scanId</code>), luồng <code>dimBaseHandle</code>,
+            confirm sheet + banner “phiên quét sẽ bị huỷ”.</li>
+          <li><strong><code>/standards</code></strong> — 5 section editor ánh xạ <strong>6</strong> loại issue;
+            savebar sticky; sửa copy “412”→<strong>409</strong> (<code>StandardsConflictError</code>);
+            modal conflict không có ghi đè cưỡng bức; <strong>giữ</strong> <code>MUTATING_ACTIONS</code> 9
+            action confirm và <code>catalogGuard</code>. Nút <em>Xoá hồ sơ</em>
+            (<code>DELETE /profiles/:id</code>) — grep xác nhận UI hiện <strong>chưa có</strong>, đây là
+            việc thêm mới thật.</li>
+        </ul>
+        <div class="gate"><span class="lbl">Nghiệm thu</span>
+          <ul>
+            <li>Quét → chọn 2 nhóm sửa → chuẩn bị → <strong>2 op</strong> trong <code>acad.staged.v1</code></li>
+            <li>Sửa hồ sơ đang active → lưu → version +1; sửa hồ sơ hệ thống → modal conflict, không nút force</li>
+            <li><code>grep -c "scopeMatches"</code> = 0</li>
+            <li>Contract test: tập <code>scope:"…"</code> trích từ <code>standardsEngine.ts</code> =
+              tập 6 hằng số trong <code>features/review/scopes.ts</code></li>
+            <li><code>globals.css</code> ≤ 1.949 dòng</li>
+          </ul>
+        </div>
+      </div>
+    </li>
+
+    <li class="ph">
+      <div class="id"><b>7</b>GĐ</div>
+      <div>
+        <h3><span class="est">12–16 ngày</span>Thay đổi · Bóc tách · Kết nối</h3>
+        <p class="goal">Ba màn không cần backend mới. <code>/changes</code> là trục xoay của cả sản phẩm.</p>
+        <div class="callout" data-kind="stop">
+          <span class="lbl">Giới hạn phải trung thực — và nghiêm hơn bản nháp thừa nhận</span>
+          <p>Backend có <strong>6 cơ chế staged rời rạc</strong>, id không dùng chung, 5/6 sống trong
+            <code>Map</code> RAM, không cái nào persist qua restart daemon, và không có API liệt kê tất cả.
+            <code>/changes</code> vì vậy là <strong>aggregator phía client</strong> đọc
+            <code>acad.staged.v1</code>.</p>
+          <p><strong>Hệ quả nặng hơn:</strong> <code>/blocks/insert</code> và <code>/bomtable</code> là
+            <em>một pha</em>. Một “op” staged cho hai verb đó <strong>không tồn tại phía server</strong> —
+            nó chỉ là ý định trong localStorage, và bấm “Xác nhận &amp; ghi” sẽ ghi ngay, không có
+            prepared state nào để đối chiếu. Đưa chúng vào hàng chờ là biến <code>/changes</code> thành
+            một cái nút lệnh trì hoãn được hoá trang thành hàng chờ duyệt.</p>
+          <p><strong>Cho tới khi có registry thật (§6 P0-1):</strong> <code>/changes</code> chỉ nhận op có
+            prepared id thật từ server. <code>blocks/insert</code> và <code>bomtable</code> giữ một pha,
+            confirm tại màn hình nguồn, nhãn ghi rõ “ghi ngay khi xác nhận, không qua hàng chờ”.</p>
+        </div>
+        <ul class="tasks">
+          <li><strong><code>/changes</code></strong> — master list + filter + 6 <code>.opstate</code>;
+            proposal sheet 7 khối; <strong>gộp <code>DiffSvg</code></strong>
+            <span class="src">page.tsx:2150-2173</span> làm khối diff hình học before/after — thứ mẫu
+            <em>không</em> có; khối chết cho op lệch <code>baseRevision</code> (cả 2 nút đều →
+            <code>rejected</code>, không bao giờ retry cùng id); modal báo cáo sau ghi có
+            <code>skippedIssueIds[]</code> và nút “Mở kết quả trong AutoCAD” (chuỗi
+            <code>/export</code>→<code>/open</code> hiện nằm cuối <code>page.tsx</code>, chưa được gán route
+            nào — đây là đường duy nhất đưa kết quả sandbox ra AutoCAD).
+            Banner: “hàng chờ mất khi restart daemon” <em>và</em> “app không hỏi được máy chủ thao tác nào
+            còn sống — danh sách này là ghi nhớ phía trình duyệt”.</li>
+          <li><strong><code>/takeoff</code></strong> — 2 bảng + dòng tổng; banner phạm vi quét (chỉ layer
+            <code>^P-</code>/<code>^DCCD</code>/<code>^N-T</code>/chứa <code>PIPE|DUCT</code> — A-WALL bị bỏ
+            hoàn toàn); banner giải thích DN <code>?</code>; ghi rõ “bộ đếm block không đọc attribute,
+            không trả handle”; xuất CSV client-side tái dùng <code>downloadCsv</code> (BOM UTF-8) từ
+            <code>DocumentReviewPanel.tsx:377-385</code>, nhãn ghi rõ “xuất từ dữ liệu đang hiển thị”.</li>
+          <li><strong><code>/settings</code></strong> — gom <strong>3 nơi rời rạc</strong> (modal health +
+            select agent ở topbar + nhóm ObjectARX đang lộ thiên trong panel chức năng) thành 5 tab.
+            2 capability bị backend chặn cứng (<code>ed.selection_control</code>, <code>ui.plot</code>) phải
+            disable tiền-kiểm kèm lý do. Thêm panel <em>Giới hạn &amp; chi phí</em> (3 hàng văn bản thuần,
+            là nơi ghi ngưỡng cắt payload agent và lý do cột chi phí hiện <code>—</code>), nút
+            <em>Quét lại CLI</em> → <code>GET /api/agents</code>.
+            <code>.needs-backend</code> cho: 3 check <code>offline</code>/<code>signing</code>/<code>quiescent</code>,
+            khối “Độ ổn định 60 phút”, chip “báo chi phí”, 4/5 bước probe, khối MCP, nút huỷ build.
+            <strong>Thêm</strong> 3 check backend có mà mẫu thiếu: <code>sdk</code>, <code>clang</code>,
+            <code>agents</code>.</li>
+        </ul>
+        <div class="gate"><span class="lbl">Nghiệm thu</span>
+          <ul>
+            <li>Tạo op từ <code>/drawing-info</code> → thấy ở <code>/changes</code> → xác nhận → modal báo cáo</li>
+            <li>Op lệch revision hiện khối chết, cả 2 nút đều dẫn tới <code>rejected</code></li>
+            <li>Mọi op trong <code>acad.staged.v1</code> có <code>source</code> ∈ 6 giá trị,
+              <code>sourceId</code> không rỗng, và <strong>không op nào có
+              <code>source ∈ {blocks, bomtable}</code></strong></li>
+            <li>CSV mở được trong Excel với tiếng Việt đúng · ObjectARX không còn ở panel chức năng</li>
+          </ul>
+        </div>
+      </div>
+    </li>
+
+    <li class="ph">
+      <div class="id"><b>8</b>GĐ</div>
+      <div>
+        <h3><span class="est">chưa ước lượng</span>Xuất bản · Xử lý thư mục · CadWeb · Tổng quan</h3>
+        <p class="goal">Phạm vi phụ thuộc <strong>D3 / D4 / D5</strong>. Không chốt thì giai đoạn này
+          <em>không có phạm vi</em> và tổng ước lượng dừng ở 83–118 ngày.</p>
+        <ul class="tasks">
+          <li><strong><code>/publish</code></strong> — vùng rủi ro cao nhất. Whitelist
+            <strong>15</strong> field <span class="src">plotPdf.ts:19-34</span>; field lạ = 400. Phải cắt:
+            dpi, tỉ lệ 1:100/1:50/1:200, vùng in “Cửa sổ”, hint auto-suffix, nút huỷ job, nút “Mở thư mục”
+            (không có endpoint reveal). Nắn hướng giấy thành <code>rotation</code> 0/90/180/270.
+            Banner phải sửa: mẫu bảo tệp DWG đóng thì “đi qua Xử lý thư mục” — <em>nhưng Xử lý thư mục
+            cũng không in được</em>. Câu đúng: “Không in được tệp DWG đóng trên macOS —
+            <code>-PLOT</code> headless crash. Đây là giới hạn của AutoCAD, không phải tính năng chưa build.”</li>
+          <li><strong><code>/batch</code></strong> — phương án tối thiểu: bỏ ô thư mục, chọn nhiều tệp thủ
+            công qua <code>/pick</code> (khớp <code>dwgs[]</code> mà <code>/mep/:recipe</code> đã nhận).
+            <strong>Cắt</strong> checkbox “Gồm cả thư mục con” — <code>readdirSync</code> non-recursive;
+            giữ lại và bật mặc định là mục nguy hiểm nhất cả kế hoạch (kết hợp <code>titlefix</code> ghi đè
+            không backup, không undo → im lặng bỏ sót cả cây thư mục).
+            <strong>Giữ kỷ luật của mẫu</strong> về danh sách recipe: mẫu chỉ liệt kê 1 recipe đã đối chiếu
+            được với source và ghi rõ phần còn lại nạp động — đừng thay hành vi tốt đó bằng hardcode.
+            <strong>Giữ</strong> form động 6 kiểu field, native picker, và 2 renderer kết quả
+            <code>IndexTable</code>/<code>RecipeTables</code>.</li>
+          <li><strong><code>/cadweb</code></strong> — banner “sync mặc định TẮT, cần 5 biến môi trường,
+            <em>và chưa có máy chủ nào nhận</em>” (<code>createSyncHttpHandler</code> chỉ được gọi trong
+            test). Rút 9 bộ đếm xuống <strong>4</strong> map thật; rút bảng snapshot per-drawing xuống
+            <em>một</em> nút “Thử lại toàn bộ” (<code>/sync/retry</code> là global).</li>
+          <li><strong><code>/</code> Tổng quan</strong> — trong <em>cùng commit</em>:
+            <code>git mv app/page.tsx app/legacy/page.tsx</code> + tạo <code>(shell)/page.tsx</code> +
+            sửa cầu nối. <strong>Giữ</strong> cột Revision (đã có trong <code>/docs</code>);
+            <strong>cắt</strong> cột “Bộ môn” (không endpoint nào trả discipline — suy từ tiền tố tên tệp
+            là đoán mò); cột “Lưu” và “Snapshot khung xem” phụ thuộc D6.
+            Metric phát hiện đổi copy thành “kết quả quét gần nhất <em>trong phiên này</em>” + trạng thái
+            rỗng “Chưa quét lần nào”. Thẻ phím tắt <strong>sinh động từ registry</strong>
+            <code>CommandPalette</code>, không viết tay — để nó không thể lệch.</li>
+        </ul>
+        <div class="gate"><span class="lbl">Nghiệm thu — 3 gate chạy được, thay cho câu định tính</span>
+          <ul>
+            <li><code>check-endpoint-claims.mjs</code>: fail nếu có chuỗi <code>"/api/</code> nào ngoài
+              <code>lib/daemon/endpoints.ts</code></li>
+            <li>Checklist ký tên: từng <code>data-od-id</code> của <code>publish.html</code> /
+              <code>batch.html</code> / <code>cadweb.html</code> / <code>index.html</code> (26 id, lấy bằng
+              grep) được đánh dấu <em>có endpoint X</em> | <em>.needs-backend</em> | <em>đã cắt</em> —
+              không id nào để trống</li>
+            <li><code>grep -rn "needs-backend" app/ features/ | wc -l</code> ≥ 14</li>
+          </ul>
+        </div>
+      </div>
+    </li>
+
+    <li class="ph">
+      <div class="id"><b>9</b>GĐ</div>
+      <div>
+        <h3><span class="est">8–12 ngày</span>Trợ lý AI + xoá route legacy</h3>
+        <p class="goal">Chat từ trung tâm sản phẩm trở thành một trong 14 mục.</p>
+        <ul class="tasks">
+          <li><strong>Dựng lại cột trái <code>thread-list</code></strong> — danh sách hội thoại + ô tìm +
+            nút hội thoại mới; nguồn <code>GET /api/conversations</code>, mở hội thoại dùng
+            <code>/:id/messages</code> + <code>reconcileLispProposals</code>; port nguyên
+            <code>conversationLoadRef</code> chống race và <code>viewEpochRef</code> (loại event SSE của
+            stream cũ khi đổi hội thoại giữa chừng). <em>Bản nháp bỏ quên cả vùng này khi xoá
+            <code>page.tsx</code>.</em></li>
+          <li>Cột phải <code>context-pane</code>: chọn bản vẽ (gồm lựa chọn <code>.work</code>) · scope
+            segmented · guardstrip quyền ghi · “không có công tắc bật/tắt quyền ghi” · nút sang
+            <code>/changes</code>. Nút <em>Đính kèm bộ chọn</em> →
+            <code>GET /selection/current</code>, rỗng thì disable kèm lý do — đây là chiều ngược của
+            <code>acad.askContext</code>. Chip agent chỉ <em>hiển thị</em> và deep-link tới
+            <code>/settings#ai</code>, không dựng select thứ hai.</li>
+          <li><strong>Giữ</strong> question-form protocol, <code>MEP_SUGGEST</code>, lịch sử persist.
+            <strong>Cắt</strong> chip evidence kèm handle — <code>/livebom</code> không trả handle, người
+            dùng gõ <code>SELECT &lt;handle&gt;</code> sẽ chọn nhầm đối tượng.</li>
+          <li><strong>Phân tán</strong> các luồng còn lại khỏi chat: <code>runRaw</code>/<code>runFix</code>
+            → <code>/settings</code>, <code>runFn</code> → <code>/batch</code>,
+            <code>querySelection</code> → <code>/workspace</code>, preview/decide → <code>/changes</code>.</li>
+          <li>Xoá <code>app/legacy/page.tsx</code>, cầu nối 2 chiều, và 205 dòng chat shell trong
+            <code>globals.css</code>.</li>
+        </ul>
+        <div class="gate"><span class="lbl">Nghiệm thu</span>
+          <ul>
+            <li><code>grep -rc "setMessages" app/legacy/</code> = 0 (file đã xoá) ·
+              <code>grep -c "setMessages" features/assistant/</code> ≤ 8 — ngưỡng cứng, không phải
+              “giảm rõ rệt”</li>
+            <li>Hội thoại cũ nạp lại được; preview draw T1: gõ text → stage → thấy op ở
+              <code>/changes</code> → apply</li>
+          </ul>
+        </div>
+      </div>
+    </li>
+
+    <li class="ph">
+      <div class="id"><b>10</b>GĐ</div>
+      <div>
+        <h3><span class="est">3–5 ngày</span>Xoá <code>globals.css</code>, hoàn tất</h3>
+        <ul class="tasks">
+          <li>Xử lý 2 panel prototype theo <strong>D2</strong>. Nếu cắt: phải đồng thời gỡ
+            <code>test-preconstruction.test.ts</code> khỏi script <code>test:contract</code> trong
+            <code>package.json</code> <em>và</em> dòng <code>readFileSync(PreconstructionPanel.tsx)</code>
+            trong <code>test-contract.mjs</code> — nếu không, <code>pnpm test:contract</code> ném ENOENT ở
+            mọi giai đoạn sau.</li>
+          <li>Xoá <code>globals.css</code>, đổi <code>design-system.css</code> → <code>globals.css</code>,
+            gỡ tiền tố <code>body[data-ds]</code>/<code>body[data-legacy]</code>.</li>
+          <li>Bật rule CI vĩnh viễn: cấm hex literal trong file CSS ngoài khối <code>:root</code> —
+            <strong>loại trừ <code>*.module.css</code></strong>.</li>
+          <li>Bổ sung token còn thiếu của mẫu: shadow, z-index, <code>color-scheme</code>; khối dark mode
+            nếu chọn D1(b).</li>
+          <li>Dọn rác: chỉ <code>library.html.artifact.json</code> (mồ côi thật —
+            <code>library.html</code> đã tách làm hai), <code>critique.json</code>, <code>plot.log</code>.
+            <strong>Giữ 14 file <code>.artifact.json</code> còn lại</strong> — chúng là manifest xuất bản
+            cho phép cập nhật trang đã publish tại cùng URL, xoá là mất khả năng redeploy in-place cho
+            chính bộ mẫu thiết kế đang làm chuẩn đối chiếu.</li>
+        </ul>
+        <div class="gate"><span class="lbl">Nghiệm thu</span>
+          <ul>
+            <li><code>globals.css</code> ~850–900 dòng · <code>grep -oE '#[0-9a-f]{3,8}' | sort -u | wc -l</code> ≤ 10</li>
+            <li>Toàn bộ 14 route chạy · <code>test-route-serving.mjs</code> PASS</li>
+          </ul>
+        </div>
+      </div>
+    </li>
+  </ol>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Giai đoạn</th><th class="num">Ngày công</th><th>Ghi chú</th></tr></thead>
+      <tbody>
+        <tr><td>0 · Blocker &amp; guardrail</td><td class="num">2–3</td><td>gồm viết lại test-contract</td></tr>
+        <tr><td>1 · Dọn CSS</td><td class="num">3–4</td><td></td></tr>
+        <tr><td>2A · Gộp luồng ghi</td><td class="num">4–6</td><td></td></tr>
+        <tr><td>2B · Chat id-based</td><td class="num">4–6</td><td>có thể trượt độc lập</td></tr>
+        <tr><td>3 · Shell</td><td class="num">6–9</td><td></td></tr>
+        <tr><td>4 · Hai thư viện</td><td class="num">7–10</td><td></td></tr>
+        <tr><td>5 · Khung bản vẽ</td><td class="num">8–12</td><td>hit-test là code mới</td></tr>
+        <tr><td>6 · Info + Review/Standards</td><td class="num">11–15</td><td></td></tr>
+        <tr><td>7 · Changes/Takeoff/Settings</td><td class="num">12–16</td><td></td></tr>
+        <tr><td>8 · Publish/Batch/CadWeb/Home</td><td class="num">—</td><td><strong>chờ D3/D4/D5</strong></td></tr>
+        <tr><td>9 · Assistant + xoá legacy</td><td class="num">8–12</td><td></td></tr>
+        <tr><td>10 · Hoàn tất CSS</td><td class="num">3–5</td><td></td></tr>
+        <tr><td><strong>Tổng (không kể GĐ8)</strong></td><td class="num"><strong>68–98</strong></td><td>+ QA chưa tính</td></tr>
+        <tr><td><strong>Tổng có GĐ8 (ước lượng thô)</strong></td><td class="num"><strong>95–140</strong></td><td>backend tính riêng</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ 4 ═══════════════════════════ -->
+<section id="s4">
+  <h2><span class="n">Phần 04</span>Bảng 14 màn hình</h2>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Màn hình</th><th>Trạng thái</th><th>Tái sử dụng</th><th>Việc chính</th><th class="num">GĐ</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Tổng quan</strong> <code>/</code></td>
+          <td><span class="chip" data-sev="chan">chưa có</span></td>
+          <td><code>useDocs()</code>, staged store</td>
+          <td>Giữ cột Revision · cắt cột Bộ môn · metric “trong phiên này” · phím tắt sinh từ registry</td><td class="num">8</td></tr>
+        <tr><td><strong>Khung bản vẽ</strong> <code>/workspace</code></td>
+          <td><span class="chip" data-sev="cao">thiếu lớp tương tác</span></td>
+          <td>canvas WebGL2 + worker (mạnh hơn mẫu)</td>
+          <td>Hit-test + selection + 4 tool là <em>code mới</em>; giữ CSS Module</td><td class="num">5</td></tr>
+        <tr><td><strong>Thông tin bản vẽ</strong> <code>/drawing-info</code></td>
+          <td><span class="chip" data-sev="ok">khớp nhất</span></td>
+          <td>1.841 dòng dùng lại gần hết</td>
+          <td>Histogram · cây NOD · guardstrip động · giữ logic race · xoá 3 ref cache</td><td class="num">6</td></tr>
+        <tr><td><strong>Trợ lý AI</strong> <code>/assistant</code></td>
+          <td><span class="chip" data-sev="tb">thiếu 2 cột</span></td>
+          <td>question-form, persist, viewEpoch (mạnh hơn mẫu)</td>
+          <td>Dựng lại thread-list <em>và</em> context-pane · cắt chip evidence · phân tán 7 luồng</td><td class="num">9</td></tr>
+        <tr><td><strong>Thay đổi</strong> <code>/changes</code> ★</td>
+          <td><span class="chip" data-sev="chan">chưa có</span></td>
+          <td>3 confirm dialog (gộp ở 2A) + <code>DiffSvg</code></td>
+          <td>Aggregator client · sheet 7 khối · khối chết · <em>không nhận op một pha</em></td><td class="num">7</td></tr>
+        <tr><td><strong>Kiểm tra</strong> <code>/review</code></td>
+          <td><span class="chip" data-sev="tb">phải tách</span></td>
+          <td>phần scan của file 2.452 dòng</td>
+          <td>Xoá <code>scopeMatches</code> regex → bảng tra 6 <code>scope</code></td><td class="num">6</td></tr>
+        <tr><td><strong>Bóc tách</strong> <code>/takeoff</code></td>
+          <td><span class="chip" data-sev="tb">có logic, chưa có màn</span></td>
+          <td><code>liveBom</code>, <code>downloadCsv</code></td>
+          <td>2 bảng + 2 banner giới hạn · CSV client-side</td><td class="num">7</td></tr>
+        <tr><td><strong>Xuất bản PDF</strong> <code>/publish</code></td>
+          <td><span class="chip" data-sev="chan">chưa có</span></td>
+          <td>—</td>
+          <td>Cắt 6 phần tử vượt whitelist 15 field · sửa banner sai</td><td class="num">8</td></tr>
+        <tr><td><strong>Xử lý thư mục</strong> <code>/batch</code></td>
+          <td><span class="chip" data-sev="cao">thiếu 4 endpoint</span></td>
+          <td><code>functions.ts</code> 16 chức năng, form động</td>
+          <td>Chọn tệp thủ công · cắt đệ quy · giữ 2 renderer kết quả</td><td class="num">8</td></tr>
+        <tr><td><strong>Thư viện block</strong> <code>/library/blocks</code></td>
+          <td><span class="chip" data-sev="ok">thiếu ít</span></td>
+          <td>5 trạng thái sync (mẫu chỉ 3)</td>
+          <td>3 kết cục insert · modal chỉ điểm · port btn-sources</td><td class="num">4</td></tr>
+        <tr><td><strong>Thư viện LISP</strong> <code>/library/lisp</code></td>
+          <td><span class="chip" data-sev="tb">bị xé đôi</span></td>
+          <td><code>askAgent()</code> chống prompt-injection</td>
+          <td>Gom 2 nơi · countdown 2 phút thật · hiện rõ analysisCoverage</td><td class="num">4</td></tr>
+        <tr><td><strong>Hồ sơ tiêu chuẩn</strong> <code>/standards</code></td>
+          <td><span class="chip" data-sev="tb">phải tách</span></td>
+          <td>phần profile CRUD</td>
+          <td>6 loại issue · sửa copy 412→409 · thêm nút Xoá hồ sơ</td><td class="num">6</td></tr>
+        <tr><td><strong>Kết nối AutoCAD</strong> <code>/settings</code></td>
+          <td><span class="chip" data-sev="tb">rải 3 nơi</span></td>
+          <td>health modal + agent select + ObjectARX</td>
+          <td>Gom 3 nguồn · 7 mục <code>.needs-backend</code> · disable 2 capability bị chặn cứng</td><td class="num">7</td></tr>
+        <tr><td><strong>Đồng bộ CadWeb</strong> <code>/cadweb</code></td>
+          <td><span class="chip" data-sev="chan">chưa có</span></td>
+          <td>— (viewer <em>không phải</em> màn này)</td>
+          <td>Banner “chưa có máy chủ” · rút 9→4 bộ đếm · 1 nút retry global</td><td class="num">8</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ 5 ═══════════════════════════ -->
+<section id="s5">
+  <h2><span class="n">Phần 05</span>Danh sách bỏ</h2>
+
+  <h3>5.1 · Không bao giờ được vẽ ra — UI hứa quá năng lực</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Phần tử</th><th>Lý do</th><th>Rủi ro nếu giữ</th></tr></thead>
+      <tbody>
+        <tr><td><code>/batch</code> “Gồm cả thư mục con” <em>(mặc định BẬT)</em></td>
+          <td><code>readdirSync</code> non-recursive</td>
+          <td><strong>Nguy hiểm nhất danh sách.</strong> Kết hợp <code>titlefix</code> (ghi đè, không backup, không undo) → im lặng bỏ sót cả cây thư mục</td></tr>
+        <tr><td><code>/publish</code> tỉ lệ 1:100 / 1:50 / 1:200</td>
+          <td><code>scale</code> chỉ nhận <code>fit|1:1</code></td>
+          <td>Bản in sai tỉ lệ → <strong>sai kích thước thi công</strong></td></tr>
+        <tr><td><code>/publish</code> select dpi</td><td>không trong whitelist 15 field</td><td>Mọi lần in đều 400 — tính năng chết hoàn toàn</td></tr>
+        <tr><td><code>/publish</code> vùng in “Cửa sổ”</td><td><code>plot_type</code> chỉ <code>extents|layout</code></td><td>Người dùng chỉ cửa sổ rồi in, không tác dụng</td></tr>
+        <tr><td><code>/publish</code> hint “thêm hậu tố tăng dần”</td><td>sai sự thật — không ghi đè = fail</td><td>Tin đã có file thứ 2, thực tế job fail</td></tr>
+        <tr><td><code>/publish</code> nút “Huỷ job”</td><td>không có endpoint</td><td>Job vẫn chiếm phiên AutoCAD</td></tr>
+        <tr><td><code>/drawing-info</code> scope “Theo kiểu đối tượng” + action “Đặt màu theo layer”</td>
+          <td><code>prepare</code> chỉ nhận <code>layer|block|handles</code> và <code>activate-document|select|move-to-layer</code></td>
+          <td>Nút bật lên rồi 400 sau khi người dùng đã tin</td></tr>
+        <tr><td><code>/assistant</code> chip evidence kèm handle</td><td><code>/livebom</code> không trả handle</td><td>Gõ <code>SELECT 3B12</code> trong AutoCAD → chọn nhầm đối tượng</td></tr>
+        <tr><td><code>/</code> cột <strong>Bộ môn</strong></td><td>không endpoint nào trả discipline</td><td>Suy từ tiền tố tên tệp là đoán mò, sai với mọi quy ước đặt tên khác</td></tr>
+        <tr><td><code>/batch</code> bảng “7 tệp + kích thước”</td><td>không có endpoint liệt kê thư mục</td><td>Số bịa trình bày như thư mục thật của người dùng</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>5.2 · Hạ xuống <span class="chip" data-sev="nb">needs-backend</span> — giữ khung, tắt hành động</h3>
+  <p>Dựng component <code>&lt;NeedsBackend endpoint="…" reason="…"&gt;</code> với prop
+    <code>endpoint</code> <strong>bắt buộc</strong>, để mỗi nhãn truy được về một route cụ thể còn thiếu —
+    biến danh sách này thành backlog máy đọc được thay vì 14 nhãn chữ.</p>
+  <ul>
+    <li><code>/workspace</code> thanh revision r45/r46/r47 · <code>/review</code> khối “Quy tắc đã chạy” 8 ô</li>
+    <li><code>/settings</code>: 3 check <code>offline</code>/<code>signing</code>/<code>quiescent</code> ·
+      khối “Độ ổn định 60 phút” · chip “báo chi phí” · 4/5 bước probe · khối MCP · nút huỷ build</li>
+    <li><code>/batch</code>: bộ chạy “Nhân offline (Python)” · tiến độ realtime · guard “tệp bị khoá”</li>
+    <li><code>/publish</code>: dropdown khổ giấy + CTB (hoặc chuyển sang chế độ Page Setup) · nút “Mở thư mục”</li>
+    <li><code>/cadweb</code>: 5 bộ đếm không có trong payload · bảng snapshot per-drawing</li>
+  </ul>
+
+  <h3>5.3 · Hai panel prototype — cần quyết định D2</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Panel</th><th class="num">Quy mô</th><th>Bằng chứng</th><th>Hệ quả nếu bỏ</th></tr></thead>
+      <tbody>
+        <tr><td><code>PreconstructionPanel.tsx</code></td><td class="num">1.089 TSX + 1.118 CSS<br><em>32% globals.css</em></td>
+          <td><code>grep -c "fetch("</code> = <strong>0</strong>. Mọi số là hằng số; panel tự thừa nhận ở dòng 558</td>
+          <td><strong>Không mất chức năng thật nào.</strong> Rủi ro duy nhất: kỳ vọng của người đã xem demo</td></tr>
+        <tr><td><code>DocumentReviewPanel.tsx</code></td><td class="num">1.348 TSX + 627 CSS</td>
+          <td><code>fetch</code> = <strong>1</strong> (chỉ đọc <code>INSUNITS</code>); <code>MEASURE_VALUES</code> luôn trả <code>"18,60 m²"</code></td>
+          <td>Mất khả năng <em>xem trước PDF trong app</em> — mảng thật. Không mất chức năng CAD nào</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><strong>Giữ lại 3 mảnh thật dù cắt panel:</strong> <code>URL.createObjectURL</code> +
+    <code>&lt;object type="application/pdf"&gt;</code>; <code>downloadCsv</code> BOM UTF-8 (dùng cho
+    <code>/takeoff</code>); 2 hàm thuần <code>fileNameFromPath</code>/<code>uniqueDrawingNames</code>
+    → <code>lib/format.ts</code>.</p>
+
+  <h3>5.4 · Dead code đã xác minh</h3>
+  <ul>
+    <li><code>.chips</code>/<code>.chip</code>, <code>.log</code>, 3 <code>@keyframes</code> xoay trùng — GĐ1</li>
+    <li>4 chức năng <code>menu:false</code> (<code>tagpipes</code>, <code>numberpipes</code>,
+      <code>stdlayers</code>, <code>livedraw</code>) — chết hai lớp: không hiện trong panel <em>và</em>
+      bị filter chặn cả đường gợi ý agent — GĐ8</li>
+    <li><strong>Việc phải làm trước GĐ8:</strong> đối chiếu cả 16 chức năng của <code>functions.ts</code>
+      với endpoint thật. <code>copyfloor</code> và <code>tagmeta</code> khai
+      <code>liveRecipe</code> nhưng <em>không</em> có trong switch 15 recipe headless — nếu
+      <code>/live</code> cũng không nhận thì đó là 2 nút luôn báo lỗi.</li>
+  </ul>
+</section>
+
+<!-- ═══════════════════════════ 6 ═══════════════════════════ -->
+<section id="s6">
+  <h2><span class="n">Phần 06</span>Backend cần thêm</h2>
+  <p>Xếp theo mức chặn. Không có các endpoint này thì UI tương ứng sẽ nói dối.</p>
+
+  <h4>P0 — chặn màn hình trục xoay</h4>
+  <dl class="kv">
+    <dt>1</dt><dd><strong>Registry thao tác chờ duyệt gộp</strong> —
+      <code>GET /api/acad/operations</code>, <code>…/:id</code>, <code>…/:id/apply</code>, <code>…/:id/reject</code>.
+      Sáu producer <em>đăng ký</em> op vào một registry; registry chỉ là façade, apply thật vẫn gọi router gốc.
+      <br><strong>Không cấp id riêng.</strong> <code>/api/acad/selection/operations/:id/{apply,reject}</code>
+      đã tồn tại và là producer #1 — id của registry phải là <code>${source}:${sourceId}</code> để truy ngược
+      được, nếu không sẽ có hai id space cho cùng khái niệm “operation”.
+      <br><strong>Bắt buộc kèm persist</strong> (SQLite qua <code>db.ts</code> đã có, hoặc JSON trong
+      <code>ACAD_DATA_DIR</code>) — hiện tất cả sống trong <code>Map</code> RAM.</dd>
+    <dt>2</dt><dd><strong>Thống nhất mã guard</strong> — chọn một trong
+      <code>ambiguous_target</code>/<code>target_ambiguous</code> và sửa 6 chỗ.</dd>
+    <dt>3</dt><dd><strong><code>dbmod</code> vào <code>writeDocs()</code></strong> nếu chọn D6(A) —
+      ~5 dòng C++ <span class="src">mepbridge.cpp:239</span> + 1 dòng TS.</dd>
+  </dl>
+
+  <h4>P1 — mở khoá <code>/batch</code></h4>
+  <dl class="kv">
+    <dt>4</dt><dd><code>GET /api/acad/files?dir=&amp;recursive=&amp;ext=dwg</code> — guard: đường dẫn tuyệt đối, tồn tại, trong allowlist</dd>
+    <dt>5</dt><dd>Thêm <code>recursive?</code> cho <code>/mep/:recipe</code>; đổi <code>readdirSync</code> sang duyệt cây có giới hạn độ sâu</dd>
+    <dt>6</dt><dd><code>GET /api/acad/mep/recipes</code> — hiện <em>không tồn tại</em>, request rơi vào <code>:recipe="recipes"</code> → 400</dd>
+    <dt>7</dt><dd><strong>Mô hình job cho mẻ</strong> — 202 + <code>/jobs/:id</code> + SSE + cancel.
+      Hiện <code>/mep/:recipe</code> chạy vòng <code>for</code> đồng bộ trong <em>một</em> request:
+      100 tệp × 120 s = 3 giờ trong một HTTP request.</dd>
+    <dt>8</dt><dd><strong>Cầu nối nhân offline Python</strong> — <code>POST /api/acad/offline/:command</code>.
+      Đây là <em>lối thoát duy nhất khi chưa cài AutoCAD</em>, hiện hoàn toàn không truy cập được từ web.</dd>
+  </dl>
+
+  <h4>P2 — <code>/publish</code> trung thực</h4>
+  <dl class="kv">
+    <dt>9</dt><dd>3 route enumerate: <code>/plot/devices</code>, <code>/plot/style-sheets</code>,
+      <code>/plot/page-setups</code>. Không có chúng thì mọi dropdown khổ giấy / CTB / thiết bị là đoán mò;
+      gõ sai tên = native plot fail <em>sau khi</em> đã chiếm phiên AutoCAD.</dd>
+    <dt>10</dt><dd><code>GET /api/acad/layouts?target=</code> — tách khỏi <code>/drawing-info</code></dd>
+    <dt>11</dt><dd><code>POST /api/acad/job/:id/cancel</code> · thêm
+      <code>onConflict:"fail"|"overwrite"|"suffix"</code> vào whitelist</dd>
+    <dt>12</dt><dd><code>POST /api/acad/reveal {path}</code> — <code>open -R</code>, ~5 dòng</dd>
+  </dl>
+  <p><strong>Không đề xuất build:</strong> <code>scale</code> ngoài <code>fit|1:1</code>,
+    <code>plot_type</code> “window”, DPI. Đây là giới hạn của kênh plot native trên macOS, không phải
+    thiếu route.</p>
+
+  <h4>P3 — hoàn thiện</h4>
+  <dl class="kv">
+    <dt>13</dt><dd>Hai pha cho <code>/bomtable</code> và <code>/blocks/insert</code> — điều kiện để hai verb
+      này được vào hàng chờ (§GĐ7)</dd>
+    <dt>14</dt><dd><code>/standards/scan</code> trả thêm <code>rulesRun[]</code>; mở rộng
+      <code>/selection/prepare</code> với <code>scope.kind="type"</code></dd>
+    <dt>15</dt><dd><code>/health</code>: 3 check thiếu + đếm ổn định thật
+      (<code>heartbeatMisses60m</code>, <code>failedJobs60m</code>, <code>crashes60m</code>);
+      <code>GET /api/mcp/status</code></dd>
+    <dt>16</dt><dd>Persist lịch sử phiên quét — để Tổng quan hiển thị mà không phải quét lại</dd>
+    <dt>17</dt><dd><code>GET /api/cadweb/snapshots?drawing=</code> + <strong>dựng máy chủ nhận
+      <code>.cadweb</code></strong>: <code>createSyncHttpHandler</code> hiện <em>chỉ được gọi trong test</em>;
+      có sẵn <code>createFileBackedSyncService</code> nhưng chưa ai bind. Cần process + 5 implementation.</dd>
+  </dl>
+</section>
+
+<!-- ═══════════════════════════ 7 ═══════════════════════════ -->
+<section id="s7">
+  <h2><span class="n">Phần 07</span>Rủi ro</h2>
+  <p>Xếp theo xác suất × mức độ khó phát hiện. Ba cái đầu đều là <em>lỗi im lặng</em> — build xanh,
+    test xanh, sản phẩm sai.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>#</th><th>Rủi ro</th><th>Cách giảm thiểu</th></tr></thead>
+      <tbody>
+        <tr><td><span class="chip" data-sev="chan">R1</span></td>
+          <td><strong>Next nuốt route trùng, không nói gì.</strong> Grep log build cho
+            <code>warn|conflict|duplicate</code>: 0 dòng.</td>
+          <td>Không tạo <code>(shell)/page.tsx</code> tới GĐ8; assert <code>out/index.html</code> mang
+            <code>data-screen</code> đúng theo giai đoạn — đây là thứ <em>duy nhất</em> bắt được lỗi này</td></tr>
+        <tr><td><span class="chip" data-sev="chan">R2</span></td>
+          <td><strong>Bản đóng gói trả HTTP 200 với nội dung sai.</strong> <code>next dev</code> chạy đúng
+            nên bug ngủ tới lúc đóng gói.</td>
+          <td><code>trailingSlash</code> trong PR đầu tiên; catch-all 404 cho <code>/_next/</code> và
+            <code>.txt</code>; test cả <code>/changes</code> và <code>/changes/</code></td></tr>
+        <tr><td><span class="chip" data-sev="chan">R3</span></td>
+          <td><strong>Mất ngữ nghĩa hai pha khi port.</strong> Một bản sót
+            <code>confirmed:true</code> → lệnh ghi không hoàn tác được chạy im lặng.</td>
+          <td>Gộp 3 bản thành 1 ở GĐ2A <em>trước</em> khi di chuyển file nào; contract test assert = 1</td></tr>
+        <tr><td><span class="chip" data-sev="cao">R4</span></td>
+          <td><strong>Nút ghi vẫn bấm được bằng bàn phím.</strong> <code>pointer-events:none</code> không
+            chặn Enter/Space.</td>
+          <td>3 tầng ở §2.4; nghiệm thu bằng Tab+Enter → assert không có network request</td></tr>
+        <tr><td><span class="chip" data-sev="cao">R5</span></td>
+          <td><strong>Giao diện lai sáng-trên-tối.</strong> Không phải “trắng xoá” mà là <em>một phần</em>
+            trang đổi màu — dễ trượt qua PR review.</td>
+          <td>Đổi tên legacy cùng PR với thêm design system; gate <code>body</code> hai chiều;
+            đếm usage trước/sau</td></tr>
+        <tr><td><span class="chip" data-sev="cao">R6</span></td>
+          <td><strong>Prototype được migrate và qua đó được <em>hợp thức hoá</em>.</strong> Bọc panel bịa số
+            trong shell mới, sạch đẹp, nhất quán với màn thật → người dùng tin và ra quyết định theo.</td>
+          <td>Chốt D2 trước khi viết dòng nào; nếu giữ thì banner cấp route <em>không tắt được</em> và
+            <em>không refactor</em> — refactor làm nó trông “đã hoàn thiện”</td></tr>
+        <tr><td><span class="chip" data-sev="cao">R7</span></td>
+          <td><strong>Chat vỡ khi di chuyển</strong> — 3 handler đọc mảng theo index trong khi có
+            <code>await</code> xen giữa.</td>
+          <td>Chuyển id-based ở GĐ2B khi chat còn đứng yên; viết test trước; không bao giờ cùng PR với
+            việc di chuyển</td></tr>
+        <tr><td><span class="chip" data-sev="tb">R8</span></td>
+          <td><strong>“Revision” mang 4 nghĩa không so sánh được với nhau</strong> — CadWeb integer ·
+            document instance từ plugin · content-hash 64 hex của hồ sơ/catalog ·
+            <code>manifestRevision</code> của LISP. Mẫu dùng chung nhãn và chung định dạng
+            <code>r48</code> cho cả bốn.</td>
+          <td>Đặt 4 nhãn khác nhau <em>trước</em> khi viết thêm màn hình: <code>rev bản vẽ</code> ·
+            <code>rev snapshot</code> · <code>phiên bản hồ sơ</code> · <code>phiên bản manifest</code></td></tr>
+        <tr><td><span class="chip" data-sev="tb">R9</span></td>
+          <td><strong>Contract test suy yếu âm thầm.</strong> Assert dạng <code>!includes</code> tự động
+            xanh khi code chuyển sang file khác.</td>
+          <td>Viết lại theo glob ở GĐ0, không “cập nhật dần”</td></tr>
+        <tr><td><span class="chip" data-sev="tb">R10</span></td>
+          <td><strong>Origin guard làm backend trông như chết.</strong> Đổi cổng dev hoặc mở
+            <code>out/</code> bằng <code>file://</code> → 403 cho mọi request.</td>
+          <td>Ghi vào <code>DEVELOPMENT.md</code>; client bắt 403 <code>origin_not_allowed</code> và hiển
+            thị đúng nguyên nhân thay vì “lỗi mạng”</td></tr>
+        <tr><td><span class="chip" data-sev="tb">R11</span></td>
+          <td><strong>Mô hình “7 panel luôn mount” rò rỉ sang route mới</strong> — mỗi panel
+            <code>if (!open) return null</code> <em>sau</em> khi chạy hết hooks.</td>
+          <td>Quy tắc review: trong <code>(shell)/</code>, thứ không hiển thị phải <em>không được render</em>,
+            không phải <code>return null</code>. Kiểm bằng Profiler ở GĐ3</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ 8 ═══════════════════════════ -->
+<section id="s8">
+  <h2><span class="n">Phần 08</span>Sáu việc cần bạn chốt</h2>
+  <p>Đây là những chỗ phải hỏi, không được đoán — mỗi cái đổi hướng một phần công việc.
+    <strong>D1 và D6 chặn ngay giai đoạn đầu.</strong></p>
+
+  <div class="dec">
+    <header><h3>D1 — Giao diện sáng hay tối?</h3><span class="when">chốt trước GĐ1</span></header>
+    <p>App hiện <strong>dark-only cứng</strong> (<code>--bg #0f1216</code>, 1.516 hex literal, 0
+      <code>prefers-color-scheme</code>). Mẫu <strong>light-only</strong>, bảng màu khoá vào bộ Apple, cũng
+      0 <code>prefers-color-scheme</code>. Migrate nghĩa là toàn bộ ứng dụng đổi từ đen sang trắng.</p>
+    <div class="tw"><table>
+      <thead><tr><th>Phương án</th><th class="num">Chi phí</th><th>Đánh đổi</th></tr></thead>
+      <tbody>
+        <tr><td>(a) Theo mẫu, light-only</td><td class="num">0</td><td>Nhanh nhất, đúng ý đồ thiết kế. Người dùng quen giao diện tối sẽ sốc</td></tr>
+        <tr><td>(b) Theo mẫu + khối dark ~20 dòng</td><td class="num">+1 ngày</td><td>Kiến trúc token của mẫu <em>đã sẵn sàng</em> — 100% màu quy về 7 literal, 9 tint sinh bằng <code>color-mix</code>. Chỉ cần đảo vai trò 7 literal + xử lý riêng 3 chỗ giả định nền sáng</td></tr>
+        <tr><td>(c) Đảo mẫu thành dark-only</td><td class="num">+0,5 ngày</td><td>Sửa 7 literal, giữ 800 dòng còn lại. Rẻ nhất nhưng vứt bỏ ý đồ thẩm mỹ của mẫu</td></tr>
+      </tbody>
+    </table></div>
+    <p class="rec"><b>Khuyến nghị (b).</b> Trang bạn đang đọc chính là ví dụ: nó dùng bảng màu của mẫu và
+      tự đổi theo theme hệ điều hành — đó là toàn bộ chi phí của phương án này.</p>
+  </div>
+
+  <div class="dec">
+    <header><h3>D6 — Trạng thái “đã lưu / chưa lưu”: build hay cắt?</h3><span class="when">chốt trước GĐ3</span></header>
+    <p><code>dbmod</code> <strong>không</strong> có trong <code>/docs</code>; nó chỉ có trong snapshot
+      <code>/drawing-info</code>, và mỗi lần đọc là một lời gọi nặng cho <em>một</em> bản vẽ. Ba chỗ trong
+      mẫu phụ thuộc nó: chấm xanh/đỏ trên doctab, hộp thoại “Khởi động lại AutoCAD” liệt kê bản vẽ chưa lưu,
+      và cột “Lưu” ở Tổng quan.</p>
+    <p><strong>Không quyết thì:</strong> hoặc chấm trên doctab luôn sai, hoặc hộp thoại khởi động lại báo
+      <em>sai</em> bản vẽ nào chưa lưu. Cái thứ hai là đường mất dữ liệu, không phải lỗi thẩm mỹ.</p>
+    <div class="tw"><table>
+      <thead><tr><th>Phương án</th><th class="num">Chi phí</th><th>Kết quả</th></tr></thead>
+      <tbody>
+        <tr><td>(A) Thêm <code>dbmod</code> vào <code>writeDocs()</code></td><td class="num">~5 dòng C++ + 1 dòng TS</td>
+          <td>Rẻ hơn <em>mọi</em> phương án phía client — mọi cách làm ở client đều phải gọi
+            <code>/drawing-info</code> N lần. Cứu cả 3 phần tử UI</td></tr>
+        <tr><td>(B) Không đầu tư</td><td class="num">0</td>
+          <td>Bỏ chấm saved trên doctab; đổi copy hộp thoại thành “AutoCAD có thể còn bản vẽ chưa lưu —
+            kiểm tra trong AutoCAD trước khi khởi động lại”; cắt cột “Lưu”</td></tr>
+      </tbody>
+    </table></div>
+    <p class="rec"><b>Khuyến nghị (A)</b> — tỉ lệ giá trị/chi phí cao nhất trong cả 6 quyết định.
+      Dù chọn gì cũng phải có contract test: nếu UI render “chưa lưu”/“đã lưu” từ <code>useDocs()</code>
+      thì <code>/docs</code> <em>phải</em> trả <code>dbmod</code>.</p>
+  </div>
+
+  <div class="dec">
+    <header><h3>D2 — Hai panel prototype: cắt hay giữ?</h3><span class="when">chốt trước GĐ4</span></header>
+    <p>2.437 dòng TSX + 1.745 dòng CSS, tổng cộng <strong>1</strong> lời gọi API. Mẫu không có gì tương ứng.
+      Ảnh hưởng ~15% khối lượng và toàn bộ 1.745 dòng CSS ở GĐ10.</p>
+    <p>Ba câu hỏi cần bạn trả lời:</p>
+    <ol>
+      <li>Đã trình bày panel Preconstruction với khách hoặc lãnh đạo chưa? Nếu rồi thì cần kế hoạch truyền
+        thông khi gỡ.</li>
+      <li>Quy trình thực tế có bước “review bản vẽ PDF bên khác gửi tới” không? Nếu có, bỏ sạch
+        DocumentReview là mất một mắt xích — <code>/publish</code> chỉ <em>in ra</em> PDF, không
+        <em>đọc/markup</em> PDF.</li>
+      <li>Chọn: (1) cắt sạch · (2) bê nguyên vào route + banner “bản dựng thử” · (3) để lại trong route
+        legacy.</li>
+    </ol>
+    <p class="rec"><b>Khuyến nghị (2).</b> Giữ app chạy được, không tốn công, và banner ngăn đúng thứ nguy
+      hiểm — người dùng tin vào con số bịa.</p>
+  </div>
+
+  <div class="dec">
+    <header><h3>D3 — <code>/publish</code>: cắt trường vượt năng lực hay build backend?</h3><span class="when">chốt trước GĐ8</span></header>
+    <p>Mẫu vẽ 5 trường mà backend sẽ từ chối và 4 dropdown không có nguồn dữ liệu.</p>
+    <div class="tw"><table>
+      <thead><tr><th>Phương án</th><th class="num">Chi phí</th><th>Kết quả</th></tr></thead>
+      <tbody>
+        <tr><td>(a) Cắt hết + chế độ “chọn Page Setup đã lưu”</td><td class="num">0 backend</td>
+          <td>Chỉ in được layout có page setup sẵn. Trung thực, dùng được ngay</td></tr>
+        <tr><td>(b) Build 3 endpoint enumerate + <code>onConflict</code></td><td class="num">~3–5 ngày</td>
+          <td>Dropdown có dữ liệu thật; <em>vẫn</em> phải cắt dpi / tỉ lệ / window — đó là giới hạn macOS</td></tr>
+      </tbody>
+    </table></div>
+    <p>Dù chọn gì, câu “tệp đóng phải đi qua Xử lý thư mục” của mẫu <strong>phải sửa</strong> — nó đang chỉ
+      vào ngõ cụt, vì Xử lý thư mục cũng không in được.</p>
+  </div>
+
+  <div class="dec">
+    <header><h3>D4 — <code>/batch</code>: có đầu tư 4 endpoint mới không?</h3><span class="when">chốt trước GĐ8</span></header>
+    <div class="tw"><table>
+      <thead><tr><th>Phương án</th><th class="num">Chi phí</th><th>Kết quả</th></tr></thead>
+      <tbody>
+        <tr><td>(a) Không đầu tư</td><td class="num">0</td>
+          <td>Chọn nhiều tệp thủ công, chạy 15 recipe, xem kết quả một lần ở cuối.
+            <strong>Nhân offline vẫn không truy cập được từ web</strong></td></tr>
+        <tr><td>(b) 4 endpoint (<code>/files</code>, recursive, <code>/mep/recipes</code>, job model + SSE)</td>
+          <td class="num">~5–8 ngày</td><td>Đầy đủ như mẫu</td></tr>
+        <tr><td>(c) Thêm cầu nối Python <code>/api/acad/offline/*</code></td><td class="num">+3–5 ngày</td>
+          <td>Mở khoá lối thoát khi chưa cài AutoCAD, XLSX, Gemini</td></tr>
+      </tbody>
+    </table></div>
+    <p class="rec"><b>Câu hỏi cốt lõi:</b> người dùng có thực sự cần chạy app khi <em>chưa cài AutoCAD</em>
+      không? Nếu có thì (c) là bắt buộc — hiện đó là lời hứa lớn nhất và rỗng nhất của toàn bộ sản phẩm.</p>
+  </div>
+
+  <div class="dec">
+    <header><h3>D5 — <code>/cadweb</code>: dựng sync server hay chỉ hiển thị trạng thái?</h3><span class="when">chốt trước GĐ8</span></header>
+    <p>Hiện sync <strong>mặc định tắt</strong>, cần 5 biến môi trường, và <strong>không có server nào
+      nhận</strong>. Exporter Windows chưa compile/load trên máy Windows.</p>
+    <div class="tw"><table>
+      <thead><tr><th>Phương án</th><th class="num">Chi phí</th><th>Kết quả</th></tr></thead>
+      <tbody>
+        <tr><td>(a) Chỉ hiển thị trạng thái</td><td class="num">0 backend</td>
+          <td>Trang trung thực: banner “sync tắt + chưa có máy chủ”, 4 bộ đếm map thật, 1 nút retry global</td></tr>
+        <tr><td>(b) Dựng sync server</td><td class="num">~10–15 ngày + phần Windows chưa rõ</td>
+          <td>Mở khoá <code>.revstrip</code>, bảng snapshot per-drawing, xem theo revision</td></tr>
+      </tbody>
+    </table></div>
+    <p class="rec"><b>Khuyến nghị (a) trước, (b) ghi vào <code>ROADMAP.md</code> mục Later.</b></p>
+  </div>
+
+  <div class="panel">
+    <h4 style="margin-top:0">Thứ tự chốt</h4>
+    <div class="tw" style="margin-top:var(--s3)"><table>
+      <thead><tr><th>Quyết định</th><th>Chặn trước</th><th>Chặn cái gì</th></tr></thead>
+      <tbody>
+        <tr><td><strong>D1</strong> sáng / tối</td><td>GĐ1</td><td>copy <code>app.css</code>, khối dark ở GĐ10</td></tr>
+        <tr><td><strong>D6</strong> <code>dbmod</code></td><td>GĐ3</td><td>doctab titlebar, hộp thoại khởi động lại, cột “Lưu”</td></tr>
+        <tr><td><strong>D2</strong> 2 panel prototype</td><td>GĐ4</td><td>2 route cuối, <code>package.json</code>, GĐ10</td></tr>
+        <tr><td><strong>D3 · D4 · D5</strong></td><td>GĐ8</td><td><strong>toàn bộ GĐ8 — không chốt thì giai đoạn này không có phạm vi</strong></td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ 9 ═══════════════════════════ -->
+<section id="s9">
+  <h2><span class="n">Phần 09</span>Bất biến khoá bằng CI</h2>
+  <p>Mỗi dòng dưới đây là một thứ <em>không được phép</em> hỏng trong suốt quá trình migrate, kèm cách
+    assert trong <code>test-contract.mjs</code>. Đây là thứ giữ cho kế hoạch không trượt khi có áp lực
+    tiến độ.</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="num">#</th><th>Bất biến</th><th>Cách assert</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td>Chỉ một luồng ghi</td><td><code>confirmed: true</code> xuất hiện đúng 1 lần toàn repo</td></tr>
+        <tr><td class="num">2</td><td>Sheet xác nhận nói rõ không hoàn tác</td><td><code>ConfirmSheet</code> chứa cụm “không hoàn tác”</td></tr>
+        <tr><td class="num">3</td><td>Không nút ghi thô</td><td>không <code>data-write</code> trên <code>&lt;button&gt;</code> thô — phải qua <code>Button</code></td></tr>
+        <tr><td class="num">4</td><td>Một EventSource, đúng chỗ</td><td><code>new EventSource</code> = 1 <em>và</em> ở <code>features/acad-connection/events.ts</code></td></tr>
+        <tr><td class="num">5</td><td>Một fetcher docs</td><td><code>/api/acad/docs</code> = 1; ngoại lệ <code>DrawingInfoPanel</code> được ghi thành chú thích, không phải im lặng</td></tr>
+        <tr><td class="num">6</td><td>Chat không dùng index</td><td><code>patchLast(</code> = 0 · <code>messagesRef.current[</code> = 0 · mọi message handler-tạo có <code>id</code></td></tr>
+        <tr><td class="num">7</td><td>Scope tiêu chuẩn không lệch</td><td>tập <code>scope:"…"</code> trích từ <code>standardsEngine.ts</code> = tập 6 hằng số trong <code>features/review/scopes.ts</code></td></tr>
+        <tr><td class="num">8</td><td>Mọi mã guard có trạng thái</td><td><code>extract-guard-codes.mjs</code>: mỗi mã ∈ <code>guards[]</code> ∪ <code>GENERIC_CODES</code>, ngược lại fail</td></tr>
+        <tr><td class="num">9</td><td>Endpoint tập trung</td><td>không chuỗi <code>"/api/</code> nào ngoài <code>lib/daemon/endpoints.ts</code></td></tr>
+        <tr><td class="num">10</td><td>CSS không va chạm</td><td><code>check-css-collisions.mjs</code>: giao selector đơn của 2 file = ∅</td></tr>
+        <tr><td class="num">11</td><td>Ranh giới import</td><td><code>check-import-boundaries.mjs</code>: 3 quy tắc §2.2</td></tr>
+        <tr><td class="num">12</td><td>Route đóng gói đúng</td><td><code>test-route-serving.mjs</code>: 301/200 · <code>data-screen</code> đúng giai đoạn · <code>_next</code> 404 · payload <code>text/plain</code></td></tr>
+        <tr><td class="num">13</td><td>Op có nguồn truy được</td><td>mọi op trong <code>acad.staged.v1</code> có <code>source</code> ∈ 6 giá trị, <code>sourceId</code> không rỗng, và không op nào có <code>source ∈ {blocks, bomtable}</code></td></tr>
+        <tr><td class="num">14</td><td>Danh sách recipe không lệch</td><td>danh sách UI = tập <code>case "…"</code> trích từ <code>acadBridge.ts</code> (chỉ khi D4 = không đầu tư)</td></tr>
+        <tr><td class="num">15</td><td><code>dbmod</code> (chỉ khi D6 = A)</td><td>nếu UI render “chưa lưu”/“đã lưu” từ <code>useDocs()</code> thì <code>/docs</code> phải trả <code>dbmod</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Checklist khởi động — làm trước dòng code đầu tiên</h3>
+  <ol>
+    <li>Chốt <strong>D1</strong> và <strong>D6</strong>.</li>
+    <li>Đọc lại §2.1 hai blocker và xác nhận cả nhóm hiểu <em>tại sao không được tạo</em>
+      <code>app/(shell)/page.tsx</code>.</li>
+    <li>Chạy lại grep xác minh cho giai đoạn sắp làm — bản kế hoạch này đã kiểm chứng phần chặn, nhưng số
+      dòng CSS theo prefix và danh sách capability ObjectARX thì <em>chưa</em>.</li>
+    <li>Tạo nhánh <code>feat/ui-migration-phase-0</code>; không commit thẳng <code>main</code>.</li>
+    <li>Ghi 6 quyết định §08 vào <code>ROADMAP.md</code> mục <code>Next</code> kèm người chịu trách nhiệm và
+      hạn chốt.</li>
+  </ol>
+
+  <p class="foot">Kế hoạch này được dựng từ 5 báo cáo khảo sát (mẫu thiết kế · app hiện tại · báo cáo đối
+    chiếu cũ · năng lực backend · design system), 3 phân tích đối chiếu, và 2 vòng phản biện độc lập đã
+    grep lại từng khẳng định. Những chỗ ghi <span class="src">file:line</span> là đã kiểm chứng trực tiếp
+    trong code. Ước lượng ngày công <em>chưa</em> hiệu chuẩn với vận tốc thật của team — hãy coi là bậc độ
+    lớn để xếp thứ tự, không phải cam kết giao hàng.</p>
+</section>
+
+</main>
+</div>
+</div>
+</body>
+</html>

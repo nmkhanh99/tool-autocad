@@ -306,7 +306,16 @@ async function main() {
   // Phục vụ UI tĩnh khi đóng gói (Next export).
   if (WEB_DIR && existsSync(WEB_DIR)) {
     app.use(express.static(WEB_DIR));
-    app.get("*", (_req, res) => res.sendFile(resolve(WEB_DIR, "index.html")));
+    // Catch-all chỉ dành cho route HTML. Một asset build (/_next/*) hay payload
+    // điều hướng client (*.txt) không tìm thấy PHẢI trả 404: nếu trả index.html
+    // kèm 200 text/html thì router Next nhận HTML thay vì payload và điều hướng
+    // hỏng im lặng — trong khi curl một route HTML vẫn xanh.
+    app.get("*", (req, res) => {
+      if (req.path.startsWith("/_next/") || req.path.endsWith(".txt")) {
+        return res.status(404).end();
+      }
+      return res.sendFile(resolve(WEB_DIR, "index.html"));
+    });
   }
 
   const server = app.listen(PORT, "127.0.0.1", () => {

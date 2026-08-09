@@ -1,15 +1,122 @@
+/** Bất biến của web app — những thứ không được phép hỏng trong lúc migrate.
+ *
+ * Bản trước đọc 6 file theo path cứng rồi assert trên nội dung chuỗi. Vấn đề:
+ * mọi assert dạng PHỦ ĐỊNH (`!includes`, `doesNotMatch`) TỰ ĐỘNG XANH khi code
+ * chuyển sang file khác — tức đúng những bất biến an toàn nhất sẽ âm thầm biến
+ * mất đúng vào lúc chúng cần nhất, giữa một đợt di chuyển file.
+ *
+ * Bản này phân đôi theo bản chất của từng assert:
+ *
+ *   · PHỦ ĐỊNH  → chạy trên `all`, nối toàn bộ source. Di chuyển file không làm
+ *     assert yếu đi; muốn tắt phải xoá dòng assert, và xoá thì thấy trong diff.
+ *
+ *   · KHẲNG ĐỊNH → chạy trên một file cụ thể, tra bằng ĐUÔI ĐƯỜNG DẪN thay vì
+ *     path tuyệt đối. Di chuyển file làm nó đỏ, và đỏ ở đây là tín hiệu đúng,
+ *     không phải phiền toái: người di chuyển phải xác nhận bất biến còn đúng.
+ */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const appDir = join(dirname(fileURLToPath(import.meta.url)), "../app");
-const page = readFileSync(join(appDir, "page.tsx"), "utf8");
-const functions = readFileSync(join(appDir, "functions.ts"), "utf8");
-const standards = readFileSync(join(appDir, "DrawingStandardsPanel.tsx"), "utf8");
-const drawingInfo = readFileSync(join(appDir, "DrawingInfoPanel.tsx"), "utf8");
-const preconstruction = readFileSync(join(appDir, "PreconstructionPanel.tsx"), "utf8");
-const styles = readFileSync(join(appDir, "globals.css"), "utf8");
+const webDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const ROOTS = ["app", "components", "features", "lib"];
+
+function walk(dir, acc = []) {
+  if (!existsSync(dir)) return acc;
+  for (const entry of readdirSync(dir)) {
+    if (entry === "node_modules" || entry.startsWith(".")) continue;
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) walk(full, acc);
+    else if (/\.(tsx?|css)$/.test(full)) acc.push(full);
+  }
+  return acc;
+}
+
+const sources = ROOTS.flatMap((r) => walk(join(webDir, r))).map((full) => ({
+  path: relative(webDir, full).split(sep).join("/"),
+  text: readFileSync(full, "utf8"),
+}));
+assert.ok(sources.length > 0, "không tìm thấy source nào — kiểm tra ROOTS");
+
+/** Toàn bộ source nối lại. Dùng cho assert phủ định: bất biến toàn dự án. */
+const all = sources.map((s) => `/* ${s.path} */\n${s.text}`).join("\n");
+
+/** Tra một file bằng đuôi đường dẫn. Đỏ khi file bị di chuyển là CỐ Ý. */
+function sourceAt(suffix) {
+  const hits = sources.filter((s) => s.path === suffix || s.path.endsWith(`/${suffix}`));
+  assert.equal(
+    hits.length,
+    1,
+    hits.length === 0
+      ? `không thấy ${suffix}. Nếu file đã được di chuyển, sửa locator; nếu đã bị xoá có chủ ý,` +
+        " xoá luôn các assert gắn với nó thay vì để chúng xanh một cách vô nghĩa."
+      : `${suffix} khớp ${hits.length} file: ${hits.map((h) => h.path).join(", ")} — locator phải duy nhất`,
+  );
+  return hits[0].text;
+}
+
+/** Đếm số lần một mẫu xuất hiện trên toàn dự án. */
+function countAll(pattern) {
+  return [...all.matchAll(new RegExp(pattern, "g"))].length;
+}
+
+const page = sourceAt("app/page.tsx");
+const functions = sourceAt("functions.ts");
+const standards = sourceAt("DrawingStandardsPanel.tsx");
+const drawingInfo = sourceAt("DrawingInfoPanel.tsx");
+const preconstruction = sourceAt("PreconstructionPanel.tsx");
+const styles = sourceAt("globals.css");
+
+/* ── Bất biến toàn dự án (phủ định) ─────────────────────────────────────── */
+
+assert.doesNotMatch(
+  all,
+  /r\.results\.(?:filter|map)\(/,
+  "error objects cannot reach an unchecked results operation",
+);
+for (const titleOnlyTarget of [
+  "__target: act.title",
+  "(docs.find((d: any) => d.active) || docs[0]).title",
+  "(docs.find((d: any) => d.active) || docs[0] || {}).title",
+  "value={d.title}",
+]) {
+  assert.ok(
+    !all.includes(titleOnlyTarget),
+    `no request targets a drawing by title alone: ${titleOnlyTarget}`,
+  );
+}
+assert.doesNotMatch(all, /["'`]\/Users\//, "no source hardcodes a developer home path");
+assert.doesNotMatch(
+  all,
+  /https?:\/\/(?:[^/\s]+\.)?(?:procore|acumatica|quickbooks)\b/i,
+  "connector cards do not embed unreviewed external API endpoints",
+);
+assert.doesNotMatch(
+  all,
+  /\.precon-table td:last-child > button/,
+  "last-column actions are not implicitly styled as destructive",
+);
+assert.doesNotMatch(
+  all,
+  /\[open, daemon, selectedTarget, refreshToken, reloadToken\]/,
+  "generic AutoCAD change events do not trigger an automatic full scan",
+);
+
+/* Một EventSource duy nhất. Hôm nay nó ở page.tsx; từ giai đoạn 2A trở đi nó
+ * phải nằm trong features/acad-connection/events.ts. Đếm giữ nguyên bất biến
+ * qua cả hai giai đoạn — nhiều instance nghĩa là mỗi panel tự nghe SSE riêng. */
+assert.equal(countAll("new EventSource"), 1, "chỉ được có MỘT EventSource trong toàn app");
+
+/* Nút ghi phải là primitive Button (disabled thật + aria-disabled), không phải
+ * thẻ <button> thô dựa vào CSS pointer-events — CSS không chặn Tab+Enter. */
+assert.doesNotMatch(
+  all,
+  /<button[^>]*\sdata-write\b/,
+  "nút ghi phải đi qua primitive Button, không đặt data-write lên <button> thô",
+);
+
+/* ── Bất biến gắn với một file cụ thể (khẳng định) ───────────────────────── */
 
 assert.match(
   page,
@@ -23,30 +130,17 @@ for (const resultKind of ["index", "table", "files"]) {
     `${resultKind} rendering is gated by a validated results array`,
   );
 }
-assert.doesNotMatch(
-  page,
-  /r\.results\.(?:filter|map)\(/,
-  "error objects cannot reach an unchecked results operation",
-);
-
-for (const titleOnlyTarget of [
-  "__target: act.title",
-  "(docs.find((d: any) => d.active) || docs[0]).title",
-  "(docs.find((d: any) => d.active) || docs[0] || {}).title",
-  "value={d.title}",
-]) {
-  assert.ok(
-    !page.includes(titleOnlyTarget),
-    `legacy requests do not use title-only target pattern: ${titleOnlyTarget}`,
-  );
-}
 assert.match(
   page,
   /<option key=\{d\.file \|\| d\.title\} value=\{d\.file \|\| d\.title\}>/,
   "live document options use the exact path for identity and value",
 );
+assert.match(
+  page,
+  /data-screen="legacy"/,
+  'route "/" mang mốc data-screen để test-route-serving khẳng định ai đang phục vụ nó',
+);
 
-assert.doesNotMatch(functions, /\/Users\//, "function defaults are portable");
 assert.match(
   functions,
   /const fileField: Field = \{[^\n]*type: "file"/,
@@ -144,36 +238,41 @@ assert.match(
   /if \(loadedSnapshotKey\.current === requestKey\) return;/,
   "reopening the panel reuses its in-app snapshot",
 );
-assert.doesNotMatch(
-  drawingInfo,
-  /\[open, daemon, selectedTarget, refreshToken, reloadToken\]/,
-  "generic AutoCAD change events do not trigger an automatic full scan",
-);
 assert.match(
   drawingInfo,
   /setCatalogStale\(true\);[\s\S]*?\}, \[refreshToken\]\);/,
   "AutoCAD change events mark the cached snapshot stale without fetching",
 );
-const refreshInvalidationStart = drawingInfo.indexOf(
-  "if (seenRefreshToken.current === refreshToken) return;",
-);
-const refreshInvalidationEnd = drawingInfo.indexOf(
-  "}, [refreshToken]);",
-  refreshInvalidationStart,
-);
-const refreshInvalidationBlock = drawingInfo.slice(
-  refreshInvalidationStart,
-  refreshInvalidationEnd,
-);
-assert.ok(
-  refreshInvalidationStart >= 0 && refreshInvalidationEnd > refreshInvalidationStart,
-  "drawing-info refresh invalidation effect is present",
-);
+
+/** Một khối lệnh trong file, tra bằng mốc đầu và mốc cuối. */
+function blockBetween(source, startMark, endMark, label) {
+  const start = source.indexOf(startMark);
+  const end = source.indexOf(endMark, start);
+  assert.ok(start >= 0 && end > start, `${label} block is present`);
+  return source.slice(start, end);
+}
+
 assert.doesNotMatch(
-  refreshInvalidationBlock,
+  blockBetween(
+    drawingInfo,
+    "if (seenRefreshToken.current === refreshToken) return;",
+    "}, [refreshToken]);",
+    "drawing-info refresh invalidation effect",
+  ),
   /setObjectPicker\(null\)/,
   "a late AutoCAD event does not dismiss an already-open guarded picker",
 );
+assert.doesNotMatch(
+  blockBetween(
+    drawingInfo,
+    "async function prepareCadAction(",
+    "async function applyPendingCadAction()",
+    "drawing-info prepare action",
+  ),
+  /setCatalogStale\(false\)/,
+  "a prepared operation does not mark the global drawing snapshot fresh",
+);
+
 assert.match(
   page,
   /setDrawingInfoRefreshEventAt\(\(current\) => Math\.max\(current, eventAt\)\)[\s\S]*?refreshEventAt=\{drawingInfoRefreshEventAt\}/,
@@ -183,20 +282,6 @@ assert.match(
   drawingInfo,
   /body\.snapshotCollectedAt \?\? body\.collectedAt[\s\S]*?latestRefreshEventAt\.current < snapshotCollectedAt[\s\S]*?setCatalogStale\(eventDuringScan && !eventCoveredBySnapshot\)/,
   "only an event strictly older than the snapshot is considered covered",
-);
-const prepareCadActionStart = drawingInfo.indexOf("async function prepareCadAction(");
-const prepareCadActionEnd = drawingInfo.indexOf(
-  "async function applyPendingCadAction()",
-  prepareCadActionStart,
-);
-assert.ok(
-  prepareCadActionStart >= 0 && prepareCadActionEnd > prepareCadActionStart,
-  "drawing-info prepare action block is present",
-);
-assert.doesNotMatch(
-  drawingInfo.slice(prepareCadActionStart, prepareCadActionEnd),
-  /setCatalogStale\(false\)/,
-  "a prepared operation does not mark the global drawing snapshot fresh",
 );
 assert.match(
   drawingInfo,
@@ -258,42 +343,15 @@ assert.match(
   /<button type="button" className="fnbtn quickfn" onClick=\{\(\) => openPreconstruction\("overview"\)\}/,
   "the preconstruction function-panel entry is keyboard accessible",
 );
-for (const view of [
-  "overview",
-  "takeoff",
-  "estimating",
-  "field",
-  "integrations",
-  "automation",
-]) {
+for (const view of ["overview", "takeoff", "estimating", "field", "integrations", "automation"]) {
   assert.ok(preconstruction.includes(`"${view}"`), `preconstruction exposes the ${view} view`);
 }
 for (const capability of [
-  "Diện tích",
-  "Chiều dài",
-  "Cung",
-  "Mái dốc",
-  "Thể tích",
-  "Đếm",
-  "Hao hụt",
-  "Assembly",
-  "Nhân công",
-  "Overhead",
-  "Markup",
-  "Thuế",
-  "Punch list",
-  "Báo cáo ngày",
-  "Procore",
-  "Acumatica",
-  "QuickBooks",
-  "AutoCount",
-  "AI Trade Takeoff",
-  "Auto-naming",
-  "Smart suggestions",
-  "Template Library",
-  "Auto-hyperlinking",
-  "BUDGET VS ACTUAL",
-  "Non-measured costs",
+  "Diện tích", "Chiều dài", "Cung", "Mái dốc", "Thể tích", "Đếm", "Hao hụt",
+  "Assembly", "Nhân công", "Overhead", "Markup", "Thuế", "Punch list",
+  "Báo cáo ngày", "Procore", "Acumatica", "QuickBooks", "AutoCount",
+  "AI Trade Takeoff", "Auto-naming", "Smart suggestions", "Template Library",
+  "Auto-hyperlinking", "BUDGET VS ACTUAL", "Non-measured costs",
 ]) {
   assert.ok(
     preconstruction.includes(capability),
@@ -331,11 +389,6 @@ for (const accessibilityState of ["aria-current", "aria-pressed", "aria-selected
     `preconstruction exposes ${accessibilityState} for keyboard and assistive technology users`,
   );
 }
-assert.doesNotMatch(
-  preconstruction,
-  /https?:\/\/(?:[^/\s]+\.)?(?:procore|acumatica|quickbooks)\b/i,
-  "connector cards do not embed unreviewed external API endpoints",
-);
 assert.match(
   styles,
   /\.precon-backdrop \{[\s\S]*?\.precon-panel \{[\s\S]*?@media \(max-width: 640px\)/,
@@ -345,11 +398,6 @@ assert.match(
   styles,
   /\.precon-table td > button\.precon-delete \{/,
   "destructive table styling is scoped to explicit delete buttons",
-);
-assert.doesNotMatch(
-  styles,
-  /\.precon-table td:last-child > button/,
-  "last-column actions are not implicitly styled as destructive",
 );
 assert.match(
   styles,
@@ -373,9 +421,11 @@ for (const panel of [
   "DrawingStandardsPanel.tsx",
   "LispLibraryPanel.tsx",
 ]) {
-  const source = readFileSync(join(appDir, panel), "utf8");
+  const source = sourceAt(panel);
   assert.match(source, /from "\.\/json";/, `${panel} uses the shared JSON record guard`);
   assert.doesNotMatch(source, /function asRecord\(/, `${panel} has no local asRecord copy`);
 }
 
-console.log("✓ web contract: safe result rendering, exact targets, portable pickers, dirty editors");
+console.log(
+  `✓ web contract: ${sources.length} file · bất biến phủ định chạy toàn dự án, khẳng định gắn file`,
+);

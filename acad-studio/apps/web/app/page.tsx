@@ -1221,7 +1221,10 @@ export default function Page() {
   }
 
   return (
-    <div className="app">
+    // data-screen là mốc để scripts/test-route-serving.mjs khẳng định route "/"
+    // vẫn do màn hình legacy phục vụ. Khi Tổng quan thay thế nó (giai đoạn 8),
+    // mốc kỳ vọng của test đổi từ "legacy" sang "home" trong cùng commit.
+    <div className="app" data-screen="legacy">
       <aside className="side">
         <div className="brand">Acad<span>·</span>Studio</div>
         <div className="newbtn" onClick={newChat}>＋ Hội thoại mới</div>
