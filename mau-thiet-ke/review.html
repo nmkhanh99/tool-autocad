@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kiểm tra bản vẽ — AutoCAD Toolkit</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+  .scanbar {
+    display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+    padding: var(--s2) var(--s5); border-bottom: 1px solid var(--border); background: var(--fg-02);
+    font-size: 12px; color: var(--muted);
+  }
+  .scanbar b { color: var(--fg-72); font-weight: 550; }
+  .scanbar .mono { font-size: 11px; }
+  .rulecov { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--s2); }
+  .rulecov > div {
+    display: grid; grid-template-columns: 13px 1fr; gap: var(--s2); align-items: start;
+    padding: var(--s2) var(--s3); border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 11.5px;
+  }
+  .rulecov .rm { width: 11px; height: 11px; margin-top: 2px; border: 1.5px solid var(--muted); border-radius: 2px; }
+  .rulecov > div[data-hit="true"] .rm { background: var(--fg); border-color: var(--fg); }
+  .rulecov code { font-family: var(--mono); font-size: 10.5px; }
+</style>
+</head>
+<body data-screen="review" data-acad="on" data-status="Phiên quét scan_5c11 · hồ sơ cty-2024 v12">
+
+<div class="app">
+  <header class="titlebar" data-shell="titlebar"></header>
+
+  <div class="body">
+    <nav class="rail" data-shell="rail" aria-label="Điều hướng chính"></nav>
+
+    <main class="main">
+      <div class="pagehead" data-od-id="review-head">
+        <div>
+          <h1 data-od-id="review-title">Kiểm tra bản vẽ</h1>
+          <div class="sub">TH-KT-01 · đối chiếu hồ sơ <strong>Tiêu chuẩn công ty 2024</strong></div>
+        </div>
+        <div class="actions">
+          <button class="btn" id="btn-rescan" data-od-id="btn-rescan">Quét lại</button>
+          <button class="btn btn--primary" id="btn-fix" data-write data-od-id="btn-fix">Chuẩn bị sửa mục đã chọn</button>
+        </div>
+      </div>
+
+      <!-- A finding only means anything inside the scan session that produced
+           it: same drawing revision, same profile version. -->
+      <div class="scanbar" data-od-id="scan-session">
+        <span>Phiên quét <b class="mono" id="scan-id">scan_5c11</b></span>
+        <span class="sep" style="width:1px;height:12px;background:var(--border)"></span>
+        <span>Bản vẽ <b class="mono">r48</b></span>
+        <span class="sep" style="width:1px;height:12px;background:var(--border)"></span>
+        <span>Hồ sơ <b class="mono">cty-2024 · v12</b></span>
+        <span class="sep" style="width:1px;height:12px;background:var(--border)"></span>
+        <span>Quét lúc <b id="scan-at">09:41</b></span>
+        <a href="standards.html" style="margin-left:auto;font-size:12px">Xem hồ sơ tiêu chuẩn →</a>
+      </div>
+
+      <div class="filterbar" data-od-id="review-filters">
+        <div class="seg" role="group" aria-label="Lọc theo mức độ">
+          <button data-sev-filter="all" aria-pressed="true">Tất cả <span id="c-all">0</span></button>
+          <button data-sev-filter="loi" aria-pressed="false">Lỗi <span id="c-loi">0</span></button>
+          <button data-sev-filter="canh-bao" aria-pressed="false">Cảnh báo <span id="c-canh-bao">0</span></button>
+          <button data-sev-filter="goi-y" aria-pressed="false">Gợi ý <span id="c-goi-y">0</span></button>
+        </div>
+        <div class="searchfield" style="width:260px">
+          <span data-ic="search"></span>
+          <input class="input" id="q" placeholder="Tìm theo mã phát hiện hoặc mô tả" aria-label="Tìm phát hiện">
+        </div>
+        <span class="tag tag--quiet mono" style="margin-left:auto" id="selinfo">0 đã chọn</span>
+      </div>
+
+      <div class="split">
+        <div class="scroll">
+          <div class="list" id="issue-list" role="listbox" aria-label="Danh sách phát hiện"></div>
+          <div class="statebox" id="issue-empty" hidden data-state="empty">
+            <div class="mark" data-ic-mark="check"></div>
+            <strong>Không có phát hiện nào khớp bộ lọc</strong>
+            <p>Đổi bộ lọc hoặc quét lại bản vẽ.</p>
+          </div>
+
+          <!-- What the engine actually checked. Rules that found nothing are
+               as informative as rules that fired. -->
+          <div class="pad" style="padding-top:var(--s3)">
+            <div class="eyebrow" style="margin-bottom:var(--s3)">Quy tắc đã chạy</div>
+            <div class="rulecov" id="rulecov"></div>
+          </div>
+        </div>
+
+        <aside class="detail" id="detail" aria-label="Chi tiết phát hiện" data-od-id="review-detail"></aside>
+      </div>
+    </main>
+  </div>
+
+  <footer class="statusbar" data-shell="statusbar"></footer>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+/* ============================================================
+   Standards review.
+
+   The engine emits exactly seven kinds of issue and ships exactly
+   five fix groups. Everything on this screen maps to one of them —
+   no invented rule codes, no auto-fix button for a fix that does
+   not exist.
+
+   Session discipline: /standards/apply takes scanId + issueIds and
+   deletes the scan afterwards, returning applied[] and
+   skippedIssueIds[]. So a finding list is valid only until the
+   first fix runs; after that the only honest state is "quét lại".
+   ============================================================ */
+(function () {
+  "use strict";
+
+  document.querySelectorAll('[data-ic="search"]').forEach(function (el) { el.outerHTML = App.icon("search"); });
+  var mk = document.querySelector('[data-ic-mark="check"]');
+  if (mk) mk.innerHTML = App.icon("check");
+
+  /* fix: which of the five groups can repair this, or null. */
+  var ISSUES = [
+    {
+      id: "mapping-required-cua-di", sev: "loi", kind: "mapping-required",
+      title: "Layer CUA-DI chưa ánh xạ về layer chuẩn",
+      desc: "Hồ sơ quy định ánh xạ <code>CUA*</code> → <code>A-DOOR</code>. Bản vẽ có layer CUA-DI với 96 đối tượng, không nằm trong bộ layer chuẩn.",
+      subjects: "96 đối tượng trên layer CUA-DI",
+      fix: null,
+      why: "Không có nhóm sửa tự động cho ánh xạ layer. <code>sync-layers</code> chỉ tạo layer mới và sửa thuộc tính, nó không đổi tên layer và không gán lại đối tượng."
+    },
+    {
+      id: "layer-missing-a-grid", sev: "canh-bao", kind: "layer-missing",
+      title: "Thiếu layer bắt buộc A-GRID",
+      desc: "Hồ sơ yêu cầu layer <code>A-GRID</code> (màu 8, linetype CENTER, lineweight 0.13). Bản vẽ không có layer này.",
+      subjects: "bảng layer của bản vẽ",
+      fix: "sync-layers",
+      why: "Tạo layer còn thiếu theo đúng thuộc tính trong hồ sơ."
+    },
+    {
+      id: "layer-properties-p-pipe", sev: "canh-bao", kind: "layer-properties",
+      title: "Layer P-PIPE sai linetype",
+      desc: "Hồ sơ quy định <code>DASHED</code>, bản vẽ đang dùng <code>Continuous</code>.",
+      subjects: "layer P-PIPE",
+      fix: "sync-layers",
+      warn: "Layer P-PIPE đang <b>khoá</b>. Lệnh sửa nhiều khả năng bỏ qua mục này và trả về trong <code>skippedIssueIds[]</code>.",
+      why: "Đặt lại thuộc tính layer theo hồ sơ."
+    },
+    {
+      id: "dimstyle", sev: "canh-bao", kind: "dimstyle",
+      title: "Dimension style hiện hành không đúng hồ sơ",
+      desc: "Hồ sơ quy định <code>CTY-DIM-100</code>, bản vẽ đang dùng <code>ISO-25</code>.",
+      subjects: "biến DIMSTYLE của bản vẽ",
+      fix: "apply-dimstyle",
+      why: "Đặt style hiện hành về giá trị trong hồ sơ. Không sửa các dimension đã vẽ."
+    },
+    {
+      id: "dim-row-x", sev: "canh-bao", kind: "dim-row",
+      title: "12 dimension lệch hàng chuẩn theo trục X",
+      desc: "Hồ sơ quy định bước hàng 8,0 đơn vị bản vẽ. 12 dimension đang lệch khỏi lưới đó.",
+      subjects: "12 dimension trong model space",
+      fix: "dimspace",
+      needsBase: true,
+      why: "Căn lại các dimension theo một dimension gốc do bạn chọn."
+    },
+    {
+      id: "frame-unmeasurable-1F3A", sev: "goi-y", kind: "frame-unmeasurable",
+      title: "Không đo được khung tên",
+      desc: "Tìm thấy khung ở handle <code>1F3A</code> nhưng không phải LWPOLYLINE kín nên không xác định được khổ giấy.",
+      subjects: "handle 1F3A",
+      fix: null,
+      why: "<code>resize-frame</code> bắt buộc phải quét được khung dạng LWPOLYLINE kín. Với khung này lệnh sẽ ném lỗi, nên không có nút sửa."
+    }
+  ];
+
+  var RULES = [
+    { k: "unit",               n: "Đơn vị bản vẽ (INSUNITS)" },
+    { k: "layer-missing",      n: "Layer bắt buộc" },
+    { k: "layer-properties",   n: "Thuộc tính layer" },
+    { k: "dimstyle",           n: "Dimension style" },
+    { k: "dim-row",            n: "Hàng dimension" },
+    { k: "frame",              n: "Khổ khung tên" },
+    { k: "frame-unmeasurable", n: "Khung không đo được" },
+    { k: "mapping-required",   n: "Ánh xạ tên layer" }
+  ];
+
+  var FIXGROUPS = {
+    "apply-units":   "Đặt lại INSUNITS",
+    "sync-layers":   "Đồng bộ layer theo hồ sơ",
+    "apply-dimstyle":"Đặt dimension style",
+    "dimspace":      "Căn hàng dimension",
+    "resize-frame":  "Chỉnh khổ khung"
+  };
+
+  var SEV_LABEL = { loi: "Lỗi", "canh-bao": "Cảnh báo", "goi-y": "Gợi ý" };
+
+  var filter = "all", selected = null, picked = {};
+  var listEl = document.getElementById("issue-list");
+  var detail = document.getElementById("detail");
+  var qEl = document.getElementById("q");
+
+  function visible() {
+    var v = qEl.value.trim().toLowerCase();
+    return ISSUES.filter(function (i) {
+      var okSev = filter === "all" || i.sev === filter;
+      var okQ = !v || (i.id + " " + i.title).toLowerCase().indexOf(v) > -1;
+      return okSev && okQ;
+    });
+  }
+
+  function paintCounts() {
+    document.getElementById("c-all").textContent = ISSUES.length;
+    ["loi", "canh-bao", "goi-y"].forEach(function (s) {
+      document.getElementById("c-" + s).textContent =
+        ISSUES.filter(function (i) { return i.sev === s; }).length;
+    });
+    var n = Object.keys(picked).filter(function (k) { return picked[k]; }).length;
+    document.getElementById("selinfo").textContent = n + " đã chọn";
+    document.getElementById("btn-fix").disabled = n === 0;
+  }
+
+  function paintList() {
+    var items = visible();
+    document.getElementById("issue-empty").hidden = items.length > 0;
+    listEl.innerHTML = items.map(function (i) {
+      return '<button class="listrow" role="option" data-id="' + i.id + '" aria-selected="' +
+        (selected === i.id) + '" style="grid-template-columns:auto 1fr auto" data-od-id="issue-' + i.id + '">' +
+        '<span class="box" data-checked="' + (picked[i.id] ? "true" : "false") + '" data-pick="' + i.id + '">' +
+          App.icon("tick") + "</span>" +
+        '<span><span class="t">' + i.title + "</span><br>" +
+        '<span class="d mono">' + i.id + "</span></span>" +
+        '<span class="sev" data-sev="' + i.sev + '"><i></i>' + SEV_LABEL[i.sev] + "</span></button>";
+    }).join("");
+    paintCounts();
+  }
+
+  function paintRules() {
+    document.getElementById("rulecov").innerHTML = RULES.map(function (r) {
+      var hits = ISSUES.filter(function (i) { return i.kind === r.k; }).length;
+      return '<div data-hit="' + (hits > 0) + '"><span class="rm"></span>' +
+        "<span><b style=\"font-weight:550\">" + r.n + "</b><br>" +
+        "<code>" + r.k + "</code> · " + (hits ? hits + " phát hiện" : "đạt") + "</span></div>";
+    }).join("");
+  }
+
+  function paintDetail() {
+    var i = ISSUES.filter(function (x) { return x.id === selected; })[0];
+    if (!i) {
+      detail.innerHTML =
+        '<div class="statebox" data-state="empty" style="padding-top:var(--s7)">' +
+          '<div class="mark">' + App.icon("check") + "</div>" +
+          "<strong>Chọn một phát hiện</strong>" +
+          "<p>Xem đối tượng liên quan và cách sửa trước khi chuẩn bị thao tác.</p></div>";
+      return;
+    }
+
+    detail.innerHTML =
+      '<div style="padding:20px;border-bottom:1px solid var(--border);background:var(--bg)">' +
+        '<span class="sev" data-sev="' + i.sev + '"><i></i>' + SEV_LABEL[i.sev] + "</span>" +
+        '<h2 style="font-size:15px;font-weight:640;margin-top:8px;text-wrap:pretty">' + i.title + "</h2>" +
+        '<div class="mono" style="font-size:11px;color:var(--muted);margin-top:6px">' + i.id + "</div>" +
+      "</div>" +
+      '<div style="padding:20px;display:flex;flex-direction:column;gap:var(--s4)">' +
+
+        '<p style="font-size:12.5px;line-height:1.55;margin:0;text-wrap:pretty">' + i.desc + "</p>" +
+
+        '<dl class="props" style="grid-template-columns:120px 1fr;border:1px solid var(--border);border-radius:var(--r);overflow:hidden">' +
+          "<dt>Đối tượng</dt><dd style=\"font-family:var(--font)\">" + i.subjects + "</dd>" +
+          "<dt>Nhóm sửa</dt><dd style=\"font-family:var(--font)\">" +
+            (i.fix ? "<code>" + i.fix + "</code>" : "không có") + "</dd>" +
+        "</dl>" +
+
+        (i.warn ? '<div class="banner" data-tone="hard"><span class="bm"></span><span class="bt">' + i.warn + "</span></div>" : "") +
+
+        '<div class="banner"><span class="bm"></span><span class="bt">' + i.why + "</span></div>" +
+
+        (i.needsBase
+          ? '<div class="guardstrip"><div class="gs-head">Cần thêm thông tin</div>' +
+            '<div class="gsrow" data-pass="false"><span class="mk"></span>' +
+            '<span class="lbl">Chưa chọn dimension gốc<small>Lệnh căn hàng bắt buộc có <code>dimBaseHandle</code> — thiếu nó thì lệnh ném lỗi ngay.</small></span>' +
+            '<span class="src">dimspace</span></div></div>' +
+            '<button class="btn" id="pick-base">Chọn dimension gốc trong AutoCAD</button>'
+          : "") +
+
+        (i.fix
+          ? '<button class="btn btn--primary" id="fix-one" data-write>Chuẩn bị sửa mục này</button>'
+          : '<button class="btn" disabled>Không có sửa tự động</button>' +
+            '<p class="hint">Phải xử lý thủ công trong AutoCAD, hoặc dùng bộ chọn có guard ở ' +
+            "<b>Thông tin bản vẽ</b> để gán lại đối tượng.</p>") +
+
+      "</div>";
+
+    var one = document.getElementById("fix-one");
+    if (one) one.addEventListener("click", function () { prepareFix([i]); });
+
+    var pb = document.getElementById("pick-base");
+    if (pb) pb.addEventListener("click", function () {
+      App.modal({
+        title: "Chọn dimension gốc",
+        sub: "Việc này làm trong AutoCAD",
+        body:
+          '<ol class="steps">' +
+            '<li data-done="active"><span class="sn">1</span><span class="sb"><b>Chuyển sang AutoCAD</b>' +
+              "<span>Chọn dimension mà bạn muốn lấy làm chuẩn hàng.</span></span></li>" +
+            '<li><span class="sn">2</span><span class="sb"><b>Quay lại đây</b>' +
+              "<span>App đọc handle của đối tượng đang được chọn trong AutoCAD.</span></span></li>" +
+          "</ol>",
+        footer: '<span class="spacer"></span><button class="btn" data-close>Đóng</button>' +
+                '<button class="btn btn--primary" data-close>Đọc bộ chọn hiện tại</button>'
+      });
+    });
+  }
+
+  /* ---------- Prepare a fix ----------
+     Fixes never run straight from this screen. They become staged
+     operations bound to this scanId, so the confirm sheet shows what
+     will change before anything is written. */
+  function prepareFix(issues) {
+    var fixable = issues.filter(function (i) { return i.fix; });
+    var skipped = issues.filter(function (i) { return !i.fix; });
+    if (!fixable.length) {
+      App.toast("Không mục nào trong lựa chọn có nhóm sửa tự động.");
+      return;
+    }
+
+    var groups = {};
+    fixable.forEach(function (i) { (groups[i.fix] = groups[i.fix] || []).push(i); });
+
+    App.confirm({
+      wide: true,
+      title: "Chuẩn bị sửa " + fixable.length + " mục",
+      sub: "Gắn với phiên quét scan_5c11 · bản vẽ r48 · hồ sơ v12",
+      body:
+        Object.keys(groups).map(function (g) {
+          return '<div class="panel"><header><h2>' + FIXGROUPS[g] + "</h2>" +
+            '<div class="actions"><span class="tag mono">' + g + "</span></div></header>" +
+            '<table class="difftable"><thead><tr><th>Mục</th><th>Trước</th><th>Sau</th></tr></thead><tbody>' +
+            groups[g].map(function (i) {
+              return "<tr><td class=\"kind\"><span class=\"dmark\" data-d=\"mod\">" + i.id + "</span></td>" +
+                '<td class="before">' + beforeOf(i) + '</td><td class="after">' + afterOf(i) + "</td></tr>";
+            }).join("") + "</tbody></table></div>";
+        }).join("") +
+        (skipped.length
+          ? '<div class="banner"><span class="bm"></span><span class="bt">Bỏ qua <b>' + skipped.length +
+            " mục</b> không có nhóm sửa tự động: " +
+            skipped.map(function (i) { return "<code>" + i.id + "</code>"; }).join(", ") + "</span></div>"
+          : "") +
+        '<div class="banner" data-tone="hard"><span class="bm"></span><span class="bt">' +
+          "<b>Áp dụng xong, phiên quét này bị huỷ.</b> Máy chủ xoá kết quả quét sau mỗi lần sửa, " +
+          "nên danh sách phát hiện sẽ không còn đúng và bạn phải quét lại.</span></div>",
+      confirmLabel: "Tạo thao tác chờ duyệt",
+      note: "Chưa ghi gì vào bản vẽ ở bước này.",
+      onConfirm: function () {
+        var list = App.staged();
+        Object.keys(groups).forEach(function (g) {
+          list.unshift({
+            id: "op_" + Math.random().toString(16).slice(2, 6),
+            verb: FIXGROUPS[g],
+            subject: groups[g].length + " mục · " + groups[g].map(function (i) { return i.id; }).join(", "),
+            doc: "TH-KT-01", rev: "r48", from: "review", state: "ready", at: "—"
+          });
+        });
+        App.saveStaged(list);
+        App.modal({
+          title: "Đã tạo " + Object.keys(groups).length + " thao tác chờ duyệt",
+          body: '<div class="banner"><span class="bm"></span><span class="bt">Bản vẽ <b>chưa thay đổi</b>. ' +
+                "Mở <b>Thay đổi</b> để xem chi tiết từng nhóm sửa rồi xác nhận.</span></div>",
+          footer: '<span class="spacer"></span><button class="btn" data-close>Ở lại đây</button>' +
+                  '<a class="btn btn--primary" href="changes.html">Xem thay đổi</a>'
+        });
+      }
+    });
+  }
+
+  function beforeOf(i) {
+    return {
+      "layer-missing-a-grid": "— (không có layer)",
+      "layer-properties-p-pipe": "P-PIPE · Continuous",
+      "dimstyle": "ISO-25",
+      "dim-row-x": "12 dimension lệch lưới"
+    }[i.id] || "—";
+  }
+  function afterOf(i) {
+    return {
+      "layer-missing-a-grid": "A-GRID · màu 8 · CENTER · 0.13",
+      "layer-properties-p-pipe": "P-PIPE · DASHED",
+      "dimstyle": "CTY-DIM-100",
+      "dim-row-x": "căn theo bước 8,0"
+    }[i.id] || "—";
+  }
+
+  /* ---------- Wiring ---------- */
+  listEl.addEventListener("click", function (e) {
+    var pick = e.target.closest("[data-pick]");
+    if (pick) {
+      e.stopPropagation();
+      var id = pick.dataset.pick;
+      picked[id] = !picked[id];
+      paintList();
+      return;
+    }
+    var row = e.target.closest("[data-id]");
+    if (!row) return;
+    selected = row.dataset.id;
+    paintList();
+    paintDetail();
+  });
+
+  document.querySelectorAll("[data-sev-filter]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll("[data-sev-filter]").forEach(function (x) { x.setAttribute("aria-pressed", "false"); });
+      b.setAttribute("aria-pressed", "true");
+      filter = b.dataset.sevFilter;
+      paintList();
+    });
+  });
+  qEl.addEventListener("input", paintList);
+
+  document.getElementById("btn-fix").addEventListener("click", function () {
+    prepareFix(ISSUES.filter(function (i) { return picked[i.id]; }));
+  });
+
+  /* Rescan is /standards/scan against the active profile. It is not
+     AUDIT — AUDIT checks DWG file integrity and only runs on closed
+     files in the batch pipeline. */
+  document.getElementById("btn-rescan").addEventListener("click", function () {
+    var b = this;
+    b.disabled = true;
+    b.innerHTML = '<span class="spin"></span>Đang quét…';
+    listEl.innerHTML = Array.from({ length: 4 }).map(function () {
+      return '<div style="padding:var(--s3) var(--s4);border-bottom:1px solid var(--border)">' +
+        '<div class="skel skel--line" style="width:60%"></div>' +
+        '<div class="skel skel--line" style="width:30%;margin-top:6px"></div></div>';
+    }).join("");
+    setTimeout(function () {
+      b.disabled = false;
+      b.textContent = "Quét lại";
+      picked = {};
+      document.getElementById("scan-id").textContent = "scan_5c1" + Math.floor(Math.random() * 9);
+      document.getElementById("scan-at").textContent = "vừa xong";
+      paintList();
+      paintDetail();
+      App.toast("Đã quét lại · " + ISSUES.length + " phát hiện");
+    }, 1600);
+  });
+
+  paintList();
+  paintRules();
+  paintDetail();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thông tin bản vẽ — AutoCAD Toolkit</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+  .info { display: grid; grid-template-columns: minmax(0, 1fr) 320px; min-height: 0; flex: 1; }
+  .info > .cols { overflow-y: auto; min-width: 0; }
+  .info > .picker { border-left: 1px solid var(--border); background: var(--surface); overflow-y: auto; }
+  .infopad { padding: var(--s5); display: flex; flex-direction: column; gap: var(--s4); }
+  .kv { display: grid; grid-template-columns: 168px minmax(0, 1fr); }
+  .kv dt, .kv dd { margin: 0; padding: 8px var(--s4); border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { font-family: var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .kv dt:last-of-type, .kv dd:last-of-type { border-bottom: 0; }
+  .bars { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s4); }
+  .bar { display: grid; grid-template-columns: 112px 1fr 56px; align-items: center; gap: var(--s3); font-size: 12px; }
+  .bar .t { height: 8px; background: var(--fg-06); border-radius: var(--r-pill); overflow: hidden; }
+  .bar .t i { display: block; height: 100%; background: var(--accent); border-radius: var(--r-pill); }
+  .bar .c { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-72); }
+  .bar .nm { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pickpad { padding: var(--s4); display: flex; flex-direction: column; gap: var(--s4); }
+  @media (max-width: 1240px) { .info { grid-template-columns: minmax(0, 1fr) 288px; } }
+  @media (max-width: 900px)  { .info { grid-template-columns: 1fr; } .info > .picker { display: none; } }
+</style>
+</head>
+<body data-screen="info" data-acad="on" data-status="TH-KT-01 · revision r48">
+
+<div class="app">
+  <header class="titlebar" data-shell="titlebar"></header>
+
+  <div class="body">
+    <nav class="rail" data-shell="rail" aria-label="Điều hướng chính"></nav>
+
+    <main class="main">
+      <div class="pagehead" data-od-id="info-head">
+        <div>
+          <h1 data-od-id="info-title">Thông tin bản vẽ</h1>
+          <div class="sub">Hồ sơ đầy đủ do <span class="mono">GET /api/acad/drawing-info</span> trả về · chỉ đọc</div>
+        </div>
+        <div class="actions">
+          <button class="btn" id="btn-reload">Đọc lại</button>
+        </div>
+      </div>
+
+      <div class="info">
+
+        <!-- ── Read-only profile ─────────────────────────────────── -->
+        <div class="cols">
+          <div class="infopad" id="info-body">
+
+            <!-- 1 · File & revision -->
+            <section class="panel" data-od-id="info-file">
+              <header><h2>Tệp &amp; phiên bản</h2><div class="actions"><span class="tag mono">1–4</span></div></header>
+              <dl class="kv">
+                <dt>Tên tệp</dt><dd>TH-KT-01 · Mặt bằng tầng 3.dwg</dd>
+                <dt>Đường dẫn</dt><dd>~/Documents/NM-BinhDuong/KT/TH-KT-01.dwg</dd>
+                <dt>Revision database</dt><dd>r48</dd>
+                <dt>Trạng thái lưu</dt><dd>dbmod = 1 · <span class="tag">chưa lưu</span></dd>
+              </dl>
+            </section>
+
+            <!-- 2 · Units & measurement -->
+            <section class="panel" data-od-id="info-units">
+              <header><h2>Đơn vị &amp; phạm vi</h2><div class="actions"><span class="tag mono">5–9</span></div></header>
+              <dl class="kv">
+                <dt>INSUNITS</dt><dd>4 · Millimeters</dd>
+                <dt>MEASUREMENT</dt><dd>1 · metric</dd>
+                <dt>EXTMIN</dt><dd>−120,0 &nbsp; −85,0 &nbsp; 0,0</dd>
+                <dt>EXTMAX</dt><dd>5 240,0 &nbsp; 5 480,0 &nbsp; 0,0</dd>
+                <dt>UCS hiện hành</dt><dd>WORLD</dd>
+              </dl>
+            </section>
+
+            <!-- 3 · Entity histogram -->
+            <section class="panel" data-od-id="info-entities">
+              <header><h2>Đối tượng theo kiểu</h2>
+                <div class="actions"><span class="tag mono">908 tổng</span><span class="tag mono">10</span></div></header>
+              <div class="bars" id="ent-bars"></div>
+            </section>
+
+            <!-- 4 · Layer table -->
+            <section class="panel" data-od-id="info-layers">
+              <header><h2>Bảng layer</h2>
+                <div class="actions"><span class="tag mono">7 layer</span><span class="tag mono">11</span></div></header>
+              <div class="tablewrap">
+                <table class="data" id="layer-table">
+                  <thead><tr><th>Tên</th><th class="n">Màu</th><th>Linetype</th><th class="n">Lineweight</th><th class="n">Đối tượng</th><th>Trạng thái</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </section>
+
+            <!-- 5 · Symbol tables -->
+            <section class="panel" data-od-id="info-tables">
+              <header><h2>Bảng ký hiệu</h2><div class="actions"><span class="tag mono">12–15</span></div></header>
+              <dl class="kv">
+                <dt>Text style</dt><dd>4 · Standard, ROMANS, VNI-Helve, Annotative</dd>
+                <dt>Dimension style</dt><dd>2 · Standard, ISO-25 &nbsp;<span class="tag">hiện hành: ISO-25</span></dd>
+                <dt>Linetype</dt><dd>5 · ByBlock, ByLayer, Continuous, DASHED, CENTER</dd>
+                <dt>Định nghĩa block</dt><dd>12 · 138 lần chèn</dd>
+              </dl>
+            </section>
+
+            <!-- 6 · Layouts & xrefs -->
+            <section class="panel" data-od-id="info-layouts">
+              <header><h2>Layout &amp; tham chiếu ngoài</h2><div class="actions"><span class="tag mono">16–17</span></div></header>
+              <dl class="kv">
+                <dt>Layout</dt><dd>Model, A1-KT-01, A1-KT-02</dd>
+                <dt>Xref</dt><dd>2 · TH-KT-GRID.dwg (nạp), TH-CN-BASE.dwg <span class="tag">không tìm thấy</span></dd>
+              </dl>
+              <div style="padding:var(--s3) var(--s4);border-top:1px solid var(--border)">
+                <span class="needs-backend">Sửa xref chưa có endpoint</span>
+                <span class="hint" style="margin-left:var(--s2)">Xref đọc được nhưng không có đường ghi — phải xử lý trong AutoCAD.</span>
+              </div>
+            </section>
+
+            <!-- 7 · Named object dictionary -->
+            <section class="panel" data-od-id="info-nod">
+              <header><h2>Từ điển đối tượng có tên (NOD)</h2><div class="actions"><span class="tag mono">18</span></div></header>
+              <div style="padding:var(--s3) var(--s4)">
+                <ul class="tree" id="nod-tree"></ul>
+              </div>
+            </section>
+
+            <div class="banner" data-od-id="info-phase-note">
+              <span class="bm"></span>
+              <span class="bt">Khung xem web dựng từ snapshot <code>.cadweb</code> nên <b>không hiển thị</b>
+              dimension, hatch, spline, ATTDEF, MINSERT, layout/viewport và xref. Các mục đó vẫn được
+              liệt kê ở đây vì <code>drawing-info</code> đọc thẳng từ bản vẽ.</span>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- ── Guarded selection builder ─────────────────────────── -->
+        <aside class="picker" data-od-id="selection-builder">
+          <div class="pickpad">
+            <div>
+              <h2 style="font-size:13px;font-weight:640;margin-bottom:4px">Tạo bộ chọn</h2>
+              <p class="hint">Đây là đường duy nhất để chọn đối tượng có ràng buộc. Bộ chọn không ghi gì —
+              nó tạo một thao tác chờ duyệt trong <b>Thay đổi</b>.</p>
+            </div>
+
+            <div class="field">
+              <label for="sel-scope">Phạm vi</label>
+              <select class="select" id="sel-scope">
+                <option value="layer">Theo layer</option>
+                <option value="block">Theo tên block</option>
+                <option value="type">Theo kiểu đối tượng</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="sel-value">Giá trị</label>
+              <select class="select" id="sel-value"></select>
+            </div>
+
+            <div class="field">
+              <label for="sel-action">Thao tác</label>
+              <select class="select" id="sel-action">
+                <option value="move-to-layer">Gán sang layer khác</option>
+                <option value="set-color">Đặt màu theo layer</option>
+              </select>
+            </div>
+
+            <div class="field" id="target-wrap">
+              <label for="sel-target">Layer đích</label>
+              <select class="select" id="sel-target"></select>
+            </div>
+
+            <div class="guardstrip" id="sel-guards"></div>
+
+            <button class="btn btn--primary" id="sel-prepare" data-write>Chuẩn bị thao tác</button>
+            <p class="hint">Bấm nút này gọi <span class="mono">/selection/prepare</span>. Bản vẽ chưa thay đổi
+            cho đến khi bạn xác nhận trong Thay đổi.</p>
+          </div>
+        </aside>
+
+      </div>
+    </main>
+  </div>
+
+  <footer class="statusbar" data-shell="statusbar"></footer>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+/* ============================================================
+   drawing-info — read side, plus the one guarded write entry.
+
+   Every number on this screen comes from a single canonical fact
+   set so that Tổng quan, Kiểm tra, Bóc tách and Khung bản vẽ can
+   never disagree about the same drawing again.
+   ============================================================ */
+(function () {
+  "use strict";
+
+  var DWG = {
+    total: 908,
+    entities: [
+      { t: "LINE",       n: 402 },
+      { t: "LWPOLYLINE", n: 214 },
+      { t: "INSERT",     n: 138 },
+      { t: "MTEXT",      n: 96  },
+      { t: "ARC",        n: 34  },
+      { t: "CIRCLE",     n: 24  }
+    ],
+    layers: [
+      { name: "0",         color: "7", ltype: "Continuous", lw: "mặc định", n: 214, state: "" },
+      { name: "A-WALL",    color: "2", ltype: "Continuous", lw: "0.35",     n: 268, state: "" },
+      { name: "P-PIPE",    color: "5", ltype: "Continuous", lw: "0.35",     n: 142, state: "khoá" },
+      { name: "A-TEXT",    color: "7", ltype: "Continuous", lw: "0.18",     n: 96,  state: "" },
+      { name: "CUA-DI",    color: "3", ltype: "Continuous", lw: "0.25",     n: 96,  state: "" },
+      { name: "A-DOOR",    color: "3", ltype: "Continuous", lw: "0.25",     n: 84,  state: "" },
+      { name: "DEFPOINTS", color: "7", ltype: "Continuous", lw: "mặc định", n: 8,   state: "không in" }
+    ],
+    blocks: ["VAN-CONG-DN80", "VAN-1CHIEU-DN50", "TEE-DN80", "CO-90-DN80",
+             "CUA-DI-800", "CUA-SO-1200", "KHUNG-TEN-A1", "MUI-TEN-BAC"]
+  };
+
+  /* ---------- Entity histogram ---------- */
+  document.getElementById("ent-bars").innerHTML = DWG.entities.map(function (e) {
+    var pct = Math.round((e.n / DWG.total) * 100);
+    return '<div class="bar"><span class="nm">' + e.t + "</span>" +
+      '<span class="t"><i style="width:' + pct + '%"></i></span>' +
+      '<span class="c">' + e.n + "</span></div>";
+  }).join("");
+
+  /* ---------- Layer table ---------- */
+  document.querySelector("#layer-table tbody").innerHTML = DWG.layers.map(function (l) {
+    return "<tr><td class=\"mono\">" + l.name + '</td><td class="n mono">' + l.color +
+      '</td><td class="mono">' + l.ltype + '</td><td class="n mono">' + l.lw +
+      '</td><td class="n">' + l.n + "</td><td>" +
+      (l.state ? '<span class="tag">' + l.state + "</span>" : '<span class="tag tag--quiet">bình thường</span>') +
+      "</td></tr>";
+  }).join("");
+
+  /* ---------- NOD tree ---------- */
+  var NOD = [
+    { k: "ACAD_LAYOUT", v: "3 mục", c: [
+      { k: "Model", v: "" }, { k: "A1-KT-01", v: "" }, { k: "A1-KT-02", v: "" }
+    ]},
+    { k: "ACAD_GROUP", v: "0 mục" },
+    { k: "ACAD_PLOTSETTINGS", v: "2 mục", c: [
+      { k: "A1-PDF", v: "DWG To PDF.pc3" }, { k: "A3-KIEMTRA", v: "DWG To PDF.pc3" }
+    ]},
+    { k: "ACAD_SCALELIST", v: "34 mục" },
+    { k: "AcDbVariableDictionary", v: "6 mục", c: [
+      { k: "CANNOSCALE", v: "1:100" }, { k: "DIMASSOC", v: "2" }
+    ]},
+    { k: "MEP_STUDIO", v: "XDATA app · DN cho ống", c: [
+      { k: "đăng ký ở RegAppTable", v: "có" }
+    ]}
+  ];
+
+  function nodHtml(items) {
+    return items.map(function (it) {
+      var leaf = !it.c;
+      return '<li data-open="false"' + (leaf ? ' class="leaf"' : "") + ">" +
+        '<button class="node"><span class="tw">' + (leaf ? "" : App.icon("chevron")) + "</span>" +
+        '<span class="mono">' + it.k + '</span><span class="v">' + (it.v || "") + "</span></button>" +
+        (leaf ? "" : "<ul>" + nodHtml(it.c) + "</ul>") + "</li>";
+    }).join("");
+  }
+  var tree = document.getElementById("nod-tree");
+  tree.innerHTML = nodHtml(NOD);
+  tree.addEventListener("click", function (e) {
+    var btn = e.target.closest(".node");
+    if (!btn) return;
+    var li = btn.parentElement;
+    if (li.classList.contains("leaf")) return;
+    li.dataset.open = li.dataset.open === "true" ? "false" : "true";
+  });
+
+  /* ---------- Guarded selection builder ---------- */
+  var scopeEl  = document.getElementById("sel-scope");
+  var valueEl  = document.getElementById("sel-value");
+  var actionEl = document.getElementById("sel-action");
+  var targetEl = document.getElementById("sel-target");
+  var guardEl  = document.getElementById("sel-guards");
+  var prepEl   = document.getElementById("sel-prepare");
+
+  function opts(list) {
+    return list.map(function (v) { return '<option value="' + v + '">' + v + "</option>"; }).join("");
+  }
+
+  function fillValues() {
+    var s = scopeEl.value;
+    if (s === "layer") valueEl.innerHTML = opts(DWG.layers.map(function (l) { return l.name; }));
+    else if (s === "block") valueEl.innerHTML = opts(DWG.blocks);
+    else valueEl.innerHTML = opts(DWG.entities.map(function (e) { return e.t; }));
+    paintGuards();
+  }
+
+  targetEl.innerHTML = opts(DWG.layers.map(function (l) { return l.name; }));
+
+  function matchCount() {
+    var s = scopeEl.value, v = valueEl.value;
+    if (s === "layer") {
+      var l = DWG.layers.filter(function (x) { return x.name === v; })[0];
+      return l ? l.n : 0;
+    }
+    if (s === "type") {
+      var e = DWG.entities.filter(function (x) { return x.t === v; })[0];
+      return e ? e.n : 0;
+    }
+    return 17; // block reference count for the chosen definition
+  }
+
+  function paintGuards() {
+    var n = matchCount();
+    var srcLayer = DWG.layers.filter(function (x) { return x.name === valueEl.value; })[0];
+    var locked = scopeEl.value === "layer" && srcLayer && srcLayer.state === "khoá";
+    var same = scopeEl.value === "layer" && valueEl.value === targetEl.value;
+
+    var rows = [
+      { pass: n > 0, lbl: "Có đối tượng khớp phạm vi",
+        sub: n > 0 ? n + " đối tượng" : "Không có đối tượng nào — thao tác sẽ trả lỗi", src: "no_match" },
+      { pass: !locked, lbl: "Layer nguồn không bị khoá",
+        sub: locked ? "Layer " + valueEl.value + " đang khoá — không sửa được đối tượng trên đó"
+                    : "Không có layer khoá trong phạm vi", src: "no_match" },
+      { pass: !same, lbl: "Layer đích khác layer nguồn",
+        sub: same ? "Nguồn và đích trùng nhau" : "Đích: " + targetEl.value, src: "target_mismatch" },
+      { pass: true, lbl: "Bản vẽ ghi được", sub: "dbmod = 1, không read-only", src: "drawing_read_only" },
+      { pass: true, lbl: "AutoCAD đang rảnh", sub: "quiescent = true", src: "target_busy" }
+    ];
+
+    var failed = rows.filter(function (r) { return !r.pass; }).length;
+    guardEl.innerHTML =
+      '<div class="gs-head">Điều kiện<span class="n">' + (rows.length - failed) + "/" + rows.length + " đạt</span></div>" +
+      rows.map(function (g) {
+        return '<div class="gsrow" data-pass="' + (g.pass ? "true" : "false") + '">' +
+          '<span class="mk">' + App.icon("tick") + "</span>" +
+          '<span class="lbl">' + g.lbl + "<small>" + g.sub + "</small></span>" +
+          '<span class="src">' + g.src + "</span></div>";
+      }).join("");
+
+    prepEl.disabled = failed > 0;
+    prepEl.textContent = failed > 0 ? "Không đủ điều kiện" : "Chuẩn bị thao tác · " + n + " đối tượng";
+  }
+
+  [scopeEl, valueEl, targetEl, actionEl].forEach(function (el) {
+    el.addEventListener("change", el === scopeEl ? fillValues : paintGuards);
+  });
+
+  document.getElementById("target-wrap").hidden = false;
+  actionEl.addEventListener("change", function () {
+    document.getElementById("target-wrap").hidden = actionEl.value !== "move-to-layer";
+    paintGuards();
+  });
+
+  prepEl.addEventListener("click", function () {
+    prepEl.disabled = true;
+    prepEl.innerHTML = '<span class="spin"></span>Đang chuẩn bị…';
+    var n = matchCount();
+    var verb = actionEl.value === "move-to-layer" ? "Gán lại layer" : "Đặt màu theo layer";
+    var subject = n + " đối tượng " +
+      (scopeEl.value === "layer" ? "trên layer " : scopeEl.value === "block" ? "của block " : "kiểu ") +
+      valueEl.value + (actionEl.value === "move-to-layer" ? " → " + targetEl.value : "");
+
+    setTimeout(function () {
+      var list = App.staged();
+      list.unshift({
+        id: "op_" + Math.random().toString(16).slice(2, 6),
+        verb: verb, subject: subject, doc: "TH-KT-01", rev: "r48",
+        from: "drawing-info", state: "ready", at: "—"
+      });
+      App.saveStaged(list);
+      paintGuards();
+      App.modal({
+        title: "Đã tạo thao tác chờ duyệt",
+        sub: verb + " · " + subject,
+        body: '<div class="banner"><span class="bm"></span><span class="bt">' +
+              "Bản vẽ <b>chưa thay đổi</b>. Thao tác nằm trong hàng chờ cho tới khi bạn mở " +
+              "<b>Thay đổi</b>, đọc danh sách đối tượng và xác nhận.</span></div>",
+        footer: '<span class="spacer"></span><button class="btn" data-close>Ở lại đây</button>' +
+                '<a class="btn btn--primary" href="changes.html">Xem thay đổi</a>'
+      });
+    }, 900);
+  });
+
+  /* ---------- Reload ---------- */
+  document.getElementById("btn-reload").addEventListener("click", function () {
+    var b = this;
+    b.disabled = true;
+    b.innerHTML = '<span class="spin"></span>Đang đọc…';
+    setTimeout(function () {
+      b.disabled = false;
+      b.textContent = "Đọc lại";
+      App.toast("Đã đọc lại TH-KT-01 · revision r48");
+    }, 1200);
+  });
+
+  fillValues();
+})();
+</script>
+</body>
+</html>

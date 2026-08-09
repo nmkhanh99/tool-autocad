@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bóc tách khối lượng — AutoCAD Toolkit</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+  .tkpad { padding: var(--s5); display: flex; flex-direction: column; gap: var(--s5); max-width: 980px; }
+  .srcnote { font-size: 12px; color: var(--muted); line-height: 1.55; max-width: 66ch; text-wrap: pretty; }
+  .dnq { display: inline-flex; align-items: center; gap: 5px; }
+</style>
+</head>
+<body data-screen="takeoff" data-acad="on" data-status="Bóc tách trực tiếp · TH-KT-01 r48">
+
+<div class="app">
+  <header class="titlebar" data-shell="titlebar"></header>
+
+  <div class="body">
+    <nav class="rail" data-shell="rail" aria-label="Điều hướng chính"></nav>
+
+    <main class="main">
+      <div class="pagehead" data-od-id="takeoff-head">
+        <div>
+          <h1 data-od-id="takeoff-title">Bóc tách khối lượng</h1>
+          <div class="sub">Đo trực tiếp từ hình học của bản vẽ đang mở · <span class="mono">/livebom</span></div>
+        </div>
+        <div class="actions">
+          <button class="btn" id="btn-csv" data-od-id="btn-export-csv">Xuất CSV</button>
+          <button class="btn" id="btn-rescan" data-od-id="btn-rescan">Đọc lại</button>
+          <button class="btn btn--primary" id="btn-bom" data-write data-od-id="btn-insert-bom">Chèn bảng vào bản vẽ</button>
+        </div>
+      </div>
+
+      <div class="filterbar" data-od-id="takeoff-filters">
+        <div class="searchfield" style="width:280px">
+          <span data-ic="search"></span>
+          <input class="input" id="q" placeholder="Tìm theo layer hoặc tên định nghĩa block" aria-label="Tìm hạng mục">
+        </div>
+        <span class="tag tag--quiet mono" style="margin-left:auto" id="rowinfo">—</span>
+      </div>
+
+      <div class="scroll">
+        <div class="tkpad">
+
+          <!-- What this screen can and cannot measure. Stated up front so
+               nobody looks for a floor-area row that can never exist. -->
+          <div class="banner" data-od-id="scope-note">
+            <span class="bm"></span>
+            <span class="bt">Bóc tách trực tiếp chỉ làm được <b>hai việc</b>: đo chiều dài đường ống/gió
+            trên layer có tên khớp mẫu, và đếm số lần chèn của từng định nghĩa block.
+            <b>Không đo được diện tích</b> (tường, sàn, vùng tô) — đó là việc phải làm trong AutoCAD
+            hoặc bằng bộ chạy offline ở <b>Xử lý thư mục</b>.</span>
+          </div>
+
+          <!-- Pipe / duct length -->
+          <section class="panel" data-od-id="pipe-lengths">
+            <header>
+              <h2>Chiều dài ống &amp; ống gió</h2>
+              <div class="actions"><span class="tag mono" id="pipe-total">—</span></div>
+            </header>
+            <div class="tablewrap">
+              <table class="data" id="pipe-table">
+                <thead><tr><th>Layer</th><th>DN</th><th class="n">Chiều dài (m)</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div style="padding:var(--s3) var(--s4);border-top:1px solid var(--border)">
+              <p class="srcnote">Chỉ quét layer có tên bắt đầu bằng <code>P-</code>, <code>DCCD</code>,
+              <code>N-T</code> hoặc có chứa <code>PIPE</code> / <code>DUCT</code>. Layer khác — kể cả
+              <code>A-WALL</code> — bị bỏ qua hoàn toàn, nên không có dòng nào cho tường hay sàn.</p>
+            </div>
+          </section>
+
+          <!-- Unknown DN explainer -->
+          <div class="banner" data-tone="hard" data-od-id="dn-note">
+            <span class="bm"></span>
+            <span class="bt"><b>DN “?” không phải lỗi hiển thị.</b> Đường kính chỉ đọc được từ bề rộng
+            MLINE hoặc từ dữ liệu mở rộng <code>MEP_STUDIO</code> gắn trên đối tượng. Polyline vẽ tay
+            trên layer ống không mang thông tin đó, nên giá trị mặc định là <code>?</code>. Muốn có DN
+            thật thì phải gán XDATA trong AutoCAD.</span>
+          </div>
+
+          <!-- Block counts -->
+          <section class="panel" data-od-id="block-counts">
+            <header>
+              <h2>Số lần chèn theo định nghĩa block</h2>
+              <div class="actions"><span class="tag mono" id="blk-total">—</span></div>
+            </header>
+            <div class="tablewrap">
+              <table class="data" id="blk-table">
+                <thead><tr><th>Tên định nghĩa</th><th class="n">Số lần chèn</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div style="padding:var(--s3) var(--s4);border-top:1px solid var(--border)">
+              <p class="srcnote">Đếm theo <b>tên định nghĩa block</b>. Bộ đếm không đọc attribute, nên
+              không phân loại được theo mã hiệu, hạng mục hay đơn vị — và cũng không trả về handle của
+              từng lần chèn, nên không chọn ngược lại đối tượng trong bản vẽ được.</p>
+            </div>
+          </section>
+
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <footer class="statusbar" data-shell="statusbar"></footer>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+/* ============================================================
+   Live takeoff — exactly what /livebom returns.
+
+   Two payload shapes, nothing more:
+     { layer, dn, len_m }   pipe/duct runs on matching layers
+     { name, count }        block reference counts by definition name
+
+   There is no area, no per-row handle, no attribute reading and no
+   item code. Everything the old screen showed beyond these two
+   shapes was measured from something the scanner never looks at.
+   ============================================================ */
+(function () {
+  "use strict";
+
+  document.querySelectorAll('[data-ic="search"]').forEach(function (el) { el.outerHTML = App.icon("search"); });
+
+  var PIPES = [
+    { layer: "P-PIPE", dn: "80", len: 72.0 },
+    { layer: "P-PIPE", dn: "50", len: 34.0 },
+    { layer: "P-PIPE", dn: "?",  len: 11.0 }
+  ];
+
+  var BLOCKS = [
+    { name: "CUA-DI-800",     n: 42 },
+    { name: "MUI-TEN-BAC",    n: 32 },
+    { name: "CUA-SO-1200",    n: 28 },
+    { name: "BOM-ELBOW",      n: 14 },
+    { name: "CTY-GRID",       n: 6  },
+    { name: "BOM-TEE",        n: 6  },
+    { name: "BOM-VALVE",      n: 4  },
+    { name: "BOM-PUMP",       n: 2  },
+    { name: "BOM-TANK",       n: 1  },
+    { name: "BOM-AHU",        n: 1  },
+    { name: "BOM-PANEL",      n: 1  },
+    { name: "CTY-TITLE",      n: 1  }
+  ];
+
+  var qEl = document.getElementById("q");
+
+  function fmt(n) { return n.toFixed(1).replace(".", ","); }
+
+  function paint() {
+    var v = qEl.value.trim().toLowerCase();
+
+    var pipes = PIPES.filter(function (p) {
+      return !v || (p.layer + " dn" + p.dn).toLowerCase().indexOf(v) > -1;
+    });
+    var blocks = BLOCKS.filter(function (b) {
+      return !v || b.name.toLowerCase().indexOf(v) > -1;
+    });
+
+    document.querySelector("#pipe-table tbody").innerHTML = pipes.length
+      ? pipes.map(function (p) {
+          return "<tr><td class=\"mono\">" + p.layer + "</td>" +
+            '<td class="mono">' + (p.dn === "?"
+              ? '<span class="dnq">?<span class="tag tag--quiet">không xác định</span></span>'
+              : p.dn) + "</td>" +
+            '<td class="n">' + fmt(p.len) + "</td></tr>";
+        }).join("") +
+        "<tr><td colspan=\"2\" style=\"font-weight:620\">Tổng chiều dài</td>" +
+        '<td class="n" style="font-weight:620">' +
+          fmt(pipes.reduce(function (s, p) { return s + p.len; }, 0)) + "</td></tr>"
+      : '<tr><td colspan="3" class="hint" style="padding:var(--s4)">Không có dòng nào khớp.</td></tr>';
+
+    document.querySelector("#blk-table tbody").innerHTML = blocks.length
+      ? blocks.map(function (b) {
+          return "<tr><td class=\"mono\">" + b.name + '</td><td class="n">' + b.n + "</td></tr>";
+        }).join("") +
+        '<tr><td style="font-weight:620">Tổng lần chèn</td><td class="n" style="font-weight:620">' +
+          blocks.reduce(function (s, b) { return s + b.n; }, 0) + "</td></tr>"
+      : '<tr><td colspan="2" class="hint" style="padding:var(--s4)">Không có định nghĩa nào khớp.</td></tr>';
+
+    document.getElementById("pipe-total").textContent =
+      fmt(PIPES.reduce(function (s, p) { return s + p.len; }, 0)) + " m";
+    document.getElementById("blk-total").textContent =
+      BLOCKS.reduce(function (s, b) { return s + b.n; }, 0) + " lần chèn";
+    document.getElementById("rowinfo").textContent =
+      pipes.length + " tuyến · " + blocks.length + " định nghĩa";
+  }
+
+  qEl.addEventListener("input", paint);
+
+  document.getElementById("btn-rescan").addEventListener("click", function () {
+    var b = this;
+    b.disabled = true;
+    b.innerHTML = '<span class="spin"></span>Đang đọc…';
+    setTimeout(function () {
+      b.disabled = false;
+      b.textContent = "Đọc lại";
+      App.toast("Đã đọc lại khối lượng từ TH-KT-01 · r48");
+    }, 900);
+  });
+
+  document.getElementById("btn-csv").addEventListener("click", function () {
+    App.toast("Đã xuất CSV: chiều dài ống và số lần chèn block.");
+  });
+
+  /* The insert command re-scans the drawing itself and writes a
+     three-column table into model space. Nothing the user filters or
+     selects on this screen changes what lands in the drawing, so the
+     dialog says so instead of implying a selection is being sent. */
+  document.getElementById("btn-bom").addEventListener("click", function () {
+    App.confirm({
+      title: "Chèn bảng khối lượng vào bản vẽ?",
+      sub: "TH-KT-01 · model space",
+      body:
+        '<div class="banner"><span class="bm"></span><span class="bt">' +
+          "<b>Bảng do plugin tự quét lại bản vẽ để dựng.</b> Bộ lọc hay thứ tự bạn đang thấy trên màn hình " +
+          "này không ảnh hưởng tới nội dung bảng được chèn.</span></div>" +
+
+        '<div class="panel"><header><h2>Bảng sẽ được chèn</h2>' +
+          '<div class="actions"><span class="tag mono">3 cột × 4 dòng</span></div></header>' +
+          '<div class="tablewrap"><table class="data">' +
+            "<thead><tr><th>Layer / Hệ</th><th>DN</th><th class=\"n\">Dài (m)</th></tr></thead><tbody>" +
+            PIPES.map(function (p) {
+              return "<tr><td class=\"mono\">" + p.layer + '</td><td class="mono">' + p.dn +
+                '</td><td class="n">' + fmt(p.len) + "</td></tr>";
+            }).join("") +
+            '<tr><td colspan="2" style="font-weight:620">Tổng</td><td class="n" style="font-weight:620">' +
+              fmt(PIPES.reduce(function (s, p) { return s + p.len; }, 0)) + "</td></tr>" +
+          "</tbody></table></div></div>" +
+
+        '<dl class="props" style="grid-template-columns:150px 1fr;border:1px solid var(--border);border-radius:var(--r);overflow:hidden">' +
+          "<dt>Không gian</dt><dd>ACDB_MODEL_SPACE</dd>" +
+          "<dt>Điểm chèn</dt><dd>chọn trong AutoCAD</dd>" +
+        "</dl>" +
+        '<p class="hint" style="margin:0">Bảng chỉ chứa chiều dài ống. Số lần chèn block không nằm ' +
+        "trong bảng này — muốn có thì xuất CSV.</p>",
+      confirmLabel: "Tạo thao tác chờ duyệt",
+      note: "Chưa ghi gì vào bản vẽ ở bước này.",
+      onConfirm: function () {
+        var list = App.staged();
+        list.unshift({
+          id: "op_" + Math.random().toString(16).slice(2, 6),
+          verb: "Chèn bảng khối lượng",
+          subject: "AcDbTable 3 cột × 4 dòng vào model space",
+          doc: "TH-KT-01", rev: "r48", from: "takeoff", state: "ready", at: "—"
+        });
+        App.saveStaged(list);
+        App.modal({
+          title: "Đã tạo thao tác chờ duyệt",
+          body: '<div class="banner"><span class="bm"></span><span class="bt">Bản vẽ <b>chưa thay đổi</b>. ' +
+                "Xác nhận trong <b>Thay đổi</b>, sau đó AutoCAD sẽ hỏi điểm chèn.</span></div>",
+          footer: '<span class="spacer"></span><button class="btn" data-close>Ở lại đây</button>' +
+                  '<a class="btn btn--primary" href="changes.html">Xem thay đổi</a>'
+        });
+      }
+    });
+  });
+
+  paint();
+})();
+</script>
+</body>
+</html>

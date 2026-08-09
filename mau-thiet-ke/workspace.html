@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Khung bản vẽ — AutoCAD Toolkit</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+  /* Query bar replaces the old free-form command line. The daemon has
+     no REPL: /livequery accepts a fixed set of read-only queries and
+     /job only runs pre-built, signed LISP. A text box that looks like
+     the AutoCAD command line would promise something that cannot exist. */
+  .querybar {
+    position: absolute; left: var(--s3); right: var(--s3); bottom: var(--s3);
+    display: flex; align-items: center; gap: var(--s2);
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-sm);
+    padding: var(--s1) var(--s1) var(--s1) var(--s3); height: 38px;
+  }
+  .querybar .p { font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .querybar select { flex: 1; height: 30px; border: 0; background: transparent; font-size: 12.5px; min-width: 0; }
+  .querybar select:focus { outline: none; }
+</style>
+</head>
+<body data-screen="workspace" data-acad="on" data-status="Snapshot r47 · bản vẽ đang ở r48">
+
+<div class="app">
+  <header class="titlebar" data-shell="titlebar"></header>
+
+  <div class="body">
+    <nav class="rail" data-shell="rail" aria-label="Điều hướng chính"></nav>
+
+    <main class="main">
+      <div class="pagehead" data-od-id="workspace-head">
+        <div>
+          <h1 data-od-id="workspace-title">TH-KT-01 · Mặt bằng tầng 3</h1>
+          <div class="sub">Snapshot <span class="mono">.cadweb</span> · xuất 09:52 từ AutoCAD · 7 layer · 908 đối tượng</div>
+        </div>
+        <div class="actions">
+          <span class="tag" data-od-id="snapshot-badge">snapshot r47</span>
+          <button class="btn" id="btn-load" data-od-id="btn-load-snapshot">Nạp snapshot…</button>
+          <a class="btn" href="drawing-info.html" data-od-id="btn-info">Thông tin bản vẽ</a>
+        </div>
+      </div>
+
+      <!-- The snapshot is a file the user exports from AutoCAD. It is not
+           a live stream, so it drifts, and the drift must be visible. -->
+      <div style="padding:var(--s3) var(--s5) 0" data-od-id="stale-wrap">
+        <div class="banner" data-tone="hard" data-od-id="snapshot-stale">
+          <span class="bm"></span>
+          <span class="bt"><b>Snapshot cũ hơn bản vẽ.</b> Khung xem dựng từ <code>r47</code> nhưng bản vẽ
+          trong AutoCAD đã ở <code>r48</code>. Đối tượng bạn nhấp vào có thể đã bị dịch chuyển hoặc xoá.
+          Gõ <code>CADWEBEXPORT</code> trong AutoCAD rồi nạp lại tệp.</span>
+          <span class="actions"><a class="btn" href="cadweb.html">Cách xuất lại</a></span>
+        </div>
+      </div>
+
+      <!-- Revision strip: which snapshot the viewer is showing -->
+      <div class="revstrip" data-od-id="revision-strip">
+        <span class="rlabel">Snapshot đã nạp</span>
+        <div class="track" role="group" aria-label="Chọn snapshot">
+          <button class="rev" data-rev="r45" title="r45 · 08:10" aria-pressed="false"></button>
+          <button class="rev" data-rev="r46" title="r46 · 09:05" aria-pressed="false"></button>
+          <button class="rev" data-rev="r47" title="r47 · 09:52" aria-pressed="true"></button>
+          <button class="rev" data-rev="r48" data-base="true" title="r48 · bản vẽ hiện tại — chưa có snapshot" aria-pressed="false" disabled></button>
+        </div>
+        <span class="rlabel" id="rev-label">r47 · 09:52 · delta từ r46</span>
+      </div>
+
+      <section class="workspace" data-od-id="workspace-panes">
+
+        <!-- LEFT — layers -->
+        <aside class="wpane" aria-label="Layer" data-od-id="layer-pane">
+          <header>
+            <h2 data-od-id="layer-pane-title">Layer</h2>
+            <button class="btn btn--quiet btn--icon" id="btn-layers-all" title="Hiện lại tất cả layer" data-od-id="btn-layers-all"></button>
+          </header>
+          <div style="padding:8px 8px 0">
+            <div class="searchfield">
+              <span data-ic="search"></span>
+              <input class="input" id="layer-search" placeholder="Lọc layer" aria-label="Lọc layer">
+            </div>
+          </div>
+          <div class="scroll" id="layer-list"></div>
+          <div style="padding:var(--s3);border-top:1px solid var(--border)">
+            <p class="hint">Bật/tắt ở đây <b>chỉ ẩn trong khung xem này</b>. Không có endpoint bật, tắt
+            hay đóng băng layer — trạng thái layer trong bản vẽ không đổi.</p>
+          </div>
+        </aside>
+
+        <!-- CENTER — model space -->
+        <div class="canvaswrap" id="canvas" data-od-id="model-space">
+          <div class="viewtools" role="toolbar" aria-label="Công cụ xem">
+            <button id="t-pan" aria-pressed="false" title="Di chuyển (H)" data-od-id="tool-pan"></button>
+            <button id="t-in" title="Phóng to" data-od-id="tool-zoom-in"></button>
+            <button id="t-out" title="Thu nhỏ" data-od-id="tool-zoom-out"></button>
+            <button id="t-fit" title="Vừa màn hình (F)" data-od-id="tool-fit"></button>
+          </div>
+          <div class="viewbadge mono" id="zoom-badge">100%</div>
+
+          <svg class="plan" id="plan" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid meet" role="img"
+               aria-label="Mặt bằng tầng 3 — nhấp vào đối tượng để xem thuộc tính">
+            <g id="scene">
+
+              <!-- Layer 0 — grid, axis bubbles and equipment blocks all sit
+                   here. This is the drawing's real problem: 214 objects that
+                   belong on named layers. Kiểm tra reports it; fixing it goes
+                   through a confirmed operation, never a one-click button. -->
+              <g data-layer="0">
+                <g stroke="#8c8c8c" stroke-width="0.6" stroke-dasharray="6 8" opacity="0.7">
+                  <path d="M120 60V720M600 60V720M1080 60V720"/>
+                  <path d="M60 120H1140M60 400H1140M60 640H1140"/>
+                </g>
+                <g fill="none" stroke="#8c8c8c" stroke-width="1">
+                  <circle cx="120" cy="48" r="16"/><circle cx="600" cy="48" r="16"/><circle cx="1080" cy="48" r="16"/>
+                  <circle cx="48" cy="120" r="16"/><circle cx="48" cy="400" r="16"/><circle cx="48" cy="640" r="16"/>
+                </g>
+                <g fill="#8c8c8c" font-family="ui-monospace, Menlo, monospace" font-size="13" text-anchor="middle" dominant-baseline="central">
+                  <text x="120" y="48">A</text><text x="600" y="48">B</text><text x="1080" y="48">C</text>
+                  <text x="48" y="120">1</text><text x="48" y="400">2</text><text x="48" y="640">3</text>
+                </g>
+                <g data-entity="EQ-01" data-handle="41A0" data-type="INSERT" data-block="BOM-PUMP" data-color="ByLayer" data-ltype="ByLayer">
+                  <rect x="180" y="520" width="90" height="70" stroke="#ffffff" stroke-width="2" fill="none"/>
+                  <path d="M180 520l90 70M270 520l-90 70" stroke="#8c8c8c" stroke-width="1" fill="none"/>
+                </g>
+                <g data-entity="EQ-02" data-handle="41A6" data-type="INSERT" data-block="BOM-TANK" data-color="ByLayer" data-ltype="ByLayer">
+                  <rect x="330" y="230" width="110" height="90" stroke="#ffffff" stroke-width="2" fill="none"/>
+                  <path d="M330 290h110" stroke="#8c8c8c" stroke-width="1" fill="none"/>
+                </g>
+                <g data-entity="EQ-03" data-handle="41B4" data-type="INSERT" data-block="BOM-AHU" data-color="ByLayer" data-ltype="ByLayer">
+                  <rect x="700" y="180" width="150" height="90" stroke="#ffffff" stroke-width="2" fill="none"/>
+                  <path d="M736 180v90M786 180v90M836 180v90" stroke="#8c8c8c" stroke-width="1" fill="none"/>
+                </g>
+                <g data-entity="EQ-04" data-handle="41C2" data-type="INSERT" data-block="BOM-PANEL" data-color="ByLayer" data-ltype="ByLayer">
+                  <rect x="900" y="440" width="100" height="60" stroke="#ffffff" stroke-width="2" fill="none"/>
+                  <circle cx="950" cy="470" r="12" stroke="#8c8c8c" stroke-width="1" fill="none"/>
+                </g>
+              </g>
+
+              <g data-layer="A-WALL" stroke="#ffffff" stroke-width="6" fill="none" stroke-linejoin="miter">
+                <path data-entity="W-01" data-handle="2A4F" data-type="LWPOLYLINE" data-color="2" data-ltype="Continuous"
+                      d="M120 120H1080V640H120Z"/>
+                <path data-entity="W-02" data-handle="2A57" data-type="LINE" data-color="ByLayer" data-ltype="ByLayer"
+                      d="M600 120V400"/>
+                <path data-entity="W-03" data-handle="2A5B" data-type="LINE" data-color="ByLayer" data-ltype="ByLayer"
+                      d="M600 400H1080"/>
+              </g>
+
+              <!-- CUA-DI is a legacy layer name. The active profile maps it to
+                   A-DOOR, which is why Kiểm tra raises mapping-required-cua-di. -->
+              <g data-layer="CUA-DI" stroke="#dbdbdb" stroke-width="2" fill="none">
+                <g data-entity="D-01" data-handle="55B2" data-type="ARC" data-color="ByLayer" data-ltype="ByLayer">
+                  <path d="M600 300h-2v-56h2"/><path d="M598 244a56 56 0 0 0-56 56"/>
+                </g>
+              </g>
+
+              <g data-layer="A-DOOR" stroke="#dbdbdb" stroke-width="2" fill="none">
+                <g data-entity="D-02" data-handle="55C7" data-type="ARC" data-color="ByLayer" data-ltype="ByLayer">
+                  <path d="M760 400v-2h56v2"/><path d="M816 398a56 56 0 0 0-56-56"/>
+                </g>
+              </g>
+
+              <!-- P-PIPE is locked in the drawing. Anything that would edit
+                   objects here fails with "không có đối tượng phù hợp". -->
+              <g data-layer="P-PIPE" stroke="#2997ff" stroke-width="3" fill="none" stroke-linecap="round">
+                <path data-entity="P-01" data-handle="3B12" data-type="LWPOLYLINE" data-dn="80" data-color="5" data-ltype="Continuous"
+                      d="M220 560H940"/>
+                <path data-entity="P-02" data-handle="3B18" data-type="LWPOLYLINE" data-dn="50" data-color="5" data-ltype="Continuous"
+                      d="M420 560V300H520"/>
+                <path data-entity="P-03" data-handle="3B1C" data-type="LWPOLYLINE" data-dn="?" data-color="5" data-ltype="Continuous"
+                      d="M780 560V470"/>
+                <g fill="#2997ff" stroke="none">
+                  <circle cx="420" cy="560" r="5"/><circle cx="780" cy="560" r="5"/>
+                </g>
+              </g>
+
+              <g data-layer="A-TEXT" fill="#dbdbdb" font-family="ui-monospace, Menlo, monospace" font-size="14" letter-spacing="1">
+                <text x="180" y="180">PHÒNG BƠM</text>
+                <text x="660" y="330">KHO KỸ THUẬT</text>
+                <text x="660" y="600">HÀNH LANG KỸ THUẬT</text>
+              </g>
+
+            </g>
+          </svg>
+
+          <div class="cmdlog mono" id="cmdlog" aria-live="polite"></div>
+
+          <form class="querybar" id="queryform" data-od-id="live-query">
+            <span class="p">/livequery</span>
+            <label class="vis-hidden" for="queryselect">Chọn truy vấn</label>
+            <select id="queryselect">
+              <option value="layers">Bảng layer &amp; số đối tượng</option>
+              <option value="drawing">Thông tin bản vẽ hiện hành</option>
+              <option value="selection">Bộ chọn hiện tại trong AutoCAD</option>
+              <option value="bom">Khối lượng ống theo layer</option>
+            </select>
+            <button class="btn btn--primary" type="submit">Chạy truy vấn</button>
+          </form>
+        </div>
+
+        <!-- RIGHT — inspector -->
+        <aside class="wpane wpane--right" aria-label="Thuộc tính đối tượng" data-od-id="inspector">
+          <header><h2 data-od-id="inspector-title">Thuộc tính</h2></header>
+
+          <div id="insp-empty" class="empty" style="padding:32px 16px">
+            <strong>Chưa chọn đối tượng</strong>
+            <span>Nhấp vào một đối tượng trong khung xem để đọc thuộc tính từ snapshot.</span>
+          </div>
+
+          <div id="insp-body" hidden>
+            <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+              <div class="eyebrow" id="insp-layer">—</div>
+              <div style="font-size:15px;font-weight:620;margin-top:4px" id="insp-name">—</div>
+            </div>
+            <!-- Only fields the bridge payload actually carries. There is no
+                 length field anywhere in it, so there is no length row. -->
+            <dl class="props" data-od-id="inspector-props">
+              <dt>Handle</dt><dd id="p-handle">—</dd>
+              <dt>Kiểu</dt><dd id="p-type">—</dd>
+              <dt>Layer</dt><dd id="p-layer">—</dd>
+              <dt>Màu</dt><dd id="p-color">—</dd>
+              <dt>Linetype</dt><dd id="p-ltype">—</dd>
+              <dt>Không gian</dt><dd>Model</dd>
+            </dl>
+            <div style="padding:16px;display:flex;flex-direction:column;gap:8px">
+              <button class="btn" id="a-zoom" data-od-id="action-zoom-to">Zoom tới trong khung xem</button>
+              <button class="btn" id="a-isolate" data-od-id="action-isolate">Chỉ hiện layer này</button>
+              <button class="btn" id="a-copy" data-od-id="action-copy-handle">Sao chép handle</button>
+              <button class="btn" id="a-highlight" data-od-id="action-highlight">Chọn trong AutoCAD</button>
+              <button class="btn btn--primary" id="a-ask" data-od-id="action-ask-assistant">Hỏi trợ lý về đối tượng này</button>
+            </div>
+            <div style="padding:0 16px 16px">
+              <p class="hint">Đây là panel web đọc từ snapshot, <b>không phải Properties palette của AutoCAD</b>.
+              Sửa giá trị ở đây không ghi ngược vào bản vẽ.</p>
+            </div>
+          </div>
+
+          <div style="margin-top:auto;padding:16px;border-top:1px solid var(--border)">
+            <div class="eyebrow" style="margin-bottom:8px">Bộ chọn trong khung xem</div>
+            <div class="row" style="justify-content:space-between">
+              <span class="mono" style="font-size:12px" id="sel-count">0 đối tượng</span>
+              <button class="btn btn--quiet" id="sel-clear" data-od-id="clear-selection">Bỏ chọn</button>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <footer class="statusbar" data-shell="statusbar"></footer>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+/* Icons come from the shared set — no hand-inlined duplicates. */
+(function () {
+  var map = { "btn-layers-all": "sync", "t-pan": "hand", "t-in": "zoomin", "t-out": "zoomout", "t-fit": "fit" };
+  Object.keys(map).forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.innerHTML = App.icon(map[id]);
+  });
+  document.querySelectorAll('[data-ic="search"]').forEach(function (el) {
+    el.outerHTML = App.icon("search");
+  });
+})();
+
+/* ---------- Layer panel ----------
+   Visibility here is a viewer filter. The daemon exposes no endpoint to
+   turn a layer on/off/freeze, so the copy never claims to have done so. */
+(function () {
+  var LAYERS = [
+    { id: "0",         name: "0",         color: "#8c8c8c", count: 214, note: "sai layer" },
+    { id: "A-WALL",    name: "A-WALL",    color: "#ffffff", count: 268 },
+    { id: "P-PIPE",    name: "P-PIPE",    color: "#2997ff", count: 142, note: "khoá" },
+    { id: "A-TEXT",    name: "A-TEXT",    color: "#dbdbdb", count: 96 },
+    { id: "CUA-DI",    name: "CUA-DI",    color: "#dbdbdb", count: 96, note: "cần ánh xạ" },
+    { id: "A-DOOR",    name: "A-DOOR",    color: "#dbdbdb", count: 84 },
+    { id: "DEFPOINTS", name: "DEFPOINTS", color: "#8c8c8c", count: 8,  note: "không in" }
+  ];
+  var off = {};
+  var list = document.getElementById("layer-list");
+  var search = document.getElementById("layer-search");
+
+  function paint() {
+    var q = (search.value || "").trim().toLowerCase();
+    list.innerHTML = LAYERS.filter(function (l) { return !q || l.name.toLowerCase().indexOf(q) > -1; })
+      .map(function (l) {
+        return '<button class="layerrow" data-layer-id="' + l.id + '" data-off="' + !!off[l.id] + '"' +
+          ' aria-pressed="' + (off[l.id] ? "false" : "true") + '" data-od-id="layer-' +
+          l.id.toLowerCase().replace(/[^a-z0-9]+/g, "-") + '">' +
+          '<span class="box" data-checked="' + (off[l.id] ? "false" : "true") + '">' + App.icon("tick") + "</span>" +
+          '<span class="swatch" style="background:' + l.color + '"></span>' +
+          '<span class="name">' + l.name + (l.note ? ' <span class="tag tag--quiet">' + l.note + "</span>" : "") + "</span>" +
+          '<span class="cnt">' + l.count + "</span></button>";
+      }).join("");
+  }
+  function apply() {
+    LAYERS.forEach(function (l) {
+      var g = document.querySelector('[data-layer="' + l.id + '"]');
+      if (g) g.style.display = off[l.id] ? "none" : "";
+    });
+  }
+  list.addEventListener("click", function (e) {
+    var row = e.target.closest("[data-layer-id]");
+    if (!row) return;
+    var id = row.dataset.layerId;
+    off[id] = !off[id];
+    paint(); apply();
+    App.setStatus((off[id] ? "Đã ẩn " : "Đã hiện ") + id + " trong khung xem");
+  });
+  search.addEventListener("input", paint);
+  document.getElementById("btn-layers-all").addEventListener("click", function () {
+    off = {}; paint(); apply(); App.setStatus("Đã hiện lại toàn bộ layer trong khung xem");
+  });
+  window.__isolateLayer = function (id) {
+    off = {};
+    LAYERS.forEach(function (l) { if (l.id !== id) off[l.id] = true; });
+    paint(); apply();
+  };
+  paint();
+})();
+
+/* ---------- Viewport: zoom / pan / select ---------- */
+(function () {
+  var wrap = document.getElementById("canvas");
+  var svg = document.getElementById("plan");
+  var scene = document.getElementById("scene");
+  var badge = document.getElementById("zoom-badge");
+  var view = { k: 1, x: 0, y: 0 };
+  var panMode = false, dragging = false, last = null;
+
+  function apply() {
+    scene.setAttribute("transform", "translate(" + view.x + " " + view.y + ") scale(" + view.k + ")");
+    badge.textContent = Math.round(view.k * 100) + "%";
+  }
+  function zoomAt(cx, cy, factor) {
+    var k = Math.min(6, Math.max(0.4, view.k * factor));
+    var r = k / view.k;
+    view.x = cx - (cx - view.x) * r;
+    view.y = cy - (cy - view.y) * r;
+    view.k = k;
+    apply();
+  }
+  function toLocal(e) {
+    var r = svg.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / r.width * 1200, y: (e.clientY - r.top) / r.height * 800 };
+  }
+
+  document.getElementById("t-in").onclick = function () { zoomAt(600, 400, 1.25); };
+  document.getElementById("t-out").onclick = function () { zoomAt(600, 400, 0.8); };
+  document.getElementById("t-fit").onclick = function () {
+    view = { k: 1, x: 0, y: 0 }; apply(); App.setStatus("Zoom vừa màn hình");
+  };
+  var panBtn = document.getElementById("t-pan");
+  panBtn.onclick = function () {
+    panMode = !panMode;
+    panBtn.setAttribute("aria-pressed", String(panMode));
+    wrap.classList.toggle("panning", panMode);
+  };
+
+  svg.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var p = toLocal(e);
+    zoomAt(p.x, p.y, e.deltaY < 0 ? 1.12 : 0.89);
+  }, { passive: false });
+
+  svg.addEventListener("pointerdown", function (e) {
+    if (!panMode && e.button !== 1) return;
+    dragging = true; last = toLocal(e); svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener("pointermove", function (e) {
+    var p = toLocal(e);
+    App.setStatus("X " + Math.round(p.x * 10) + "  Y " + Math.round((800 - p.y) * 10));
+    if (!dragging) return;
+    view.x += p.x - last.x; view.y += p.y - last.y; last = p; apply();
+  });
+  svg.addEventListener("pointerup", function () { dragging = false; });
+
+  /* Selection + inspector */
+  var selected = null;
+  var body = document.getElementById("insp-body");
+  var empty = document.getElementById("insp-empty");
+
+  function select(node) {
+    if (selected) selected.removeAttribute("data-selected");
+    selected = node;
+    if (!node) {
+      body.hidden = true; empty.hidden = false;
+      document.getElementById("sel-count").textContent = "0 đối tượng";
+      return;
+    }
+    node.setAttribute("data-selected", "true");
+    var layer = node.closest("[data-layer]").dataset.layer;
+    body.hidden = false; empty.hidden = true;
+    document.getElementById("insp-layer").textContent = layer;
+    document.getElementById("insp-name").textContent =
+      node.dataset.block ? node.dataset.block :
+      node.dataset.dn ? "Ống DN " + node.dataset.dn : node.dataset.type;
+    document.getElementById("p-handle").textContent = node.dataset.handle;
+    document.getElementById("p-type").textContent = node.dataset.type;
+    document.getElementById("p-layer").textContent = layer;
+    document.getElementById("p-color").textContent = node.dataset.color || "ByLayer";
+    document.getElementById("p-ltype").textContent = node.dataset.ltype || "ByLayer";
+    document.getElementById("sel-count").textContent = "1 đối tượng · " + node.dataset.entity;
+  }
+
+  svg.addEventListener("click", function (e) {
+    if (panMode) return;
+    var node = e.target.closest("[data-entity]");
+    select(node || null);
+  });
+
+  document.getElementById("sel-clear").onclick = function () { select(null); };
+  document.getElementById("a-zoom").onclick = function () {
+    if (!selected) return;
+    var b = selected.getBBox();
+    var k = Math.min(4, 900 / Math.max(b.width, b.height, 120));
+    view.k = k;
+    view.x = 600 - (b.x + b.width / 2) * k;
+    view.y = 400 - (b.y + b.height / 2) * k;
+    apply();
+  };
+  document.getElementById("a-isolate").onclick = function () {
+    if (!selected) return;
+    window.__isolateLayer(selected.closest("[data-layer]").dataset.layer);
+  };
+  document.getElementById("a-copy").onclick = function () {
+    if (!selected) return;
+    App.toast("Đã sao chép handle " + selected.dataset.handle);
+  };
+
+  /* /api/acad/highlight answers 409 confirmation_required permanently:
+     selecting inside AutoCAD from the web is not a capability that exists.
+     Showing the guard is more useful than pretending the click worked. */
+  document.getElementById("a-highlight").onclick = function () {
+    if (!selected) return;
+    App.guard("confirmation_required",
+      "Chọn đối tượng trong AutoCAD từ web hiện chưa mở — hãy dùng handle " +
+      selected.dataset.handle + " với lệnh SELECT ngay trong AutoCAD.");
+  };
+
+  document.getElementById("a-ask").onclick = function () {
+    if (!selected) return;
+    try {
+      sessionStorage.setItem("acad.askContext", JSON.stringify({
+        entity: selected.dataset.entity,
+        handle: selected.dataset.handle,
+        layer: selected.closest("[data-layer]").dataset.layer,
+        type: selected.dataset.type
+      }));
+    } catch (err) { /* private mode — trợ lý vẫn mở bình thường */ }
+    window.location.href = "assistant.html";
+  };
+
+  document.addEventListener("keydown", function (e) {
+    if (/input|textarea|select/i.test(e.target.tagName)) return;
+    if (e.key === "f") document.getElementById("t-fit").click();
+    if (e.key === "h") panBtn.click();
+    if (e.key === "Escape") select(null);
+  });
+
+  apply();
+})();
+
+/* ---------- Read-only live query ----------
+   Fixed query set, read-only results, no navigation on completion. */
+(function () {
+  var form = document.getElementById("queryform");
+  var sel = document.getElementById("queryselect");
+  var log = document.getElementById("cmdlog");
+  var lines = [
+    "Đã nạp snapshot TH-KT-01.cadweb · r47 · 908 đối tượng",
+    "Bản vẽ trong AutoCAD đang ở r48 — snapshot chưa cập nhật"
+  ];
+  function paint() {
+    log.innerHTML = lines.slice(-4).map(function (l) { return "<span>" + l + "</span>"; }).join("");
+  }
+
+  var REPLY = {
+    layers:   "7 layer · 908 đối tượng · P-PIPE đang khoá · 214 đối tượng nằm trên layer 0",
+    drawing:  "TH-KT-01 · r48 · INSUNITS 4 (mm) · dbmod 1 · 12 định nghĩa block",
+    selection:"Bộ chọn trong AutoCAD hiện rỗng — chọn đối tượng trong AutoCAD rồi chạy lại",
+    bom:      "P-PIPE · DN80 72,0 m · DN50 34,0 m · DN? 11,0 m — chi tiết ở màn Bóc tách"
+  };
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var q = sel.value;
+    var btn = form.querySelector("button");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span>Đang chạy…';
+    lines.push("/livequery " + q + " …");
+    paint();
+    setTimeout(function () {
+      btn.disabled = false;
+      btn.textContent = "Chạy truy vấn";
+      lines.push(REPLY[q]);
+      paint();
+    }, 800);
+  });
+
+  document.getElementById("btn-load").addEventListener("click", function () {
+    App.modal({
+      title: "Nạp snapshot .cadweb",
+      sub: "Khung xem đọc tệp bạn xuất ra, không đọc trực tiếp phiên AutoCAD",
+      body:
+        '<ol class="steps">' +
+          '<li data-done="true"><span class="sn">1</span><span class="sb"><b>Mở bản vẽ trong AutoCAD</b>' +
+            "<span>TH-KT-01 đang mở sẵn.</span></span></li>" +
+          '<li data-done="active"><span class="sn">2</span><span class="sb"><b>Gõ <code>CADWEBEXPORT</code></b>' +
+            "<span>Plugin ghi ra tệp <code>.cadweb</code> cạnh bản vẽ. Không có lệnh nào chạy được việc này từ web.</span></span></li>" +
+          '<li><span class="sn">3</span><span class="sb"><b>Chọn tệp vừa xuất</b>' +
+            "<span>Khung xem dựng lại hình học từ snapshot đó.</span></span></li>" +
+        "</ol>" +
+        '<div class="banner"><span class="bm"></span><span class="bt">Snapshot <b>không hỗ trợ</b> ' +
+        "dimension, hatch, spline, ATTDEF, MINSERT, layout/viewport và xref. Những đối tượng đó sẽ không xuất hiện trong khung xem.</span></div>",
+      footer:
+        '<span class="spacer"></span><button class="btn" data-close>Đóng</button>' +
+        '<button class="btn btn--primary" data-close>Chọn tệp…</button>'
+    });
+  });
+
+  /* Revision scrubber — snapshots already on disk, nothing live. */
+  document.querySelector(".revstrip .track").addEventListener("click", function (e) {
+    var b = e.target.closest(".rev");
+    if (!b || b.disabled) return;
+    this.querySelectorAll(".rev").forEach(function (x) { x.setAttribute("aria-pressed", "false"); });
+    b.setAttribute("aria-pressed", "true");
+    document.getElementById("rev-label").textContent =
+      b.dataset.rev + " · " + b.title.split("·")[1].trim() + " · delta";
+    lines.push("Đổi sang snapshot " + b.dataset.rev);
+    paint();
+  });
+
+  paint();
+})();
+</script>
+</body>
+</html>

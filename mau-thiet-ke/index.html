@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tổng quan — AutoCAD Toolkit</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+  .todo { display: grid; grid-template-columns: 20px 1fr auto; gap: var(--s3); align-items: start;
+    padding: var(--s3) var(--s4); border-bottom: 1px solid var(--border); }
+  .todo:last-child { border-bottom: 0; }
+  .todo .tm { width: 10px; height: 10px; margin-top: 5px; border: 1.5px solid var(--fg); border-radius: 2px;
+    transform: rotate(45deg); flex: none; }
+  .todo[data-hard="true"] .tm { background: var(--fg); transform: none; }
+  .todo .tt { font-size: 12.5px; font-weight: 550; }
+  .todo .td { font-size: 11.5px; color: var(--muted); line-height: 1.5; text-wrap: pretty; }
+  .keys { display: flex; gap: var(--s5); flex-wrap: wrap; padding: var(--s3) var(--s4); }
+  .keys span { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: var(--s2); }
+  .keys kbd { font-family: var(--mono); font-size: 10.5px; border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px; color: var(--fg-72); }
+</style>
+</head>
+<body data-screen="home" data-acad="on" data-status="3 bản vẽ đang mở">
+
+<div class="app">
+  <header class="titlebar" data-shell="titlebar"></header>
+
+  <div class="body">
+    <nav class="rail" data-shell="rail" aria-label="Điều hướng chính"></nav>
+
+    <main class="main">
+      <div class="pagehead" data-od-id="home-head">
+        <div>
+          <h1 data-od-id="home-title">Tổng quan</h1>
+          <div class="sub">Phiên AutoCAD đang mở · dự án <strong>NM Sản xuất Bình Dương</strong></div>
+        </div>
+        <div class="actions">
+          <button class="btn" data-palette-open data-od-id="home-command">Đi tới… ⌘K</button>
+          <a class="btn btn--primary" href="workspace.html" data-od-id="home-open-drawing">Mở khung bản vẽ</a>
+        </div>
+      </div>
+
+      <div class="scroll">
+        <div class="pad stack" style="gap:var(--s5)">
+
+          <!-- Session state — three numbers the daemon can actually report -->
+          <section class="grid grid--3" aria-label="Trạng thái phiên" data-od-id="session-status">
+            <div class="card" data-od-id="card-session">
+              <div class="eyebrow">Bản vẽ hiện hành</div>
+              <div class="metric"><span class="v">908</span><span class="k">đối tượng trong TH-KT-01</span></div>
+              <div class="row" style="gap:8px;flex-wrap:wrap">
+                <span class="tag">7 layer</span>
+                <span class="tag">3 bản vẽ mở</span>
+                <span class="tag mono">r48</span>
+              </div>
+            </div>
+
+            <a class="card" href="changes.html" style="color:inherit" data-od-id="card-changes">
+              <div class="eyebrow">Thay đổi chờ duyệt</div>
+              <div class="metric"><span class="v" id="staged-n">—</span><span class="k">thao tác chưa xác nhận</span></div>
+              <div class="hint">Chưa có thao tác nào chạm vào bản vẽ. Xác nhận từng cái để ghi.</div>
+            </a>
+
+            <a class="card" href="review.html" style="color:inherit" data-od-id="card-issues">
+              <div class="eyebrow">Kiểm tra tiêu chuẩn</div>
+              <div class="metric"><span class="v">6</span><span class="k">phát hiện · quét 09:41</span></div>
+              <div class="row" style="justify-content:space-between">
+                <span class="sev" data-sev="loi"><i></i>1 lỗi</span>
+                <span class="sev" data-sev="canh-bao"><i></i>4 cảnh báo</span>
+                <span class="sev" data-sev="goi-y"><i></i>1 gợi ý</span>
+              </div>
+            </a>
+          </section>
+
+          <!-- Things that need a human. This is the space the duplicated
+               launcher grid used to occupy. -->
+          <section class="panel" aria-label="Việc cần xử lý" data-od-id="attention">
+            <header>
+              <h2>Cần xử lý</h2>
+              <div class="actions"><span class="tag mono" id="todo-n">—</span></div>
+            </header>
+            <div id="todo-list"></div>
+          </section>
+
+          <!-- Open drawings only. /docs reports what AutoCAD has open; it is
+               not a recent-files list, and it carries no object or finding
+               counts for drawings that are not loaded. -->
+          <section class="panel" aria-label="Bản vẽ đang mở" data-od-id="open-drawings">
+            <header>
+              <h2>Bản vẽ đang mở trong AutoCAD</h2>
+              <div class="actions">
+                <div class="searchfield" style="width:220px">
+                  <span data-ic="search"></span>
+                  <input class="input" id="dwg-search" placeholder="Lọc theo mã bản vẽ" aria-label="Lọc bản vẽ">
+                </div>
+              </div>
+            </header>
+            <div class="tablewrap">
+              <table class="data" data-od-id="open-table">
+                <thead>
+                  <tr><th>Mã · tên bản vẽ</th><th>Bộ môn</th><th class="mono">Revision</th><th>Lưu</th><th>Snapshot khung xem</th><th></th></tr>
+                </thead>
+                <tbody id="dwg-rows">
+                  <tr data-name="TH-KT-01 Mặt bằng tầng 3">
+                    <td><strong>TH-KT-01</strong> · Mặt bằng tầng 3</td><td>Kiến trúc</td>
+                    <td class="mono">r48</td>
+                    <td><span class="tag">chưa lưu</span></td>
+                    <td><span class="tag opstate" data-op="stale">r47 · cũ hơn bản vẽ</span></td>
+                    <td style="text-align:right"><a class="btn btn--quiet" href="workspace.html">Xem</a></td>
+                  </tr>
+                  <tr data-name="TH-KT-02 Mặt cắt A-A">
+                    <td><strong>TH-KT-02</strong> · Mặt cắt A-A</td><td>Kiến trúc</td>
+                    <td class="mono">r12</td>
+                    <td><span class="tag tag--quiet">đã lưu</span></td>
+                    <td><span class="tag opstate" data-op="applied">r12 · khớp</span></td>
+                    <td style="text-align:right"><a class="btn btn--quiet" href="workspace.html">Xem</a></td>
+                  </tr>
+                  <tr data-name="HT-CN-11 Sơ đồ cấp nước">
+                    <td><strong>HT-CN-11</strong> · Sơ đồ cấp nước</td><td>Cấp thoát nước</td>
+                    <td class="mono">r31</td>
+                    <td><span class="tag tag--quiet">đã lưu</span></td>
+                    <td><span class="tag opstate" data-op="rejected">lỗi xuất snapshot</span></td>
+                    <td style="text-align:right"><a class="btn btn--quiet" href="cadweb.html">Sửa</a></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div style="padding:var(--s3) var(--s4);border-top:1px solid var(--border)">
+              <p class="hint">Danh sách này là các bản vẽ AutoCAD <b>đang mở</b>. App không có kho bản vẽ
+              gần đây, và không đọc được số đối tượng hay số phát hiện của tệp chưa mở.</p>
+            </div>
+          </section>
+
+          <section class="card card--flat" data-od-id="card-keys">
+            <div class="eyebrow">Phím tắt</div>
+            <div class="keys" style="padding:0">
+              <span>Đi tới <kbd>⌘K</kbd></span>
+              <span>Vừa màn hình <kbd>F</kbd></span>
+              <span>Chế độ di chuyển <kbd>H</kbd></span>
+              <span>Bỏ chọn <kbd>Esc</kbd></span>
+            </div>
+          </section>
+
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <footer class="statusbar" data-shell="statusbar"></footer>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  document.querySelectorAll('[data-ic="search"]').forEach(function (el) { el.outerHTML = App.icon("search"); });
+
+  /* Staged count is shared with the titlebar chip, so the dashboard can
+     never claim a different number from the shell. */
+  document.getElementById("staged-n").textContent = App.pendingCount();
+
+  /* Only conditions the app has actually detected. Nothing aspirational. */
+  var TODO = [
+    { hard: true,
+      t: "Snapshot khung xem của TH-KT-01 cũ hơn bản vẽ",
+      d: "Khung xem đang dựng từ r47, bản vẽ đã ở r48. Gõ CADWEBEXPORT trong AutoCAD rồi nạp lại tệp.",
+      cta: "Cách xuất lại", href: "cadweb.html" },
+    { hard: true,
+      t: "Snapshot HT-CN-11 xuất lỗi",
+      d: "Tệp .cadweb bị cắt giữa chừng. Thử lại không sửa được — phải xuất lại từ AutoCAD.",
+      cta: "Mở hàng đợi", href: "cadweb.html" },
+    { hard: false,
+      t: "1 thao tác đã cũ trong hàng chờ",
+      d: "Thao tác chèn block được chuẩn bị ở r47 nên máy chủ đã tự huỷ. Phải chuẩn bị lại từ Thư viện block.",
+      cta: "Xem thay đổi", href: "changes.html" },
+    { hard: false,
+      t: "Layer CUA-DI chưa ánh xạ về layer chuẩn",
+      d: "96 đối tượng trên layer ngoài bộ chuẩn. Không có sửa tự động — phải gán lại qua thao tác có xác nhận.",
+      cta: "Xem phát hiện", href: "review.html" }
+  ];
+
+  document.getElementById("todo-list").innerHTML = TODO.map(function (t) {
+    return '<div class="todo" data-hard="' + t.hard + '">' +
+      '<span class="tm"></span>' +
+      '<span><span class="tt">' + t.t + '</span><br><span class="td">' + t.d + "</span></span>" +
+      '<a class="btn btn--quiet" href="' + t.href + '">' + t.cta + "</a></div>";
+  }).join("");
+  document.getElementById("todo-n").textContent = TODO.length + " mục";
+
+  /* Filter open drawings */
+  var q = document.getElementById("dwg-search");
+  var rows = Array.prototype.slice.call(document.querySelectorAll("#dwg-rows tr"));
+  q.addEventListener("input", function () {
+    var v = q.value.trim().toLowerCase();
+    rows.forEach(function (r) {
+      r.style.display = !v || r.dataset.name.toLowerCase().indexOf(v) > -1 ? "" : "none";
+    });
+  });
+})();
+</script>
+</body>
+</html>

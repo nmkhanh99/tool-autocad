@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kết nối AutoCAD — AutoCAD Toolkit</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+  .checkrow {
+    display: grid; grid-template-columns: 20px 1fr auto; align-items: start; gap: var(--s3);
+    padding: var(--s3) var(--s4); border-bottom: 1px solid var(--border);
+  }
+  .checkrow:last-child { border-bottom: 0; }
+  .checkrow .st {
+    width: 16px; height: 16px; margin-top: 2px; border-radius: var(--r-pill);
+    border: 1.5px solid var(--border); display: grid; place-items: center; flex: none;
+  }
+  .checkrow .st svg { width: 10px; height: 10px; color: var(--bg); opacity: 0; }
+  .checkrow[data-state="ok"] .st { background: var(--fg); border-color: var(--fg); }
+  .checkrow[data-state="ok"] .st svg { opacity: 1; }
+  .checkrow[data-state="fail"] .st { border-color: var(--fg); border-width: 2.5px; }
+  .checkrow[data-state="run"] .st { border-color: var(--accent); border-right-color: transparent; animation: spin .8s linear infinite; }
+  .checkrow .nm { font-size: 12.5px; font-weight: 550; }
+  .checkrow .d2 { font-size: 11.5px; color: var(--muted); line-height: 1.5; text-wrap: pretty; }
+  .setpad { padding: var(--s5); display: flex; flex-direction: column; gap: var(--s5); max-width: 1000px; }
+  .advgate { display: flex; align-items: center; gap: var(--s3); padding: var(--s4);
+    border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); }
+  .agentrow {
+    display: grid; grid-template-columns: 15px 1fr auto; gap: var(--s3); align-items: start;
+    padding: var(--s3) var(--s4); border-bottom: 1px solid var(--border); width: 100%; text-align: left;
+  }
+  .agentrow:last-child { border-bottom: 0; }
+  .agentrow[data-available="true"] { cursor: pointer; }
+  .agentrow[data-available="true"]:hover { background: var(--fg-02); }
+  .agentrow[aria-checked="true"] { background: var(--acc-08); box-shadow: inset 2px 0 0 var(--accent); }
+  .agentrow[data-available="false"] .rk { border-style: dashed; }
+  .agentrow[data-available="false"] b { color: var(--fg-55); }
+  .agentrow .rk { width: 13px; height: 13px; margin-top: 3px; border: 1.5px solid var(--border); border-radius: var(--r-pill); }
+  .agentrow[aria-checked="true"] .rk { border-color: var(--accent); border-width: 4px; }
+  .agentrow b { display: block; font-size: 12.5px; font-weight: 590; }
+  .agentrow .p { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted); overflow-wrap: anywhere; margin-top: 2px; }
+  .agentrow .chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+</style>
+</head>
+<body data-screen="settings" data-acad="on" data-status="Cầu nối ~/Acad-Bridge · nhịp 2,1 s">
+
+<div class="app">
+  <header class="titlebar" data-shell="titlebar"></header>
+
+  <div class="body">
+    <nav class="rail" data-shell="rail" aria-label="Điều hướng chính"></nav>
+
+    <main class="main">
+      <div class="pagehead" data-od-id="settings-head">
+        <div>
+          <h1 data-od-id="settings-title">Kết nối AutoCAD</h1>
+          <div class="sub">Cầu nối tệp, plugin trong phiên, chẩn đoán và các bề mặt nâng cao</div>
+        </div>
+        <div class="actions">
+          <button class="btn" data-drawer-open>Nhật ký hoạt động</button>
+        </div>
+      </div>
+
+      <div class="tabbar" role="tablist" aria-label="Nhóm cài đặt" data-od-id="settings-tabs">
+        <button role="tab" aria-selected="true"  data-tab="conn">Kết nối</button>
+        <button role="tab" aria-selected="false" data-tab="diag">Chẩn đoán</button>
+        <button role="tab" aria-selected="false" data-tab="std">Tiêu chuẩn</button>
+        <button role="tab" aria-selected="false" data-tab="ai">Trợ lý AI</button>
+        <button role="tab" aria-selected="false" data-tab="adv">Nâng cao</button>
+      </div>
+
+      <div class="scroll">
+
+        <!-- ══ Tab: Kết nối ═══════════════════════════════════════ -->
+        <div class="tabpanel" data-panel="conn">
+          <div class="setpad">
+
+            <section class="panel" data-od-id="bridge-config">
+              <header><h2>Cầu nối tệp</h2><div class="actions"><span class="tag tag--quiet">chỉ đọc</span></div></header>
+              <div style="padding:var(--s4)">
+                <div class="formgrid">
+                  <div class="lb">Thư mục cầu nối</div>
+                  <div class="fd">
+                    <input class="input mono" value="~/Acad-Bridge" readonly aria-label="Thư mục cầu nối">
+                    <p class="hint">Đọc từ biến môi trường <code>ACAD_BRIDGE_DIR</code> lúc khởi động tiến trình.
+                    Không có đường ghi cấu hình — muốn đổi phải đặt biến môi trường rồi khởi động lại app.</p>
+                  </div>
+
+                  <div class="lb">Đường dẫn cũ</div>
+                  <div class="fd">
+                    <p class="hint" style="margin:0">Nếu thư mục trên không tồn tại, app tự dùng
+                    <code>~/MEP-Bridge</code>. Việc này <b>tự động và vô điều kiện</b> — không có tuỳ chọn bật/tắt.</p>
+                  </div>
+
+                  <hr>
+
+                  <div class="lb">Thời gian chờ<small>Mỗi loại job có ngưỡng riêng, cố định trong máy chủ</small></div>
+                  <div class="fd">
+                    <div class="panel"><div class="tablewrap"><table class="data">
+                      <thead><tr><th>Loại job</th><th class="n">Ngưỡng</th></tr></thead>
+                      <tbody>
+                        <tr><td>Quét tiêu chuẩn</td><td class="n">30 s</td></tr>
+                        <tr><td>Đo diện tích</td><td class="n">25 s</td></tr>
+                        <tr><td>Chèn block</td><td class="n">120 s</td></tr>
+                        <tr><td>Nạp script LISP</td><td class="n">0,5 – 60 s</td></tr>
+                        <tr><td>Bóc tách trực tiếp</td><td class="n">6 s</td></tr>
+                      </tbody>
+                    </table></div></div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel" data-od-id="plugin-config">
+              <header><h2>Plugin AcadBridge</h2>
+                <div class="actions"><span class="tag mono" id="arx-ver">1.4.2</span></div></header>
+              <div style="padding:var(--s4);display:flex;flex-direction:column;gap:var(--s4)">
+                <dl class="props" style="grid-template-columns:180px 1fr;border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+                  <dt>Trạng thái</dt><dd>đã nạp trong phiên</dd>
+                  <dt>Nhịp reactor</dt><dd>2,1 s</dd>
+                  <dt>Bundle</dt><dd>~/Library/Application Support/Autodesk/AcadBridge.bundle</dd>
+                </dl>
+
+                <div class="row" style="gap:var(--s2);flex-wrap:wrap">
+                  <button class="btn" id="btn-build">Build lại plugin</button>
+                  <button class="btn" id="btn-restart" data-write>Khởi động lại AutoCAD</button>
+                </div>
+                <div id="build-slot"></div>
+              </div>
+            </section>
+
+          </div>
+        </div>
+
+        <!-- ══ Tab: Chẩn đoán ═════════════════════════════════════ -->
+        <div class="tabpanel" data-panel="diag" hidden>
+          <div class="setpad">
+
+            <section class="panel" data-od-id="diagnostics">
+              <header>
+                <h2>Chẩn đoán</h2>
+                <div class="actions">
+                  <span class="tag mono" id="diag-summary">—</span>
+                  <button class="btn btn--quiet" id="btn-diag">Chạy lại</button>
+                </div>
+              </header>
+              <div id="checks"></div>
+            </section>
+
+            <section class="panel" data-od-id="stability">
+              <header><h2>Độ ổn định · 60 phút gần nhất</h2></header>
+              <div style="padding:var(--s4);display:flex;flex-direction:column;gap:var(--s3)">
+                <div class="grid grid--3">
+                  <div><div class="metric"><span class="v">2</span><span class="k">lần mất nhịp plugin</span></div></div>
+                  <div><div class="metric"><span class="v">1</span><span class="k">job đồng bộ lỗi</span></div></div>
+                  <div><div class="metric"><span class="v">0</span><span class="k">lần AutoCAD treo</span></div></div>
+                </div>
+                <div class="banner"><span class="bm"></span><span class="bt">
+                  Job đồng bộ lỗi là snapshot <b>HT-CN-11</b> — tệp <code>.cadweb</code> bị cắt giữa chừng.
+                  Thử lại không sửa được, phải xuất lại từ AutoCAD.</span>
+                  <span class="actions"><a class="btn" href="cadweb.html">Mở hàng đợi</a></span></div>
+              </div>
+            </section>
+
+            <div class="banner" data-od-id="no-job-history">
+              <span class="bm"></span>
+              <span class="bt">Không có kho lịch sử job. Những gì bạn thấy ở đây là trạng thái <b>hiện tại</b>
+              cộng với phần đuôi của dòng sự kiện. Muốn xem việc đang chạy, mở <b>Nhật ký hoạt động</b>.</span>
+              <span class="actions"><button class="btn" data-drawer-open>Mở nhật ký</button></span>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- ══ Tab: Tiêu chuẩn ════════════════════════════════════ -->
+        <div class="tabpanel" data-panel="std" hidden>
+          <div class="setpad">
+            <section class="panel" data-od-id="standards-active">
+              <header><h2>Hồ sơ đang áp dụng</h2></header>
+              <div style="padding:var(--s4);display:flex;flex-direction:column;gap:var(--s4)">
+                <div class="formgrid">
+                  <div class="lb">Hồ sơ tiêu chuẩn<small>Dùng cho mọi lần quét mới</small></div>
+                  <div class="fd">
+                    <select class="select" id="std-profile" style="max-width:320px">
+                      <option value="cty-2024">Tiêu chuẩn công ty 2024 · v12</option>
+                      <option value="cty-2019">Tiêu chuẩn công ty 2019 (kế thừa) · v4</option>
+                      <option value="iso-mep">ISO — bộ môn cơ điện · v2</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="banner"><span class="bm"></span><span class="bt">
+                  Đổi hồ sơ ở đây làm <b>mọi kết quả quét đang mở hết hiệu lực</b>. Lần áp dụng tiếp theo
+                  sẽ trả <code>profile_stale</code> và bắt quét lại.</span></div>
+                <div class="row">
+                  <a class="btn btn--primary" href="standards.html">Sửa hồ sơ tiêu chuẩn</a>
+                  <span class="hint">Đơn vị, layer bắt buộc, dimstyle, khổ khung và ánh xạ layer đều nằm trong hồ sơ.</span>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <!-- ══ Tab: Trợ lý AI ═════════════════════════════════════ -->
+        <div class="tabpanel" data-panel="ai" hidden>
+          <div class="setpad">
+
+            <!-- Registry: which CLIs are on this machine -->
+            <section class="panel" data-od-id="ai-agents">
+              <header>
+                <h2>CLI trợ lý trên máy này</h2>
+                <div class="actions">
+                  <span class="tag mono" id="ai-count">—</span>
+                  <button class="btn btn--quiet" id="ai-rescan">Quét lại PATH</button>
+                </div>
+              </header>
+              <div id="ai-list"></div>
+              <div style="padding:var(--s3) var(--s4);border-top:1px solid var(--border)">
+                <p class="hint"><b>App không lưu API key.</b> Mỗi CLI tự quản lý đăng nhập của nó —
+                nếu một CLI báo lỗi xác thực, hãy đăng nhập bằng chính CLI đó trong Terminal rồi quét lại.</p>
+              </div>
+            </section>
+
+            <!-- Connection probe -->
+            <section class="panel" data-od-id="ai-probe">
+              <header>
+                <h2>Kiểm tra kết nối</h2>
+                <div class="actions"><span class="tag mono" id="probe-target">—</span></div>
+              </header>
+              <div style="padding:var(--s4);display:flex;flex-direction:column;gap:var(--s4)">
+                <div class="guardstrip" id="probe-steps"></div>
+                <div class="row" style="flex-wrap:wrap">
+                  <button class="btn btn--primary" id="probe-run">Chạy kiểm tra</button>
+                  <span class="hint" id="probe-note" style="flex:1;min-width:240px">Gửi một lượt hỏi thật
+                  qua CLI đang chọn để đo trọn đường đi app → CLI → mô hình → công cụ đọc AutoCAD.</span>
+                </div>
+              </div>
+            </section>
+
+            <!-- What the agent is actually allowed to do -->
+            <section class="panel" data-od-id="ai-scope">
+              <header><h2>Phạm vi tác động</h2></header>
+              <div style="padding:var(--s4);display:flex;flex-direction:column;gap:var(--s4)">
+
+                <div class="banner" data-tone="hard">
+                  <span class="bm"></span>
+                  <span class="bt"><b>Ở chế độ trả lời thường, CLI chạy với cờ bỏ qua phê duyệt của chính nó</b>
+                  và thư mục làm việc là thư mục dự án. Nghĩa là agent đọc và chạy được lệnh trong dự án mà
+                  không hỏi lại từng bước. Đây là đánh đổi để nó tự làm việc — hãy biết trước khi bật.</span>
+                </div>
+
+                <div class="tablewrap">
+                  <table class="data">
+                    <thead><tr><th>Kênh agent gọi được</th><th>Ghi vào bản vẽ</th><th>Cần bạn xác nhận</th></tr></thead>
+                    <tbody>
+                      <tr><td>Đọc trạng thái, bản vẽ đang mở, layer, khung tên</td><td>không</td><td>—</td></tr>
+                      <tr><td>Bóc tách &amp; báo cáo (recipe hàng loạt)</td><td>không<span class="hint"> · mặc định lưu bản sao</span></td><td>—</td></tr>
+                      <tr><td>Vẽ theo kịch bản — dựng nháp rồi áp dụng</td><td>có</td><td><span class="tag tag--accent">có</span></td></tr>
+                      <tr><td>Chạy AutoLISP trong phiên AutoCAD đang mở</td><td>có</td><td><span class="tag tag--solid">không</span></td></tr>
+                      <tr><td>Chạy script trên tệp DWG đóng</td><td>có</td><td><span class="tag tag--solid">không</span></td></tr>
+                      <tr><td>Nạp script từ thư viện LISP</td><td>có</td><td>chỉ khi manifest đã duyệt</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div class="banner">
+                  <span class="bm"></span>
+                  <span class="bt"><b>Khoảng trống cần biết.</b> Chỉ luồng vẽ theo kịch bản là bắt buộc dựng nháp
+                  rồi chờ bạn duyệt. Hai kênh chạy lệnh trực tiếp thì <b>không</b> đi qua hàng chờ duyệt — agent
+                  gọi là chạy. Nếu muốn mọi đường ghi đều phải xác nhận thì đây là phần còn phải làm ở máy chủ.</span>
+                  <span class="actions"><a class="btn" href="changes.html">Xem hàng chờ duyệt</a></span>
+                </div>
+
+                <div class="formgrid">
+                  <div class="lb">Chế độ đọc source<small>Dùng khi phân tích script LISP chưa tin cậy</small></div>
+                  <div class="fd">
+                    <p class="hint" style="margin:0">Lượt review chạy <b>không tool</b>, trong một thư mục tạm rỗng,
+                    và luôn tạo phiên mới để không kế thừa quyền từ phiên trước. Chỉ CLI nào có chế độ không-tool
+                    thật sự mới được dùng — chọn CLI khác thì máy chủ từ chối lượt review.</p>
+                  </div>
+                </div>
+
+              </div>
+            </section>
+
+            <!-- Hard limits worth knowing before blaming the model -->
+            <section class="panel" data-od-id="ai-limits">
+              <header><h2>Giới hạn &amp; chi phí</h2></header>
+              <div style="padding:var(--s4)">
+                <div class="formgrid">
+                  <div class="lb">Kích thước một lượt</div>
+                  <div class="fd"><p class="hint" style="margin:0">Máy chủ chặn lượt gửi quá lớn trước khi gọi CLI
+                  và báo <b>“Nội dung gửi agent quá lớn”</b>. Kết quả trả về cũng bị cắt khi vượt ngưỡng —
+                  gặp câu trả lời cụt giữa chừng thì thường là do đây, không phải mô hình lỗi.</p></div>
+
+                  <div class="lb">Chi phí</div>
+                  <div class="fd"><p class="hint" style="margin:0">Chỉ Claude báo chi phí thực của lượt chạy.
+                  Các CLI còn lại không trả về giá, nên app hiển thị <code>—</code> thay vì đoán.</p></div>
+
+                  <div class="lb">Phiên hội thoại</div>
+                  <div class="fd"><p class="hint" style="margin:0">Hội thoại lưu cục bộ trên máy bạn.
+                  Tiếp nối phiên cũ giúp agent nhớ ngữ cảnh; lượt review thì luôn bắt đầu phiên mới.</p></div>
+                </div>
+              </div>
+            </section>
+
+          </div>
+        </div>
+
+        <!-- ══ Tab: Nâng cao ══════════════════════════════════════ -->
+        <div class="tabpanel" data-panel="adv" hidden>
+          <div class="setpad">
+
+            <div class="advgate">
+              <label class="switch" data-od-id="toggle-advanced">
+                <input type="checkbox" id="adv-on"><span class="track"></span>
+                <span style="font-size:12.5px;font-weight:550">Bật chế độ nâng cao</span>
+              </label>
+              <span class="hint" style="flex:1">Các bề mặt dưới đây gọi thẳng vào plugin và máy chủ MCP.
+              Chúng không có lớp bảo vệ như phần còn lại của app.</span>
+            </div>
+
+            <div id="adv-body" hidden style="display:flex;flex-direction:column;gap:var(--s5)">
+
+              <section class="panel" data-od-id="arx-catalog">
+                <header><h2>Catalog năng lực ObjectARX</h2>
+                  <div class="actions"><span class="tag mono">87 năng lực · 6 nhóm</span></div></header>
+                <div style="padding:var(--s4);display:flex;flex-direction:column;gap:var(--s3)">
+                  <div class="bars" style="display:flex;flex-direction:column;gap:var(--s2)">
+                    <div class="row"><span style="width:180px;font-size:12.5px">Đã có UI</span>
+                      <span class="meter" style="flex:1"><i style="width:14%"></i></span>
+                      <span class="mono" style="font-size:11px;width:48px;text-align:right">12/87</span></div>
+                  </div>
+                  <div class="banner" data-tone="hard"><span class="bm"></span><span class="bt">
+                    <b>7 năng lực chỉ chạy trên Windows</b> nhưng sản phẩm này chỉ chạy trên macOS.
+                    Mọi thứ giả định có palette trong AutoCAD, tích hợp Properties palette hay COM
+                    automation đều không dùng được ở đây.</span></div>
+                  <button class="btn">Mở catalog đầy đủ</button>
+                </div>
+              </section>
+
+              <section class="panel" data-od-id="draw-t1">
+                <header><h2>Vẽ theo kịch bản</h2>
+                  <div class="actions"><span class="tag mono">35 kịch bản</span></div></header>
+                <div style="padding:var(--s4);display:flex;flex-direction:column;gap:var(--s3)">
+                  <p style="font-size:12.5px;color:var(--muted);margin:0;max-width:64ch;text-wrap:pretty">
+                    Sinh hình học từ mô tả bằng lời rồi kiểm chứng lại kết quả. Mỗi lần chạy đều tạo
+                    thao tác chờ duyệt như mọi đường ghi khác.</p>
+                  <button class="btn">Mở danh sách kịch bản</button>
+                </div>
+              </section>
+
+              <section class="panel" data-od-id="mcp-server">
+                <header><h2>Máy chủ MCP</h2>
+                  <div class="actions"><span class="tag mono">9 tool · 76 thao tác</span></div></header>
+                <div style="padding:var(--s4);display:flex;flex-direction:column;gap:var(--s3)">
+                  <dl class="props" style="grid-template-columns:180px 1fr;border:1px solid var(--border);border-radius:var(--r);overflow:hidden">
+                    <dt>Kênh</dt><dd>stdio</dd>
+                    <dt>Trạng thái</dt><dd>đang chạy</dd>
+                  </dl>
+                  <div class="banner" data-tone="hard"><span class="bm"></span><span class="bt">
+                    Tool <code>pid</code> vẽ <b>hình học placeholder</b> vào bản vẽ thật cho 12 thao tác.
+                    Đừng bật nó trên bản vẽ đang làm việc.</span></div>
+                </div>
+              </section>
+
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <footer class="statusbar" data-shell="statusbar"></footer>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+/* ============================================================
+   Settings — four tabs, one destructive button, no fake writes.
+
+   Removed from the old screen because nothing consumed them:
+   the job-timeout field (each endpoint hardcodes its own), the
+   legacy-path switch (the fallback is unconditional), the default
+   plot scale, scan-on-open, reread-on-save, and the job history
+   table (there is no job history store — see the activity drawer).
+   ============================================================ */
+(function () {
+  "use strict";
+
+  /* ---------- Tabs ---------- */
+  var tabbar = document.querySelector(".tabbar");
+
+  function selectTab(name) {
+    var btn = tabbar.querySelector('button[data-tab="' + name + '"]');
+    if (!btn) return;
+    tabbar.querySelectorAll("button").forEach(function (x) { x.setAttribute("aria-selected", "false"); });
+    btn.setAttribute("aria-selected", "true");
+    document.querySelectorAll(".tabpanel").forEach(function (p) {
+      p.hidden = p.dataset.panel !== name;
+    });
+  }
+
+  tabbar.addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-tab]");
+    if (b) selectTab(b.dataset.tab);
+  });
+
+  // Deep link: other screens point straight at a tab, e.g. settings.html#ai
+  if (location.hash) selectTab(location.hash.slice(1));
+
+  /* ---------- Diagnostics: the nine /health checks ---------- */
+  var CHECKS = [
+    { id: "installed", ok: true,  nm: "AutoCAD đã cài",
+      d: "AutoCAD 2027 · /Applications/Autodesk/AutoCAD 2027" },
+    { id: "running",   ok: true,  nm: "Phiên AutoCAD đang chạy",
+      d: "3 bản vẽ đang mở · docs cập nhật 2,1 s trước" },
+    { id: "arx",       ok: true,  nm: "Plugin AcadBridge đã cài",
+      d: "AcadBridge.bundle 1.4.2 có trong thư mục plug-in" },
+    { id: "arxload",   ok: true,  nm: "Plugin đã nạp trong phiên",
+      d: "Reactor phản hồi · 2 lần mất nhịp trong 60 phút qua" },
+    { id: "bridge",    ok: true,  nm: "Thư mục cầu nối đọc ghi được",
+      d: "~/Acad-Bridge · job.lsp, raw.job, results/ bình thường" },
+    { id: "core",      ok: true,  nm: "AcCoreConsole khả dụng",
+      d: "Dùng cho tệp đóng ở Xử lý thư mục" },
+    { id: "offline",   ok: true,  nm: "Nhân offline khả dụng",
+      d: "Chạy được cả khi AutoCAD không mở" },
+    { id: "signing",   ok: true,  nm: "Khoá ký duyệt LISP",
+      d: "Khoá Ed25519 của app desktop · duyệt script từ trình duyệt sẽ bị từ chối" },
+    { id: "quiescent", ok: true,  nm: "Phiên đang rảnh",
+      d: "quiescent = true · nhận được lệnh ghi" }
+  ];
+
+  var checksEl = document.getElementById("checks");
+
+  function paintChecks(state) {
+    checksEl.innerHTML = CHECKS.map(function (c) {
+      var st = state || (c.ok ? "ok" : "fail");
+      return '<div class="checkrow" data-state="' + st + '" data-od-id="check-' + c.id + '">' +
+        '<span class="st">' + App.icon("tick") + "</span>" +
+        '<span><span class="nm">' + c.nm + '</span><br><span class="d2">' + c.d + "</span></span>" +
+        '<span class="tag' + (c.ok ? "" : " tag--solid") + '">' + (c.ok ? "đạt" : "cần xử lý") + "</span></div>";
+    }).join("");
+    var ok = CHECKS.filter(function (c) { return c.ok; }).length;
+    document.getElementById("diag-summary").textContent = ok + "/" + CHECKS.length + " mục đạt";
+  }
+
+  document.getElementById("btn-diag").addEventListener("click", function () {
+    var b = this;
+    b.disabled = true;
+    paintChecks("run");
+    document.getElementById("diag-summary").textContent = "đang kiểm tra…";
+    setTimeout(function () {
+      b.disabled = false;
+      paintChecks();
+      App.toast("Đã chạy lại 9 mục chẩn đoán.");
+    }, 1500);
+  });
+
+  paintChecks();
+
+  /* ---------- Restart AutoCAD — the most destructive button here ----------
+     The endpoint kills the AutoCAD GUI process. Unsaved work is lost, so the
+     confirm lists exactly which open drawings have unsaved changes. */
+  document.getElementById("btn-restart").addEventListener("click", function () {
+    var dirty = App.docs.filter(function (d) { return d.dbmod; });
+
+    App.confirm({
+      title: "Khởi động lại AutoCAD?",
+      sub: "Tiến trình AutoCAD sẽ bị kết thúc ngay lập tức",
+      body:
+        '<div class="banner" data-tone="hard"><span class="bm"></span><span class="bt">' +
+          "<b>Công việc chưa lưu sẽ mất.</b> Lệnh này kết thúc tiến trình AutoCAD, không phải đóng " +
+          "êm — AutoCAD sẽ không kịp hỏi bạn có muốn lưu không.</span></div>" +
+        (dirty.length
+          ? '<div class="panel"><header><h2>Bản vẽ chưa lưu</h2>' +
+            '<div class="actions"><span class="tag tag--solid">' + dirty.length + "</span></div></header>" +
+            dirty.map(function (d) {
+              return '<div style="padding:var(--s3) var(--s4);border-bottom:1px solid var(--border)">' +
+                '<div class="mono" style="font-size:12.5px">' + d.name + "</div>" +
+                '<div class="hint">dbmod = 1 · có thay đổi chưa ghi xuống đĩa</div></div>';
+            }).join("") + "</div>"
+          : '<p class="hint" style="margin:0">Không có bản vẽ nào đang có thay đổi chưa lưu.</p>') +
+        '<p class="hint" style="margin:0">Hãy chuyển sang AutoCAD và lưu (<code>Cmd+S</code>) trước khi ' +
+        "tiếp tục. App không lưu hộ được.</p>",
+      confirmLabel: dirty.length ? "Tôi đã lưu — khởi động lại" : "Khởi động lại",
+      cancelLabel: "Huỷ",
+      note: "Không hoàn tác được.",
+      onConfirm: doRestart
+    });
+  });
+
+  function doRestart() {
+    document.body.dataset.acad = "off";
+    App.setStatus("Đang khởi động lại AutoCAD…");
+    var conn = document.querySelector(".conn");
+    if (conn) {
+      conn.dataset.state = "off";
+      conn.lastChild.textContent = "AutoCAD chưa chạy";
+    }
+    CHECKS.forEach(function (c) {
+      if (["running", "arxload", "quiescent"].indexOf(c.id) > -1) {
+        c.ok = false;
+        c.d = "AutoCAD đang khởi động lại…";
+      }
+    });
+    paintChecks();
+
+    setTimeout(function () {
+      document.body.dataset.acad = "on";
+      if (conn) {
+        conn.dataset.state = "on";
+        conn.lastChild.textContent = "AutoCAD 2027 · đã nối";
+      }
+      CHECKS.forEach(function (c) {
+        c.ok = true;
+        if (c.id === "running")   c.d = "0 bản vẽ đang mở — phiên vừa khởi động lại";
+        if (c.id === "arxload")   c.d = "Reactor phản hồi · nhịp 2,1 s";
+        if (c.id === "quiescent") c.d = "quiescent = true · nhận được lệnh ghi";
+      });
+      paintChecks();
+      App.setStatus("Cầu nối ~/Acad-Bridge · nhịp 2,1 s");
+      App.toast("AutoCAD đã khởi động lại. Mở lại bản vẽ để tiếp tục.");
+    }, 3200);
+  }
+
+  /* ---------- Rebuild plugin — clang runs for about five minutes ---------- */
+  document.getElementById("btn-build").addEventListener("click", function () {
+    var slot = document.getElementById("build-slot");
+    var b = this;
+    b.disabled = true;
+    slot.innerHTML =
+      '<div class="panel"><div style="padding:var(--s4);display:flex;flex-direction:column;gap:var(--s3)">' +
+        '<div class="row"><span class="tag opstate" data-op="applying">đang build</span>' +
+        '<span class="hint" style="margin-left:auto" id="build-el">0:04</span></div>' +
+        '<div class="meter meter--indet"><i></i></div>' +
+        '<div class="hint" id="build-note">Đang biên dịch mepbridge.cpp… quá trình này thường mất khoảng 5 phút.</div>' +
+        '<button class="btn" id="build-cancel">Huỷ build</button>' +
+      "</div></div>";
+
+    var t = 4;
+    var timer = setInterval(function () {
+      var el = document.getElementById("build-el");
+      if (!el) { clearInterval(timer); return; }
+      t += 1;
+      el.textContent = Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");
+      if (t === 8) document.getElementById("build-note").textContent = "Đang liên kết AcadBridge.bundle…";
+      if (t >= 12) {
+        clearInterval(timer);
+        b.disabled = false;
+        slot.innerHTML =
+          '<div class="banner" data-tone="hard"><span class="bm"></span><span class="bt">' +
+          "<b>Build xong — nhưng plugin cũ vẫn đang chạy.</b> AutoCAD không nạp lại bundle giữa phiên. " +
+          "Phải khởi động lại AutoCAD thì bản vừa build mới có hiệu lực.</span></div>";
+      }
+    }, 1000);
+
+    document.getElementById("build-cancel").addEventListener("click", function () {
+      clearInterval(timer);
+      b.disabled = false;
+      slot.innerHTML = "";
+    });
+  });
+
+  /* ---------- Active standards profile (real endpoint) ---------- */
+  document.getElementById("std-profile").addEventListener("change", function () {
+    var label = this.options[this.selectedIndex].textContent;
+    var sel = this;
+    var prev = sel.dataset.prev || sel.value;
+    App.confirm({
+      title: "Đổi hồ sơ đang áp dụng?",
+      sub: "Sang " + label,
+      body: '<p style="margin:0;font-size:13px;color:var(--muted)">Mọi kết quả quét đang mở sẽ hết hiệu lực ' +
+            "và trả <code>profile_stale</code> khi áp dụng.</p>",
+      confirmLabel: "Đổi hồ sơ",
+      onConfirm: function () {
+        sel.dataset.prev = sel.value;
+        App.toast("Hồ sơ áp dụng: " + label);
+      }
+    }).el.addEventListener("click", function (e) {
+      if (e.target.closest("[data-close]") && !e.target.closest("[data-ok]")) sel.value = prev;
+    });
+  });
+
+  /* ---------- Advanced gate ---------- */
+  document.getElementById("adv-on").addEventListener("change", function () {
+    document.getElementById("adv-body").hidden = !this.checked;
+  });
+
+  /* ============================================================
+     AI assistant CLI
+
+     The daemon keeps a registry of local agent CLIs and reports, for each
+     one, whether its binary was found on PATH. Two consequences shape this
+     screen:
+
+     · There is no API-key storage anywhere in the stack. Each CLI carries
+       its own credentials, so offering a key field here would be a lie —
+       and would send people looking in the wrong place when auth fails.
+     · Only a CLI with a genuine no-tools mode may analyse untrusted LISP
+       source, because the review prompt embeds that source verbatim. That
+       property is per-CLI and cannot be toggled from this app.
+     ============================================================ */
+  var AGENT_KEY = "acad.agent.v1";
+
+  var AGENTS = [
+    { id: "claude", label: "Claude", bin: "claude", available: true,
+      path: "/opt/homebrew/bin/claude", isolated: true, cost: true },
+    { id: "codex", label: "Codex", bin: "codex", available: true,
+      path: "/usr/local/bin/codex", isolated: false, cost: false },
+    { id: "grok", label: "Grok", bin: "grok", available: false,
+      path: "", isolated: false, cost: false },
+    { id: "gemini", label: "Gemini (agy)", bin: "agy", available: false,
+      path: "", isolated: false, cost: false }
+  ];
+
+  function savedAgent() {
+    try { return localStorage.getItem(AGENT_KEY); } catch (e) { return null; }
+  }
+  function saveAgent(id) {
+    try { localStorage.setItem(AGENT_KEY, id); } catch (e) { /* private mode */ }
+  }
+
+  var chosen = (function () {
+    var s = savedAgent();
+    var ok = AGENTS.filter(function (a) { return a.id === s && a.available; })[0];
+    if (ok) return ok.id;
+    var first = AGENTS.filter(function (a) { return a.available; })[0];
+    return first ? first.id : null;
+  })();
+  var probeTarget = chosen;
+
+  var listEl = document.getElementById("ai-list");
+
+  function paintAgents() {
+    var n = AGENTS.filter(function (a) { return a.available; }).length;
+    document.getElementById("ai-count").textContent = n + "/" + AGENTS.length + " sẵn sàng";
+
+    listEl.innerHTML = AGENTS.map(function (a) {
+      var chips = [];
+      chips.push(a.available
+        ? '<span class="tag opstate" data-op="applied">đã cài</span>'
+        : '<span class="tag opstate" data-op="rejected">chưa cài</span>');
+      if (a.isolated) chips.push('<span class="tag tag--accent">duyệt được script</span>');
+      if (a.cost) chips.push('<span class="tag tag--quiet">báo chi phí</span>');
+
+      return '<div class="agentrow" role="radio" data-id="' + a.id + '"' +
+        ' data-available="' + a.available + '"' +
+        ' aria-checked="' + (chosen === a.id) + '"' +
+        (a.available ? ' tabindex="0"' : "") +
+        ' data-od-id="agent-' + a.id + '">' +
+        '<span class="rk"></span>' +
+        "<span><b>" + a.label + "</b>" +
+          '<span class="p">' + (a.path || "không tìm thấy `" + a.bin + "` trong PATH") + "</span>" +
+          '<span class="chips">' + chips.join("") + "</span></span>" +
+        '<button class="btn btn--quiet" data-check="' + a.id + '">Kiểm tra</button>' +
+        "</div>";
+    }).join("");
+  }
+
+  /* Five checks. The version probe is drawn because an operator genuinely
+     needs it when a CLI misbehaves after an update — but it is marked as
+     awaiting a server endpoint rather than faked as green. */
+  function probeSteps(agent) {
+    return [
+      { key: "path", src: "which " + agent.bin,
+        lbl: "Tìm thấy CLI trong PATH",
+        ok: agent.path || "",
+        bad: "Chưa cài CLI “" + agent.bin + "”. Cài rồi bấm Quét lại PATH." },
+      { key: "version", src: "cần backend",
+        lbl: "Đọc được phiên bản CLI",
+        pending: "Chưa có đường đọc phiên bản từ app — hiện phải chạy “" + agent.bin + " --version” trong Terminal.",
+        needsBackend: true },
+      { key: "turn", src: "một lượt hỏi",
+        lbl: "CLI nhận lượt hỏi và mở được phiên",
+        ok: "phiên mới được tạo",
+        bad: "CLI không mở được phiên. Hay gặp nhất là chưa đăng nhập — đăng nhập bằng chính CLI đó rồi thử lại." },
+      { key: "stream", src: "luồng trả lời",
+        lbl: "Nhận đủ luồng trả lời tới khi kết thúc",
+        ok: "suy nghĩ → trả lời → kết thúc",
+        bad: "Luồng đứt giữa chừng. Kiểm tra mạng hoặc hạn mức của tài khoản CLI." },
+      { key: "tool", src: "công cụ AutoCAD",
+        lbl: "Gọi được công cụ đọc AutoCAD",
+        ok: "đọc danh sách bản vẽ đang mở",
+        bad: "CLI trả lời được nhưng chưa chạm tới AutoCAD. Kiểm tra tab Chẩn đoán trước." }
+    ];
+  }
+
+  function paintProbe(agent, results) {
+    document.getElementById("probe-target").textContent = agent ? agent.bin : "—";
+    var steps = agent ? probeSteps(agent) : [];
+    var host = document.getElementById("probe-steps");
+
+    if (!agent) {
+      host.innerHTML = '<div class="gs-head">Điều kiện</div>' +
+        '<div class="gsrow" data-pass="false"><span class="mk"></span>' +
+        '<span class="lbl">Chưa có CLI nào để kiểm tra<small>Cài Claude hoặc Codex rồi quét lại PATH.</small></span>' +
+        '<span class="src">PATH</span></div>';
+      document.getElementById("probe-run").disabled = true;
+      return;
+    }
+
+    var done = results ? Object.keys(results).length : 0;
+    var passed = 0;
+    steps.forEach(function (s) { if (results && results[s.key] === "pass") passed++; });
+
+    host.innerHTML =
+      '<div class="gs-head">Đường đi tới ' + agent.label +
+        '<span class="n">' + (done ? passed + "/" + steps.length + " đạt" : "chưa chạy") + "</span></div>" +
+      steps.map(function (s) {
+        var r = results ? results[s.key] : null;
+        var state = r === "pass" ? "true" : r === "fail" ? "false" : "pending";
+        var detail = r === "pass" ? (s.ok || "")
+          : r === "fail" ? s.bad
+          : r === "run" ? "đang chạy…"
+          : s.needsBackend ? s.pending
+          : "chưa chạy";
+        return '<div class="gsrow" data-pass="' + state + '">' +
+          '<span class="mk">' + App.icon("tick") + "</span>" +
+          '<span class="lbl">' + s.lbl + "<small>" + detail + "</small></span>" +
+          '<span class="src">' +
+            (s.needsBackend ? '<span class="needs-backend">cần backend</span>' : s.src) +
+          "</span></div>";
+      }).join("");
+  }
+
+  function runProbe(id) {
+    var agent = AGENTS.filter(function (a) { return a.id === id; })[0];
+    if (!agent) return;
+    probeTarget = id;
+
+    var steps = probeSteps(agent);
+    var results = {};
+    var btn = document.getElementById("probe-run");
+    var note = document.getElementById("probe-note");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span>Đang kiểm tra…';
+    note.textContent = "Đang gửi một lượt hỏi thật qua " + agent.label + "…";
+    paintProbe(agent, results);
+
+    var i = 0;
+    (function step() {
+      if (i >= steps.length) {
+        btn.disabled = false;
+        btn.textContent = "Chạy lại kiểm tra";
+        var failed = steps.filter(function (s) { return results[s.key] === "fail"; });
+        note.textContent = failed.length
+          ? "Dừng ở bước “" + failed[0].lbl.toLowerCase() + "”."
+          : "Kết nối tới " + agent.label + " hoạt động bình thường.";
+        App.setStatus(failed.length
+          ? "Trợ lý AI · " + agent.label + " chưa dùng được"
+          : "Trợ lý AI · " + agent.label + " sẵn sàng");
+        return;
+      }
+      var s = steps[i];
+
+      /* A missing binary stops the run: the later checks cannot be
+         attempted at all, so they stay unrun rather than being marked failed. */
+      if (s.key === "path" && !agent.available) {
+        results[s.key] = "fail";
+        paintProbe(agent, results);
+        i = steps.length;
+        return step();
+      }
+      if (s.needsBackend) { i++; return step(); }
+
+      results[s.key] = "run";
+      paintProbe(agent, results);
+      setTimeout(function () {
+        results[s.key] = "pass";
+        paintProbe(agent, results);
+        i++;
+        step();
+      }, s.key === "turn" ? 1100 : 700);
+    })();
+  }
+
+  listEl.addEventListener("click", function (e) {
+    var check = e.target.closest("[data-check]");
+    if (check) { runProbe(check.dataset.check); return; }
+    var row = e.target.closest(".agentrow");
+    if (!row || row.dataset.available !== "true") return;
+    chosen = row.dataset.id;
+    saveAgent(chosen);
+    probeTarget = chosen;
+    paintAgents();
+    paintProbe(AGENTS.filter(function (a) { return a.id === chosen; })[0], null);
+    App.toast("Trợ lý mặc định: " + AGENTS.filter(function (a) { return a.id === chosen; })[0].label);
+  });
+
+  listEl.addEventListener("keydown", function (e) {
+    if (e.key !== " " && e.key !== "Enter") return;
+    var row = e.target.closest(".agentrow");
+    if (!row || row.dataset.available !== "true") return;
+    e.preventDefault();
+    row.click();
+  });
+
+  document.getElementById("ai-rescan").addEventListener("click", function () {
+    var b = this;
+    b.disabled = true;
+    b.innerHTML = '<span class="spin"></span>Đang quét…';
+    setTimeout(function () {
+      b.disabled = false;
+      b.textContent = "Quét lại PATH";
+      paintAgents();
+      App.toast("Đã quét lại PATH · 2/4 CLI sẵn sàng.");
+    }, 900);
+  });
+
+  document.getElementById("probe-run").addEventListener("click", function () {
+    runProbe(probeTarget);
+  });
+
+  paintAgents();
+  paintProbe(AGENTS.filter(function (a) { return a.id === chosen; })[0], null);
+})();
+</script>
+</body>
+</html>
