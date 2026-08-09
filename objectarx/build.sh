@@ -8,6 +8,13 @@
 #       PackageContents.xml Autoloader metadata
 set -euo pipefail
 
+INSTALL=1
+case "${1:-}" in
+  "") ;;
+  --build-only) INSTALL=0 ;;
+  *) echo "Usage: ./build.sh [--build-only]"; exit 2 ;;
+esac
+
 AC_APP="/Applications/Autodesk/AutoCAD 2027/AutoCAD 2027.app"
 FW="$AC_APP/Contents/Frameworks"
 SDK_INC="/Library/Developer/Autodesk/ObjectARX 2027/inc"
@@ -78,20 +85,27 @@ if [ -d "$PKG/Contents/MacOS/$MOD_NAME.bundle" ]; then
 fi
 codesign -dv "$PKG" 2>&1 | head -5 || true
 
-for D in "$DEST_PLUGINS" "$DEST_ADDINS"; do
-  mkdir -p "$D"
-  rm -rf "$D/$PKG_NAME.bundle"
-  # Remove legacy package name so only Acad-Bridge remains active
-  rm -rf "$D/MEP-Bridge.bundle"
-  cp -R "$PKG" "$D/"
-  # Verify installed binary has entry point
-  nm -gU "$D/$PKG_NAME.bundle/Contents/MacOS/$MOD_NAME" | grep -q acrxEntryPoint \
-    || { echo "!! install verify failed: $D"; exit 1; }
-  echo "Da cai: $D/$PKG_NAME.bundle"
-done
+if [ "$INSTALL" -eq 1 ]; then
+  for D in "$DEST_PLUGINS" "$DEST_ADDINS"; do
+    mkdir -p "$D"
+    rm -rf "$D/$PKG_NAME.bundle"
+    # Remove legacy package name so only Acad-Bridge remains active
+    rm -rf "$D/MEP-Bridge.bundle"
+    cp -R "$PKG" "$D/"
+    # Verify installed binary has entry point
+    nm -gU "$D/$PKG_NAME.bundle/Contents/MacOS/$MOD_NAME" | grep -q acrxEntryPoint \
+      || { echo "!! install verify failed: $D"; exit 1; }
+    echo "Da cai: $D/$PKG_NAME.bundle"
+  done
+else
+  echo "Build-only: skipped ApplicationPlugins/ApplicationAddins install."
+fi
 
 echo ""
 echo "OK. Flat package exports acrxEntryPoint."
-echo "APPLOAD path: $DEST_PLUGINS/$PKG_NAME.bundle"
-echo "-> Restart AutoCAD 2027. Expect [AcadBridge] on command line."
+echo "Built bundle: $(pwd)/$PKG"
+if [ "$INSTALL" -eq 1 ]; then
+  echo "APPLOAD path: $DEST_PLUGINS/$PKG_NAME.bundle"
+  echo "-> Restart AutoCAD 2027. Expect [AcadBridge] on command line."
+fi
 echo "-> Commands: ACADARX / ACADRAW / ACADDOCS / ACADWATCH (legacy MEP* still work)"
