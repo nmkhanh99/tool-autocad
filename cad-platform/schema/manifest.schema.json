@@ -1,0 +1,296 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cadweb.local/schema/manifest-v1.json",
+  "title": "CADWeb manifest version 1",
+  "type": "object",
+  "required": [
+    "format",
+    "formatVersion",
+    "producer",
+    "source",
+    "units",
+    "coordinateSystem",
+    "extents",
+    "files"
+  ],
+  "properties": {
+    "format": {
+      "const": "cadweb"
+    },
+    "formatVersion": {
+      "type": "object",
+      "required": ["major", "minor"],
+      "properties": {
+        "major": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minor": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "producer": {
+      "type": "object",
+      "required": ["application", "applicationVersion", "pluginVersion", "platform"],
+      "properties": {
+        "application": {
+          "type": "string",
+          "minLength": 1
+        },
+        "applicationVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pluginVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "source": {
+      "type": "object",
+      "required": ["fileName", "dwgVersion", "drawingFingerprint"],
+      "properties": {
+        "fileName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dwgVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "drawingFingerprint": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "units": {
+      "type": "object",
+      "required": ["name", "metersPerUnit"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metersPerUnit": {
+          "anyOf": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "coordinateSystem": {
+      "type": "object",
+      "required": ["space", "upAxis", "origin"],
+      "properties": {
+        "space": {
+          "const": "WCS"
+        },
+        "upAxis": {
+          "const": "Z"
+        },
+        "origin": {
+          "$ref": "#/definitions/vec3"
+        }
+      },
+      "additionalProperties": true
+    },
+    "extents": {
+      "type": "object",
+      "required": ["min", "max"],
+      "properties": {
+        "min": {
+          "$ref": "#/definitions/vec3"
+        },
+        "max": {
+          "$ref": "#/definitions/vec3"
+        }
+      },
+      "additionalProperties": true
+    },
+    "modelEmpty": {
+      "type": "boolean"
+    },
+    "syncBinding": {
+      "$ref": "#/definitions/syncBinding"
+    },
+    "checkpointBinding": {
+      "$ref": "#/definitions/checkpointBinding"
+    },
+    "files": {
+      "type": "object",
+      "required": ["layers", "entities", "exportReport"],
+      "properties": {
+        "layers": {
+          "$ref": "#/definitions/jsonFile"
+        },
+        "entities": {
+          "$ref": "#/definitions/flatBuffersFile"
+        },
+        "blocks": {
+          "$ref": "#/definitions/flatBuffersFile"
+        },
+        "properties": {
+          "$ref": "#/definitions/jsonFile"
+        },
+        "exportReport": {
+          "$ref": "#/definitions/jsonFile"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/file"
+      }
+    }
+  },
+  "additionalProperties": true,
+  "allOf": [
+    {
+      "not": {
+        "required": ["syncBinding", "checkpointBinding"]
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          { "required": ["syncBinding"] },
+          { "required": ["checkpointBinding"] }
+        ]
+      },
+      "then": {
+        "required": ["modelEmpty"],
+        "properties": {
+          "formatVersion": {
+            "properties": {
+              "minor": { "minimum": 1 }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "vec3": {
+      "type": "array",
+      "items": [
+        { "type": "number" },
+        { "type": "number" },
+        { "type": "number" }
+      ],
+      "additionalItems": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!\\.\\.?$)(?!\\.\\.?/)(?!.*\\/\\.\\.?/)(?!.*\\/\\.\\.?$)(?!.*//)(?!.*\\/$).+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "syncBinding": {
+      "type": "object",
+      "required": ["drawingId", "modelEpoch", "snapshotId", "baseRevision"],
+      "properties": {
+        "drawingId": { "type": "string", "minLength": 1 },
+        "modelEpoch": { "type": "string", "minLength": 1 },
+        "snapshotId": { "type": "string", "minLength": 1 },
+        "baseRevision": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "checkpointBinding": {
+      "type": "object",
+      "required": ["drawingId", "modelEpoch", "checkpointId", "revision", "stateHash"],
+      "properties": {
+        "drawingId": { "type": "string", "minLength": 1 },
+        "modelEpoch": { "type": "string", "minLength": 1 },
+        "checkpointId": { "type": "string", "minLength": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "stateHash": { "$ref": "#/definitions/sha256" }
+      },
+      "additionalProperties": true
+    },
+    "file": {
+      "type": "object",
+      "required": ["path", "encoding", "size", "sha256"],
+      "properties": {
+        "path": {
+          "$ref": "#/definitions/path"
+        },
+        "encoding": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "$ref": "#/definitions/sha256"
+        },
+        "schemaVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "byteOrder": {
+          "enum": ["little-endian"]
+        }
+      },
+      "additionalProperties": true
+    },
+    "jsonFile": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/file"
+        },
+        {
+          "properties": {
+            "encoding": {
+              "const": "json"
+            }
+          }
+        }
+      ]
+    },
+    "flatBuffersFile": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/file"
+        },
+        {
+          "required": ["schemaVersion", "byteOrder"],
+          "properties": {
+            "encoding": {
+              "const": "flatbuffers"
+            },
+            "schemaVersion": {
+              "const": 1
+            },
+            "byteOrder": {
+              "const": "little-endian"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

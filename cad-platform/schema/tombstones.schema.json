@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cadweb.local/schema/tombstones-v1.json",
+  "title": "CADWeb delta tombstones version 1",
+  "type": "object",
+  "required": ["schemaVersion", "keys"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "keys": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(entity|block|layer):[1-9A-F][0-9A-F]*$"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false
+}

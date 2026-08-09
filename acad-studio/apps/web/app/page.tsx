@@ -6,6 +6,7 @@ import DrawingStandardsPanel from "./DrawingStandardsPanel";
 import BlockLibraryPanel from "./BlockLibraryPanel";
 import LispLibraryPanel from "./LispLibraryPanel";
 import DocumentReviewPanel, { type ReviewWorkspaceView } from "./DocumentReviewPanel";
+import CadWebViewerPanel from "./CadWebViewerPanel";
 import {
   readLispProposal,
   proposalFingerprint,
@@ -183,6 +184,7 @@ export default function Page() {
   const [reviewWorkspaceOpen, setReviewWorkspaceOpen] = useState(false);
   const [reviewWorkspaceView, setReviewWorkspaceView] =
     useState<ReviewWorkspaceView>("documents");
+  const [cadWebViewerOpen, setCadWebViewerOpen] = useState(false);
   const [lispProposalBusy, setLispProposalBusy] = useState<number | null>(null);
   /** Bản vẽ đang mở trong AutoCAD + đích vẽ đang chọn ("" = file .work mặc định). */
   const [drawDocs, setDrawDocs] = useState<{ title: string; file: string; active: boolean }[]>([]);
@@ -1255,6 +1257,10 @@ export default function Page() {
             title="Quét, đọc, cấu hình AI và nạp LSP/MNL/FAS vào bản vẽ đang mở">
             ⌘ Thư viện AutoCAD
           </button>
+          <button className="pillbtn" onClick={() => setCadWebViewerOpen(true)}
+            title="Mở, kiểm tra và hiển thị file .cadweb bằng WebGL">
+            ⌗ CadWeb Viewer
+          </button>
           <button className="pillbtn" onClick={openHealth} title="Kiểm tra plugin/heartbeat, CER vs crash, build & sửa">
             ⚙ Kiểm tra / Sửa AutoCAD
           </button>
@@ -1335,6 +1341,11 @@ export default function Page() {
               <span className="fnicon">🎯</span>
               <div><div className="fnname">Đối tượng đang chọn</div><div className="fndesc">Đọc selection hiện tại từ AutoCAD.</div></div>
             </div>
+            <button type="button" className="fnbtn quickfn" onClick={() => setCadWebViewerOpen(true)}
+              title="Mở archive CadWeb đã export từ AutoCAD Windows hoặc macOS">
+              <span className="fnicon">⌗</span>
+              <div><div className="fnname">CadWeb Viewer</div><div className="fndesc">Kiểm tra checksum và hiển thị WebGL.</div></div>
+            </button>
           </div>
 
           <div className="fngroup quickgroup">
@@ -1640,6 +1651,11 @@ export default function Page() {
         initialCadTarget={drawTarget}
         onClose={() => setReviewWorkspaceOpen(false)}
         onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
+      />
+
+      <CadWebViewerPanel
+        open={cadWebViewerOpen}
+        onClose={() => setCadWebViewerOpen(false)}
       />
 
       {form && (

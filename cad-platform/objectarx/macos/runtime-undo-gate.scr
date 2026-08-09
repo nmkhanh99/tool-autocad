@@ -1,0 +1,13 @@
+CADWEBSYNCSTATUS
+(progn (setq cadweb-before-selection (ssget "_X")) (setq cadweb-before-count (if cadweb-before-selection (sslength cadweb-before-selection) 0)) (princ))
+_.LINE
+123456.125,654321.25
+123466.125,654331.25
+
+(progn (setq cadweb-edited-selection (ssget "_X")) (setq cadweb-edited-count (if cadweb-edited-selection (sslength cadweb-edited-selection) 0)) (princ))
+_.U
+(progn (setq cadweb-after-selection (ssget "_X")) (setq cadweb-after-count (if cadweb-after-selection (sslength cadweb-after-selection) 0)) (princ))
+_.QSAVE
+CADWEBSYNCSTATUS
+(progn (setq cadweb-runtime-file (open (getenv "CADWEB_RUNTIME_MATRIX_RESULT") "w")) (write-line (if (and (= cadweb-edited-count (1+ cadweb-before-count)) (= cadweb-after-count cadweb-before-count) (= 0 (getvar "DBMOD"))) "status=passed" "status=failed") cadweb-runtime-file) (write-line "case=undo-save" cadweb-runtime-file) (write-line (strcat "drawing=" (getvar "DWGPREFIX") (getvar "DWGNAME")) cadweb-runtime-file) (write-line (strcat "before-count=" (itoa cadweb-before-count)) cadweb-runtime-file) (write-line (strcat "edited-count=" (itoa cadweb-edited-count)) cadweb-runtime-file) (write-line (strcat "after-count=" (itoa cadweb-after-count)) cadweb-runtime-file) (write-line (strcat "dbmod=" (itoa (getvar "DBMOD"))) cadweb-runtime-file) (close cadweb-runtime-file))
+_.QUIT

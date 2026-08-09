@@ -1,0 +1,26 @@
+{
+  "name": "@acad/sync-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm run typecheck && tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@acad/cadweb": "workspace:*",
+    "flatbuffers": "25.9.23"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "fflate": "^0.8.2",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

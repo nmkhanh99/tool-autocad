@@ -1,0 +1,4 @@
+_.QSAVE
+CADWEBSYNCSTATUS
+(progn (setq cadweb-runtime-file (open (getenv "CADWEB_RUNTIME_MATRIX_RESULT") "w")) (write-line (if (= 0 (getvar "DBMOD")) "status=passed" "status=failed") cadweb-runtime-file) (write-line "case=initial-save" cadweb-runtime-file) (write-line (strcat "drawing=" (getvar "DWGPREFIX") (getvar "DWGNAME")) cadweb-runtime-file) (write-line (strcat "dbmod=" (itoa (getvar "DBMOD"))) cadweb-runtime-file) (close cadweb-runtime-file))
+_.QUIT

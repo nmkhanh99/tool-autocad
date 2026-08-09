@@ -1,0 +1,2 @@
+(progn (command-s "CADWEBSETTINGS") (command-s "CADWEBSYNCSTATUS") (setq cadweb-smoke-file (open (getenv "CADWEB_RUNTIME_SMOKE_RESULT") "w")) (write-line (strcat "status=passed\nacadver=" (getvar "ACADVER") "\nplatform=" (getvar "PLATFORM")) cadweb-smoke-file) (close cadweb-smoke-file))
+_.QUIT

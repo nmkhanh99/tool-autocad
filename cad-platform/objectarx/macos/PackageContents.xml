@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Flat macOS ObjectARX package: this outer bundle exports acrxEntryPoint. -->
+<ApplicationPackage SchemaVersion="1.0" AppVersion="0.1.0"
+    ProductType="Application"
+    Name="CadWebExporter"
+    Description="AutoCAD to CadWeb export and save-sync plug-in"
+    Author="SmartCoreX"
+    ProductCode="{D1C5CD7C-4A87-492B-A833-3240163A9A6D}">
+  <CompanyDetails Name="SmartCoreX" Url="" Email=""/>
+  <Components Description="macOS AutoCAD 2027 (R26.0)">
+    <RuntimeRequirements OS="Mac" Platform="AutoCAD"
+        SeriesMin="R26.0" SeriesMax="R26.0"/>
+    <ComponentEntry AppName="CadWebExporter"
+        ModuleName="./"
+        AppType="Arx"
+        LoadOnAutoCADStartup="True">
+      <Commands GroupName="CADWEB_EXPORTER">
+        <Command Global="CADWEBEXPORT" Local="CADWEBEXPORT"/>
+        <Command Global="CADWEBEXPORTSELECTED" Local="CADWEBEXPORTSELECTED"/>
+        <Command Global="CADWEBSETTINGS" Local="CADWEBSETTINGS"/>
+        <Command Global="CADWEBSYNCSTATUS" Local="CADWEBSYNCSTATUS"/>
+      </Commands>
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>

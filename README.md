@@ -114,6 +114,9 @@ Support Path. The loopback daemon rejects browser origins outside the packaged/d
 
 ## Docs
 
+- [CadWeb cross-platform architecture](CADWEB-ARCHITECTURE.md) — verified Windows/macOS ObjectARX split, `.cadweb` contract, packaging and delivery plan
+- [CadWeb revision/delta ADR](cad-platform/docs/0002-cadweb-revision-delta-contract.md) — kiểm chứng reactor/save/Undo/Xref và contract Save Sync đề xuất
+- [CadWeb Save Sync implementation plan](cad-platform/docs/cadweb-sync-implementation-plan.md) — phase, code mapping, test gates và Definition of Done
 - [ACAD Control](acad-studio/ACAD-CONTROL.md) — headless / batch / live
 - [MCP adapter](acad-studio/MCP.md) — 9 tools / 76 implemented operations,
   including fail-closed native PDF plotting and evidence-first AI review

@@ -1,0 +1,259 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cadweb.local/schema/change-v1.json",
+  "title": "CADWeb delta change envelope version 1",
+  "type": "object",
+  "required": [
+    "format",
+    "formatVersion",
+    "changeSetId",
+    "drawingId",
+    "sourceFingerprint",
+    "modelEpoch",
+    "baseRevision",
+    "trigger",
+    "upserts",
+    "deletes",
+    "modelEmpty",
+    "resultExtents",
+    "files"
+  ],
+  "properties": {
+    "format": {
+      "const": "cadweb-delta"
+    },
+    "formatVersion": {
+      "type": "object",
+      "required": ["major", "minor"],
+      "properties": {
+        "major": { "const": 1 },
+        "minor": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "changeSetId": { "$ref": "#/definitions/nonEmptyString" },
+    "drawingId": { "$ref": "#/definitions/nonEmptyString" },
+    "sourceFingerprint": { "$ref": "#/definitions/nonEmptyString" },
+    "modelEpoch": { "$ref": "#/definitions/nonEmptyString" },
+    "baseRevision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "trigger": {
+      "type": "object",
+      "required": ["kind", "savedAt"],
+      "properties": {
+        "kind": { "$ref": "#/definitions/nonEmptyString" },
+        "savedAt": { "$ref": "#/definitions/nonEmptyString" }
+      },
+      "additionalProperties": false
+    },
+    "upserts": { "$ref": "#/definitions/counts" },
+    "deletes": { "$ref": "#/definitions/counts" },
+    "modelEmpty": { "type": "boolean" },
+    "resultExtents": { "$ref": "#/definitions/extents" },
+    "files": {
+      "type": "object",
+      "required": ["exportReport"],
+      "properties": {
+        "entities": {
+          "$ref": "#/definitions/entitiesFile"
+        },
+        "blocks": {
+          "$ref": "#/definitions/blocksFile"
+        },
+        "layers": {
+          "$ref": "#/definitions/layersFile"
+        },
+        "tombstones": {
+          "$ref": "#/definitions/tombstonesFile"
+        },
+        "exportReport": {
+          "$ref": "#/definitions/exportReportFile"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "upserts": {
+            "properties": { "entities": { "minimum": 1 } }
+          }
+        }
+      },
+      "then": { "properties": { "files": { "required": ["entities"] } } },
+      "else": {
+        "properties": {
+          "files": { "not": { "required": ["entities"] } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "upserts": {
+            "properties": { "blocks": { "minimum": 1 } }
+          }
+        }
+      },
+      "then": { "properties": { "files": { "required": ["blocks"] } } },
+      "else": {
+        "properties": {
+          "files": { "not": { "required": ["blocks"] } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "upserts": {
+            "properties": { "layers": { "minimum": 1 } }
+          }
+        }
+      },
+      "then": { "properties": { "files": { "required": ["layers"] } } },
+      "else": {
+        "properties": {
+          "files": { "not": { "required": ["layers"] } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "deletes": {
+            "properties": {
+              "entities": { "const": 0 },
+              "blocks": { "const": 0 },
+              "layers": { "const": 0 }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "files": { "not": { "required": ["tombstones"] } }
+        }
+      },
+      "else": {
+        "properties": { "files": { "required": ["tombstones"] } }
+      }
+    }
+  ],
+  "definitions": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "counts": {
+      "type": "object",
+      "required": ["entities", "blocks", "layers"],
+      "properties": {
+        "entities": { "$ref": "#/definitions/count" },
+        "blocks": { "$ref": "#/definitions/count" },
+        "layers": { "$ref": "#/definitions/count" }
+      },
+      "additionalProperties": false
+    },
+    "vec3": {
+      "type": "array",
+      "items": [
+        { "type": "number" },
+        { "type": "number" },
+        { "type": "number" }
+      ],
+      "additionalItems": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "extents": {
+      "type": "object",
+      "required": ["min", "max"],
+      "properties": {
+        "min": { "$ref": "#/definitions/vec3" },
+        "max": { "$ref": "#/definitions/vec3" }
+      },
+      "additionalProperties": false
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "file": {
+      "type": "object",
+      "required": ["path", "encoding", "size", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "encoding": { "type": "string", "minLength": 1 },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 134217728
+        },
+        "sha256": { "$ref": "#/definitions/sha256" },
+        "schemaVersion": { "type": "integer", "minimum": 1 },
+        "byteOrder": { "const": "little-endian" }
+      },
+      "additionalProperties": false
+    },
+    "flatBuffersFile": {
+      "allOf": [
+        { "$ref": "#/definitions/file" },
+        {
+          "required": ["schemaVersion", "byteOrder"],
+          "properties": {
+            "encoding": { "const": "flatbuffers" },
+            "schemaVersion": { "const": 1 },
+            "byteOrder": { "const": "little-endian" }
+          }
+        }
+      ]
+    },
+    "jsonFile": {
+      "allOf": [
+        { "$ref": "#/definitions/file" },
+        { "properties": { "encoding": { "const": "json" } } }
+      ]
+    },
+    "entitiesFile": {
+      "allOf": [
+        { "$ref": "#/definitions/flatBuffersFile" },
+        { "properties": { "path": { "const": "entities.bin" } } }
+      ]
+    },
+    "blocksFile": {
+      "allOf": [
+        { "$ref": "#/definitions/flatBuffersFile" },
+        { "properties": { "path": { "const": "blocks.bin" } } }
+      ]
+    },
+    "layersFile": {
+      "allOf": [
+        { "$ref": "#/definitions/jsonFile" },
+        { "properties": { "path": { "const": "layers.json" } } }
+      ]
+    },
+    "tombstonesFile": {
+      "allOf": [
+        { "$ref": "#/definitions/jsonFile" },
+        { "properties": { "path": { "const": "tombstones.json" } } }
+      ]
+    },
+    "exportReportFile": {
+      "allOf": [
+        { "$ref": "#/definitions/jsonFile" },
+        { "properties": { "path": { "const": "export-report.json" } } }
+      ]
+    }
+  }
+}

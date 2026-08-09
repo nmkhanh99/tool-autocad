@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ApplicationPackage SchemaVersion="1.0" AppVersion="0.1.0"
+    ProductType="Application"
+    Name="CadWebExporter"
+    Description="Cross-platform AutoCAD to CadWeb export and save-sync plug-in"
+    Author="SmartCoreX"
+    ProductCode="{D1C5CD7C-4A87-492B-A833-3240163A9A6D}">
+  <CompanyDetails Name="SmartCoreX" Url="" Email=""/>
+
+  <Components Description="Windows AutoCAD 2027 (R26.0)">
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD"
+        SeriesMin="R26.0" SeriesMax="R26.0"/>
+    <ComponentEntry AppName="CadWebExporter"
+        ModuleName="./Contents/Windows/2027/CadWebExporter.arx"
+        AppType="Arx"
+        LoadOnAutoCADStartup="True">
+      <Commands GroupName="CADWEB_EXPORTER">
+        <Command Global="CADWEBEXPORT" Local="CADWEBEXPORT"/>
+        <Command Global="CADWEBEXPORTSELECTED" Local="CADWEBEXPORTSELECTED"/>
+        <Command Global="CADWEBSETTINGS" Local="CADWEBSETTINGS"/>
+        <Command Global="CADWEBSYNCSTATUS" Local="CADWEBSYNCSTATUS"/>
+      </Commands>
+    </ComponentEntry>
+  </Components>
+
+  <Components Description="macOS AutoCAD 2027 (R26.0)">
+    <RuntimeRequirements OS="Mac" Platform="AutoCAD"
+        SeriesMin="R26.0" SeriesMax="R26.0"/>
+    <ComponentEntry AppName="CadWebExporter"
+        ModuleName="./Contents/MacOS/2027/CadWebExporter.bundle"
+        AppType="Arx"
+        LoadOnAutoCADStartup="True">
+      <Commands GroupName="CADWEB_EXPORTER">
+        <Command Global="CADWEBEXPORT" Local="CADWEBEXPORT"/>
+        <Command Global="CADWEBEXPORTSELECTED" Local="CADWEBEXPORTSELECTED"/>
+        <Command Global="CADWEBSETTINGS" Local="CADWEBSETTINGS"/>
+        <Command Global="CADWEBSYNCSTATUS" Local="CADWEBSYNCSTATUS"/>
+      </Commands>
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>

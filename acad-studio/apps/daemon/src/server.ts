@@ -17,6 +17,7 @@ import { acadBridgeRouter, ensureBridgeDirs } from "./acadBridge.js";
 import { drawingStandardsRouter } from "./drawingStandards.js";
 import { blockLibraryRouter } from "./blockLibraryRouter.js";
 import { cadSelectionRouter } from "./cadSelection.js";
+import { cadWebSyncRouter, createCadWebSyncControl } from "./cadwebSync.js";
 import { lispLibraryRouter } from "./lispLibrary.js";
 import which from "./which.js";
 import { initDb, type Store } from "./db.js";
@@ -45,6 +46,7 @@ async function main() {
   process.env.ACAD_PROJECT_ROOT = PROJECT_ROOT;
   process.env.MEP_PROJECT_ROOT = PROJECT_ROOT; // alias for older code paths
   const store: Store = await initDb();
+  const cadWebSync = createCadWebSyncControl();
 
   const app = express();
   // This loopback daemon can execute AutoLISP. Browser Origin is therefore a
@@ -75,6 +77,7 @@ async function main() {
   app.use("/api/acad/standards", drawingStandardsRouter());
   app.use("/api/acad/blocks", blockLibraryRouter());
   app.use("/api/acad/lisp", lispLibraryRouter({ projectRoot: PROJECT_ROOT }));
+  app.use("/api/cadweb/sync", cadWebSyncRouter(cadWebSync));
   const { sessionRouter } = await import("./session.js");
   app.use("/api/acad", sessionRouter());
   const { drawRouter } = await import("./drawRouter.js");
@@ -306,9 +309,11 @@ async function main() {
     app.get("*", (_req, res) => res.sendFile(resolve(WEB_DIR, "index.html")));
   }
 
-  app.listen(PORT, "127.0.0.1", () => {
+  const server = app.listen(PORT, "127.0.0.1", () => {
+    cadWebSync.start();
     console.log(`[mep-daemon] http://127.0.0.1:${PORT}  (root: ${PROJECT_ROOT}${WEB_DIR ? ", ui tĩnh" : ""})`);
   });
+  server.on("close", () => cadWebSync.stop());
 }
 
 main().catch((e) => { console.error("[mep-daemon] init lỗi:", e); process.exit(1); });

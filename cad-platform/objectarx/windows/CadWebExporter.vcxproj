@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{674A221D-48B1-48C2-B1D0-B8D585913532}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>CadWebExporter</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <ObjectArxSdkRoot Condition="'$(ObjectArxSdkRoot)'==''">$(OBJECTARX_SDK_ROOT)</ObjectArxSdkRoot>
+    <ObjectArxIncludeDir>$(ObjectArxSdkRoot)\inc</ObjectArxIncludeDir>
+    <ObjectArxLibDir>$(ObjectArxSdkRoot)\lib-x64</ObjectArxLibDir>
+    <CadWebRoot>$(MSBuildThisFileDirectory)..\..</CadWebRoot>
+    <TargetName>CadWebExporter</TargetName>
+    <TargetExt>.arx</TargetExt>
+    <OutDir>$(MSBuildThisFileDirectory)build\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildThisFileDirectory)build\obj\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <PreprocessorDefinitions>_WIN64;UNICODE;_UNICODE;ACDB_EXT;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ObjectArxIncludeDir);$(CadWebRoot)\core\include;$(CadWebRoot)\core\src;$(CadWebRoot)\core\generated;$(CadWebRoot)\core\third_party\flatbuffers\include;$(CadWebRoot)\objectarx\common;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebugDLL</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreadedDLL</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$(ObjectArxLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>rxapi.lib;acdb26.lib;acge26.lib;accore.lib;acad.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ModuleDefinitionFile>CadWebExporter.def</ModuleDefinitionFile>
+      <SubSystem>Windows</SubSystem>
+      <TargetMachine>MachineX64</TargetMachine>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="WindowsEntryPoint.cpp" />
+    <ClCompile Include="..\common\CadWebCommands.cpp">
+      <Link>Shared\CadWebCommands.cpp</Link>
+    </ClCompile>
+    <ClCompile Include="..\common\CadWebAcDbAdapter.cpp">
+      <Link>Shared\CadWebAcDbAdapter.cpp</Link>
+    </ClCompile>
+    <ClCompile Include="..\common\CadWebSaveReactor.cpp">
+      <Link>Shared\CadWebSaveReactor.cpp</Link>
+    </ClCompile>
+    <ClCompile Include="..\..\core\src\CadWebChangeTracker.cpp">
+      <Link>Core\CadWebChangeTracker.cpp</Link>
+    </ClCompile>
+    <ClCompile Include="..\..\core\src\CadWebOutbox.cpp">
+      <Link>Core\CadWebOutbox.cpp</Link>
+    </ClCompile>
+    <ClCompile Include="..\..\core\src\CadWebDurableStore.cpp">
+      <Link>Core\CadWebDurableStore.cpp</Link>
+    </ClCompile>
+    <ClCompile Include="..\..\core\src\CadWebRevisionPlanner.cpp">
+      <Link>Core\CadWebRevisionPlanner.cpp</Link>
+    </ClCompile>
+    <ClCompile Include="..\..\core\src\CadDeltaWriter.cpp">
+      <Link>Core\CadDeltaWriter.cpp</Link>
+    </ClCompile>
+    <ClCompile Include="..\..\core\src\CadWebWriter.cpp">
+      <Link>Core\CadWebWriter.cpp</Link>
+    </ClCompile>
+    <ClCompile Include="..\..\core\src\detail\Sha256.cpp">
+      <Link>Core\Sha256.cpp</Link>
+    </ClCompile>
+    <ClCompile Include="..\..\core\src\detail\ZipStore.cpp">
+      <Link>Core\ZipStore.cpp</Link>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\common\CadWebAcDbAdapter.h" />
+    <ClInclude Include="..\common\CadWebCommands.h" />
+    <ClInclude Include="..\common\CadWebSaveReactor.h" />
+    <ClInclude Include="..\..\core\include\cadweb\CadWebChangeTracker.h" />
+    <ClInclude Include="..\..\core\include\cadweb\CadWebOutbox.h" />
+    <ClInclude Include="..\..\core\include\cadweb\CadWebDurableStore.h" />
+    <ClInclude Include="..\..\core\include\cadweb\CadWebRevisionPlanner.h" />
+    <ClInclude Include="..\..\core\include\cadweb\CadDelta.h" />
+    <ClInclude Include="..\..\core\include\cadweb\CadDeltaWriter.h" />
+    <ClInclude Include="..\..\core\include\cadweb\CadDocument.h" />
+    <ClInclude Include="..\..\core\include\cadweb\CadWebWriter.h" />
+    <ClInclude Include="..\..\core\generated\geometry_generated.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="CadWebExporter.def" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="CheckObjectArxSdk" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(ObjectArxIncludeDir)\rxregsvc.h')"
+           Text="Set OBJECTARX_SDK_ROOT (or /p:ObjectArxSdkRoot=...) to the extracted ObjectARX 2027 Windows SDK root." />
+  </Target>
+</Project>

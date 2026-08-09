@@ -1,0 +1,4 @@
+LIBRARY CadWebExporter
+EXPORTS
+    acrxEntryPoint PRIVATE
+    acrxGetApiVersion PRIVATE

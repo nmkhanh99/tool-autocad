@@ -1,0 +1,119 @@
+namespace CadWeb.V1;
+
+enum BufferKind : ubyte {
+  Unknown = 0,
+  Entities = 1,
+  Blocks = 2
+}
+
+enum EntityKind : ubyte {
+  Unknown = 0,
+  Line = 1,
+  Polyline = 2,
+  Arc = 3,
+  Circle = 4,
+  Text = 5,
+  MText = 6,
+  BlockReference = 7
+}
+
+enum SpaceKind : ubyte {
+  Model = 0,
+  Paper = 1,
+  BlockDefinition = 2
+}
+
+enum PropertySourceMode : ubyte {
+  Explicit = 0,
+  ByLayer = 1,
+  ByBlock = 2
+}
+
+struct Vec3 {
+  x:double;
+  y:double;
+  z:double;
+}
+
+// Row-major m[row][column], applied to homogeneous column vectors.
+struct Matrix4 {
+  m00:double;
+  m01:double;
+  m02:double;
+  m03:double;
+  m10:double;
+  m11:double;
+  m12:double;
+  m13:double;
+  m20:double;
+  m21:double;
+  m22:double;
+  m23:double;
+  m30:double;
+  m31:double;
+  m32:double;
+  m33:double;
+}
+
+table Attribute {
+  id:string (required);
+  tag:string (required);
+  text:string;
+  position:Vec3;
+  rotation:double = 0;
+  height:double = 0;
+}
+
+table Entity {
+  id:string (required);
+  sourceHandle:string;
+  kind:EntityKind = Unknown;
+  layerId:string (required);
+  space:SpaceKind = Model;
+  visible:bool = true;
+  colorArgb:uint = 4294967295;
+  transparency:ubyte = 0;
+  lineWeightMm:float = 0;
+  linetype:string;
+  drawOrder:int = 0;
+  points:[Vec3];
+  bulges:[double];
+  startWidths:[double];
+  endWidths:[double];
+  constantWidth:double = 0;
+  closed:bool = false;
+  center:Vec3;
+  radius:double = 0;
+  startAngle:double = 0;
+  endAngle:double = 0;
+  normal:Vec3;
+  text:string;
+  position:Vec3;
+  rotation:double = 0;
+  height:double = 0;
+  blockDefinitionId:string;
+  transform:Matrix4;
+  attributes:[Attribute];
+  colorSourceMode:PropertySourceMode = Explicit;
+  transparencySourceMode:PropertySourceMode = Explicit;
+  lineWeightSourceMode:PropertySourceMode = Explicit;
+  linetypeSourceMode:PropertySourceMode = Explicit;
+}
+
+table BlockDefinition {
+  id:string (required);
+  sourceHandle:string;
+  name:string (required);
+  basePoint:Vec3;
+  entities:[Entity];
+}
+
+table GeometryBuffer {
+  schemaVersion:uint = 1;
+  kind:BufferKind = Unknown;
+  entities:[Entity];
+  blocks:[BlockDefinition];
+}
+
+root_type GeometryBuffer;
+file_identifier "CWEB";

@@ -1,0 +1,30 @@
+{
+  "name": "@acad/cadweb",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "generate:flatbuffers": "node scripts/generate-flatbuffers.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm run typecheck && tsx --test test/*.test.ts",
+    "test:native-cross-read": "tsx scripts/test-native-cross-read.ts",
+    "test:native-delta-cross-read": "tsx scripts/test-native-delta-cross-read.ts",
+    "fixture": "tsx scripts/generate-fixture.ts"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "fflate": "^0.8.2",
+    "flatbuffers": "25.9.23"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
