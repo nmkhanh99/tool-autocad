@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 4 (phần 1): tách tầng dữ liệu thư viện block
+
+### Added
+
+- `features/blocks/model.ts` — kiểu dữ liệu và toàn bộ logic chuẩn hoá của thư
+  viện block, tách khỏi giao diện. Panel legacy và route `/library/blocks` sắp
+  dựng sẽ dùng **chung** file này: hai giao diện là chuyện tạm thời trong lúc
+  migrate, hai bản logic chuẩn hoá thì không — chúng sẽ lệch, và lệch ở đây
+  nghĩa là hai màn hình nói hai trạng thái đồng bộ khác nhau cho cùng một block.
+- `scripts/test-blocks-model.test.ts` — 9 test. Lớp này quyết định người dùng
+  **nhìn thấy** trạng thái đồng bộ nào; sai ở đây không gây lỗi, nó chỉ hiển thị
+  sai và người dùng chèn một block họ tưởng đã khớp thư viện.
+
+### Changed
+
+- `BlockLibraryPanel.tsx` từ 888 → 657 dòng, import từ module chung. **Không
+  đổi hành vi.**
+
+### Technical
+
+- Test khoá đúng hai điều dễ hỏng nhất: giữ đủ **5** trạng thái đồng bộ của
+  backend (mẫu chỉ vẽ 3; ép xuống 3 sẽ nuốt mất `conflict` — trạng thái duy nhất
+  người dùng buộc phải xử lý tay), và trạng thái lạ phải lùi về `local_only`
+  chứ **không** lùi về `synced`, vì lùi sai hướng là nói với người dùng rằng
+  block đã khớp thư viện.
+- Hai test đầu tôi viết sai kỳ vọng về `slugifyTechnicalName` (đoán hoa/gạch
+  ngang, thực tế là thường/gạch dưới; và đoán trả rỗng, thực tế lùi về `"block"`
+  vì AutoCAD cần tên không rỗng). Test đã sửa theo hành vi thật của code.
+
+---
+
 ## 2026-08-10 — Giai đoạn 3: shell dùng chung, và giao diện mới chạy được
 
 Lần đầu người dùng nhìn thấy bộ mẫu thiết kế chạy thật: `/changes` mở ra với
