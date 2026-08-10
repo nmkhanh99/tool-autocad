@@ -36,6 +36,10 @@
 #include <dbmain.h>
 #include <dbents.h>
 #include <dbmline.h>
+#include <dbhatch.h>
+#include <dbdim.h>
+#include <dbelipse.h>
+#include <dbcurve.h>
 #include <dbpl.h>
 #include <dbsymtb.h>
 #include <dbdict.h>
@@ -1772,6 +1776,14 @@ static const size_t kGeomMaxBlockEntities   = 60000;
 // Block long nhau. Chan de quy vo han khi ban ve hong (block A chen block B
 // chen lai A) va chan ca nhung cay long qua sau de con vẽ noi.
 static const size_t kGeomMaxBlockDepth      = 8;
+// Mot HATCH pattern min co the co hang chuc nghin doan gach. Ve het thi trinh
+// duyet chet ma nguoi dung cung khong doc them duoc gi — vung gach day dac o
+// muc thu nho nao cung chi la mot mang mau.
+static const size_t kGeomMaxHatchSegments   = 1200;
+// Duong cong khong co dang gon (SPLINE, HELIX...) phai lay mau. 48 diem du min
+// o moi muc thu phong hop ly, ma van khong lam phinh payload: mot ban ve vai
+// chuc spline la vai nghin so, khong phai vai tram nghin.
+static const int    kCurveSamples           = 48;
 
 static std::string geomErrorJson(const std::string& requestId,
                                  const std::string& code,
@@ -1809,6 +1821,126 @@ static std::string xy(const AcGePoint3d& p) {
 // tuyen -Z van song song nhung dao chieu goc.
 static bool planarXY(const AcGeVector3d& n) {
     return fabs(n.x) < 1e-9 && fabs(n.y) < 1e-9 && n.z > 0.0;
+}
+
+/* --- HATCH -----------------------------------------------------------------
+ *
+ * Hinh bao cua mot vung gach la mot hop chu nhat: vo dung ca de nhin lan de do.
+ * Nhung mot HATCH khong phai MOT hinh — no la nhieu vong bien cong voi (co the)
+ * hang chuc nghin doan gach. Nen no ra kieu `multi`: mot doi tuong chon duoc,
+ * ben trong la nhieu hinh con.
+ *
+ * Toa do cua HATCH nam trong mat phang RIENG cua no (OCS). Phang theo XY thi
+ * x,y trung voi WCS; nghieng thi khong, va luc do phai danh dau gan dung —
+ * giong het cach xu ly cung tron va INSERT nghieng.
+ */
+static void appendHatchPoint(std::string& pts, int& count, const AcGePoint2d& p) {
+    if (count) pts += ",";
+    pts += jsonNumber(p.x) + "," + jsonNumber(p.y);
+    count++;
+}
+
+static std::string hatchGeometryJson(AcDbHatch* ha, bool& approx) {
+    const bool flat = planarXY(ha->normal());
+    if (!flat) approx = true;
+
+    std::string parts;
+    size_t segments = 0;
+    bool cut = false;
+    bool edgeLoopSkipped = false;
+    auto addPart = [&](const std::string& body) {
+        if (!parts.empty()) parts += ",";
+        parts += "{" + body + "}";
+    };
+
+    // --- Vong bien ---
+    const int loops = ha->numLoops();
+    for (int i = 0; i < loops && !cut; ++i) {
+        Adesk::Int32 loopType = 0;
+        // Hoi KIEU vong truoc roi moi chon overload. Goi thang overload polyline
+        // len mot vong dang canh la doc mot dang du lieu khac han voi thuc te.
+        if (ha->loopTypeAt(i) & AcDbHatch::kPolyline) {
+            AcGePoint2dArray verts;
+            AcGeDoubleArray bulges;
+            if (ha->getLoopAt(i, loopType, verts, bulges) == Acad::eOk && verts.length() >= 2) {
+                std::string pts, bulgeJson;
+                int count = 0;
+                bool anyBulge = false, loopCut = false;
+                for (int v = 0; v < verts.length(); ++v) {
+                    if (segments >= kGeomMaxHatchSegments) { cut = loopCut = true; break; }
+                    if (count) bulgeJson += ",";
+                    const double b = v < bulges.length() ? bulges[v] : 0.0;
+                    if (b != 0.0) anyBulge = true;
+                    bulgeJson += jsonNumber(b);
+                    appendHatchPoint(pts, count, verts[v]);
+                    segments++;
+                }
+                if (count >= 2) {
+                    // Bulge chi ta dung do cong khi mat phang song song XY —
+                    // giong het LWPOLYLINE.
+                    //
+                    // `closed` phai theo loopCut: mot vong bi cat bot dinh ma van
+                    // bao khep kin thi renderer ke mot canh GIA tu dinh cuoi ve
+                    // dinh dau, co the cat ngang ca vung gach.
+                    std::string body = "\"k\":\"poly\",\"p\":[" + pts + "]" +
+                                       ",\"closed\":" + jsonBool(!loopCut);
+                    if (anyBulge && flat) body += ",\"bulge\":[" + bulgeJson + "]";
+                    addPart(body);
+                }
+                continue;
+            }
+        }
+        // Vong bien dang CANH ROI (line / cung / elip / spline) khong lay o day.
+        //
+        // Overload `getLoopAt` tra ve mang con tro `AcGeCurve2d*` va giao viec
+        // giai phong cho nguoi goi. Ban dau tu tin lam dung: lay mau tung canh
+        // roi `delete`. Ket qua tren ban ve that la AutoCAD chay xong dung mot
+        // luot doc roi CHET — dau hieu kinh dien cua hong heap, vi loi khong no
+        // ngay tai cho `delete`.
+        //
+        // Doi lay gi: vung gach co bien dang canh roi mat duong vien. Nhung neu
+        // no khong to dac thi cac duong gach ben duoi van ve ra ca vung — nguoi
+        // dung van thay dung cho, chi thieu net vien. Doi lay mot cai vien ma
+        // co nguy co lam sap AutoCAD cua nguoi ta la doi sai chieu.
+        //
+        // Muon lam dung phai qua `worldDraw` — mot AcGiWorldDraw tu viet bat lai
+        // nguyen thuy do hoa, khong dung API nao giao quyen so huu. Xem ROADMAP.
+        edgeLoopSkipped = true;
+    }
+
+    // --- Duong gach ---
+    // To dac thi khong co duong gach nao; luc do chi con bien, va bien khep kin
+    // da du de nhin ra vung.
+    if (!ha->isSolidFill() && ha->numHatchLines() > 0) {
+        AcGePoint2dArray starts, ends;
+        if (ha->getHatchLinesData(starts, ends) == Acad::eOk) {
+            const int n = starts.length() < ends.length() ? starts.length() : ends.length();
+            for (int i = 0; i < n; ++i) {
+                if (segments >= kGeomMaxHatchSegments) { cut = true; break; }
+                addPart("\"k\":\"line\",\"p\":[" +
+                        jsonNumber(starts[i].x) + "," + jsonNumber(starts[i].y) + "," +
+                        jsonNumber(ends[i].x) + "," + jsonNumber(ends[i].y) + "]");
+                segments++;
+            }
+        }
+    }
+
+    if (parts.empty()) return "";
+    std::string out = "\"k\":\"multi\",\"g\":[" + parts + "]";
+    // Hai ly do gan dung rat khac nhau, ma `aw` chi mang duoc mot. Cat bot la
+    // thu nguoi dung can biet hon: no nghia la hinh KHONG day du.
+    if (cut) {
+        approx = true;
+        out += ",\"aw\":\"hatch-truncated\"";
+    } else if (!flat) {
+        out += ",\"aw\":\"projected-hatch\"";
+    } else if (edgeLoopSkipped) {
+        // Thieu duong vien, con duong gach thi van co. Van la `a:1`: hinh ve ra
+        // khong phai hinh day du cua doi tuong.
+        approx = true;
+        out += ",\"aw\":\"hatch-boundary-partial\"";
+    }
+    return out;
 }
 
 static std::string entityGeometryJson(AcDbEntity* ent, bool& approx, long long& vertexOverflow,
@@ -1981,6 +2113,92 @@ static std::string entityGeometryJson(AcDbEntity* ent, bool& approx, long long& 
             return "\"k\":\"poly\",\"p\":[" + pts + "]" +
                    ",\"closed\":" + jsonBool(ml->closedMline() && !overflowed) +
                    ",\"aw\":\"mline-centerline\"";
+        }
+    }
+
+    // ELLIPSE xuat GON, khong lay mau: tam + hai ban truc + goc nghieng + hai
+    // tham so dau/cuoi la 7 so, con lay mau 32 diem la 64 so. Tren ban ve
+    // as-built co 1847 ellipse (chu yeu la ky hieu nho trong block) — chenh
+    // lech giua 13 KB va 830 KB payload cho cung mot hinh.
+    //
+    // `startAngle`/`endAngle` cua AcDbEllipse la THAM SO, khong phai goc that:
+    // P(t) = C + a·cos(t)·u + b·sin(t)·v. Cung tham so nay anh xa 1-1 sang cung
+    // elip cua SVG, nen xuat thang tham so la dung, khong phai xap xi.
+    if (AcDbEllipse* el = AcDbEllipse::cast(ent)) {
+        const AcGeVector3d major = el->majorAxis();
+        const double rx = major.length();
+        const double ry = rx * el->radiusRatio();
+        if (rx > 0.0 && ry > 0.0) {
+            if (!planarXY(el->normal())) approx = true;
+            return "\"k\":\"ellipse\",\"c\":[" + xy(el->center()) + "]" +
+                   ",\"rx\":" + jsonNumber(rx) +
+                   ",\"ry\":" + jsonNumber(ry) +
+                   ",\"rot\":" + jsonNumber(atan2(major.y, major.x)) +
+                   ",\"a0\":" + jsonNumber(el->startAngle()) +
+                   ",\"a1\":" + jsonNumber(el->endAngle()) +
+                   (approx ? ",\"aw\":\"projected-ellipse\"" : "");
+        }
+    }
+
+    if (AcDbHatch* ha = AcDbHatch::cast(ent)) {
+        const std::string geom = hatchGeometryJson(ha, approx);
+        if (!geom.empty()) return geom;
+    }
+
+    // DIMENSION giu do hoa cua no trong mot BLOCK an danh (`*D12`). Khong phai
+    // tu dung lai duong kich thuoc, mui ten, duong giong va chu — lay chinh
+    // block ma AutoCAD da dung de ve, roi di qua duong xuat block san co.
+    //
+    // Ket qua la hinh THAT, khong phai gan dung: day dung la thu AutoCAD ve ra.
+    if (AcDbDimension* dim = AcDbDimension::cast(ent)) {
+        const AcDbObjectId blockId = dim->dimBlockId();
+        if (!blockId.isNull()) {
+            std::string name;
+            AcDbBlockTableRecord* btr = nullptr;
+            if (acdbOpenObject(btr, blockId, AcDb::kForRead) == Acad::eOk && btr) {
+                AcString n;
+                btr->getName(n);
+                name = toUtf8(n.kwszPtr());
+                btr->close();
+            }
+            if (!name.empty()) {
+                if (blockRefs) blockRefs->insert(name);
+                const AcGePoint3d pos = dim->dimBlockPosition();
+                return "\"k\":\"insert\",\"p\":[" + xy(pos) + "]" +
+                       ",\"m\":[1,0,0,1," + jsonNumber(pos.x) + "," + jsonNumber(pos.y) + "]" +
+                       ",\"name\":" + jsonString(name);
+            }
+        }
+    }
+
+    // Duong cong con lai (SPLINE, HELIX...): lay mau qua `AcDbCurve`.
+    //
+    // Dung API nay chu KHONG dung `AcGeCurve2d` cua hatch: `getPointAtParam`
+    // ghi vao mot diem cua nguoi goi, khong cap phat gi, khong giao quyen so
+    // huu cho ai. Lan truoc di duong AcGe co delete va lam AutoCAD chet sau khi
+    // doc xong — mot API khong cap phat thi khong co cach nao hong kieu do.
+    if (AcDbCurve* cu = AcDbCurve::cast(ent)) {
+        double t0 = 0.0, t1 = 0.0;
+        if (cu->getStartParam(t0) == Acad::eOk && cu->getEndParam(t1) == Acad::eOk &&
+            std::isfinite(t0) && std::isfinite(t1) && t1 > t0) {
+            std::string pts;
+            int count = 0;
+            for (int i = 0; i < kCurveSamples; ++i) {
+                AcGePoint3d pt;
+                const double t = t0 + (t1 - t0) * (double)i / (double)(kCurveSamples - 1);
+                if (cu->getPointAtParam(t, pt) != Acad::eOk) continue;
+                if (count) pts += ",";
+                pts += jsonNumber(pt.x) + "," + jsonNumber(pt.y);
+                count++;
+            }
+            if (count >= 2) {
+                // Lay mau LA xap xi: duong cong that di qua vo han diem, day chi
+                // co 48. Danh dau de man hinh khong noi day la hinh chinh xac.
+                approx = true;
+                return "\"k\":\"poly\",\"p\":[" + pts + "]" +
+                       ",\"closed\":" + jsonBool(cu->isClosed()) +
+                       ",\"aw\":\"curve-sampled\"";
+            }
         }
     }
 

@@ -2,6 +2,61 @@
 
 ## 2026-08-10
 
+### Added — plugin dựng hình HATCH, DIMENSION, ELLIPSE, SPLINE
+
+Hình bao còn **0,7%** số đối tượng (74/10.888), trước là 18,1%.
+
+- **DIMENSION** — không tự dựng lại đường kích thước, mũi tên, đường gióng và
+  chữ. AutoCAD đã giữ sẵn đồ hoạ của mỗi dimension trong một **block ẩn danh**
+  (`*D188`); lấy chính block đó rồi đi qua đường xuất block có sẵn. Kết quả là
+  hình THẬT, không phải gần đúng. 29/29 dimension ra hình.
+- **HATCH** — vòng biên dạng polyline (giữ cả `bulge`, tức giữ độ cong thật) và
+  đường gạch pattern do AutoCAD tính sẵn. Ra kiểu mới `multi`: nhiều hình con
+  nhưng vẫn là **một** đối tượng chọn được. 77/120 hatch ra hình.
+- **ELLIPSE** — xuất **gọn** bằng 7 số (tâm, hai bán trục, góc nghiêng, hai tham
+  số đầu/cuối), không lấy mẫu. Bản vẽ as-built có 1847 ellipse: chênh lệch giữa
+  13 KB và 830 KB payload cho cùng một hình. `a0`/`a1` là **tham số**, không
+  phải góc thật — cung tham số ánh xạ 1-1 sang cung elip của SVG nên đây là hình
+  chính xác.
+- **SPLINE và các đường cong khác** — lấy mẫu 48 điểm qua `AcDbCurve`, đánh dấu
+  `curve-sampled` vì lấy mẫu LÀ xấp xỉ.
+
+Còn hình bao: 43 HATCH tô đặc có biên dạng cạnh rời, 23 MULTILEADER, 8 VIEWPORT.
+
+### Fixed — đường biên hatch làm AutoCAD chết (tự gây ra, tự sửa)
+
+Bản đầu tiên lấy biên hatch qua `getLoopAt` dạng **mảng con trỏ `AcGeCurve2d*`**
+rồi `delete` từng cái theo đúng tài liệu. Chạy trên bản vẽ thật: AutoCAD đọc
+xong **đúng một lượt** rồi chết — dấu hiệu kinh điển của hỏng heap, vì lỗi không
+nổ ngay tại chỗ `delete`. Bỏ hẳn đường đó.
+
+Đổi lại: vùng gạch có biên dạng cạnh rời mất đường viền (`hatch-boundary-partial`),
+nhưng nếu không tô đặc thì các đường gạch vẫn vẽ ra cả vùng. Đổi một cái viền
+lấy nguy cơ làm sập AutoCAD của người dùng là đổi sai chiều. Muốn làm đúng phải
+qua `worldDraw` — xem `ROADMAP.md`.
+
+Bản sửa đã chạy 6 lượt đọc liên tiếp, AutoCAD sống.
+
+### Changed — tải nhanh hơn: 0,55 s → 0,37 s, và 38.223 node SVG → 1.468
+
+Đo trước khi sửa: plugin quét 0,31 s, daemon 0,24 s.
+
+- **Bỏ tuần tự hoá lại ở daemon (−29 ms).** `res.json(obj)` duyệt lại toàn bộ
+  cây vừa `JSON.parse` xong để dựng lại đúng chuỗi plugin đã ghi. Nay giữ chuỗi
+  gốc và gửi thẳng.
+- **Nhịp dò thích ứng (−60 ms trung bình).** Nhịp cố định 120 ms cộng trung bình
+  60 ms chết vào mọi lượt đọc. Nay 15 ms trong giây đầu rồi giãn dần.
+- **`<defs>` + `<use>` + gộp nét (38.223 → 1.468 node).** Định nghĩa block dựng
+  một lần; bên trong mỗi định nghĩa, mọi nét cùng kiểu gộp thành một `<path>` —
+  hình bên trong block không chọn riêng được nên gộp không mất gì.
+- **Đã thử gzip rồi BỎ.** Mức 1 tốn 20 ms nén + 10 ms giải nén để bớt 1,3 MB
+  đường truyền, mà daemon chỉ lắng nghe trên `127.0.0.1` nơi 1,3 MB đi hết vài
+  mili-giây. Đo end-to-end: có gzip **chậm hơn** (0,42 s so với 0,37 s). Ghi lại
+  để lần sau không ai thêm `compression` vào vì nghe hợp lý.
+
+Sau khi sửa: 0,37 s cho một payload **to hơn** (1,82 MB thay vì 1,24 MB, vì đã
+có thêm hình của hatch, dimension và ellipse).
+
 ### Added — màn hình `/workspace`: khung xem hình học thật
 
 Route mới, đọc `GET /api/acad/geometry` và vẽ ra SVG: canvas thu/phóng/kéo, bộ

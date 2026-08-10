@@ -416,6 +416,30 @@ cho ra thứ ngược hẳn với ý người gọi.
 
 Chỉ xuất X/Y (`projection:"xy"`).
 
+**Kiểu hình (`k`).** `line`, `poly` (có `bulge`), `circle`, `arc`, `ellipse`,
+`point`, `text`, `insert`, `box` (hình bao), `multi` (nhiều hình con trong `g` —
+dùng cho HATCH: một đối tượng chọn được, nhiều hình bên trong).
+
+`ellipse` xuất **gọn** bằng 7 số chứ không lấy mẫu; `a0`/`a1` của nó là **tham
+số**, không phải góc thật: `P(t) = C + rx·cos(t)·u + ry·sin(t)·v`. Đem `atan2`
+ra tính lại là sai ở mọi elip không tròn.
+
+**Hiệu năng — ba con số đã đo, đừng đoán lại:**
+
+| | |
+| --- | --- |
+| Lượt đọc end-to-end | 0,37 s (plugin quét 0,28 s + daemon 0,09 s) |
+| Payload | 1,82 MB, 95% là `blocks` |
+| Node SVG của Model | 1.468 (bung thẳng không gộp: 11.304; không dùng `<defs>`: 38.223) |
+
+- Daemon **không** tuần tự hoá lại: `res.json(obj)` tốn 29 ms để dựng lại đúng
+  chuỗi plugin đã ghi.
+- Nhịp dò phản hồi **thích ứng** (15 ms trong giây đầu rồi giãn), không cố định.
+- **Không nén.** Đã đo: gzip mức 1 tốn 30 ms CPU để bớt 1,3 MB trên loopback —
+  end-to-end chậm hơn. Đừng thêm `compression`.
+- Renderer phải dùng `<defs>`+`<use>` và **gộp nét** trong từng định nghĩa. Bung
+  thẳng 38.000 node đã treo cả tab Chrome một lần.
+
 **Sửa plugin thì phải khởi động lại AutoCAD** — ghi đè bundle không ảnh hưởng
 tiến trình đang chạy. Sao lưu bản cũ trước khi `./build.sh` (có `--build-only`
 để chỉ biên dịch).

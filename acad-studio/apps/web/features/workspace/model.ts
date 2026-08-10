@@ -39,8 +39,10 @@ export type GeomEntity = {
   l: string;
   /** Không gian: `Model` hoặc tên layout. */
   sp: string;
-  /** Hình được vẽ ra thuộc dạng nào. */
-  k: "line" | "poly" | "circle" | "arc" | "point" | "insert" | "text" | "box";
+  /** Hình được vẽ ra thuộc dạng nào. `multi` = nhiều hình con trong `g`, dùng
+   * cho HATCH (nhiều vòng biên + hàng nghìn đoạn gạch nhưng vẫn là MỘT đối
+   * tượng chọn được). */
+  k: "line" | "poly" | "circle" | "arc" | "ellipse" | "point" | "insert" | "text" | "box" | "multi";
   /** `1` khi hình bị phép chiếu xuống XY làm sai. Xem `aw` để biết vì sao. */
   a?: number;
   /** Vì sao hình không thật: `bounding-box`, `mline-centerline`,
@@ -52,7 +54,13 @@ export type GeomEntity = {
   c?: number[];
   /** Bán kính — `circle`/`arc`. */
   r?: number;
-  /** Góc đầu/cuối theo radian, ngược chiều kim đồng hồ — `arc`. */
+  /** Bán trục lớn/nhỏ — `ellipse`. */
+  rx?: number;
+  ry?: number;
+  /** Góc đầu/cuối theo radian, ngược chiều kim đồng hồ — `arc`.
+   * Với `ellipse` đây là **tham số**, không phải góc thật:
+   * `P(t) = C + rx·cos(t)·u + ry·sin(t)·v`. Đem `atan2` ra để tính lại là sai
+   * ở mọi elip không tròn. */
   a0?: number;
   a1?: number;
   /** Độ cong từng đoạn của polyline (`tan(θ/4)`). */
@@ -71,6 +79,9 @@ export type GeomEntity = {
   name?: string;
   /** Hệ số tỉ lệ [x,y] — `insert`. */
   sc?: number[];
+  /** Hình con của `multi`. Chỉ mang phần hình học, không mang handle/layer —
+   * chúng thuộc về đối tượng cha. */
+  g?: GeomEntity[];
   /** Affine 2D `[a,b,c,d,e,f]` đưa toạ độ trong định nghĩa block về toạ độ bản
    * vẽ: `x' = a·x + c·y + e`, `y' = b·x + d·y + f`. Lấy thẳng từ
    * `blockTransform()` của AutoCAD nên đã gồm điểm chèn, điểm gốc của block, tỉ
@@ -135,6 +146,8 @@ export function fidelityOf(entity: GeomEntity, blocks?: BlockDefs): Fidelity {
     return def && def.length ? "exact" : "placeholder";
   }
   if (entity.k === "box") return "placeholder";
+  /* `multi` là HATCH đã dựng hình thật — vòng biên và đường gạch. Chỉ khi bị cắt
+     bớt hoặc bị chiếu nghiêng mới là hình thiếu, và lúc đó `aw` có mặt. */
   if (entity.aw) return "reduced";
   /* `a:1` mà không có `aw` — plugin bảo hình bị chiếu sai nhưng không nói phần
      nào. Vẫn là hình thiếu, không phải hình đúng. */
@@ -161,6 +174,13 @@ export function fidelityNote(entity: GeomEntity, blocks?: BlockDefs): string {
   if (entity.aw === "bounding-box") return "Chỉ có hình bao, không phải hình thật.";
   if (entity.aw === "mline-centerline") return "Chỉ có tim ống, không có hai đường thành.";
   if (entity.aw === "projected-bulge") return "Đoạn cong bị chiếu phẳng thành đường thẳng.";
+  if (entity.aw === "hatch-truncated") return "Vùng gạch quá dày, chỉ vẽ được một phần đường gạch.";
+  if (entity.aw === "projected-hatch") return "Vùng gạch nằm trên mặt phẳng nghiêng, hình bị chiếu sai.";
+  if (entity.aw === "curve-sampled") return "Đường cong được lấy mẫu 48 điểm, không phải đường cong thật.";
+  if (entity.aw === "projected-ellipse") return "Elip nằm trên mặt phẳng nghiêng, hình bị chiếu sai.";
+  if (entity.aw === "hatch-boundary-partial") {
+    return "Vùng gạch có đường viền plugin chưa đọc được; chỉ vẽ các đường gạch bên trong.";
+  }
   if (entity.a) return "Hình bị phép chiếu xuống mặt phẳng XY làm sai.";
   return "";
 }
@@ -365,6 +385,16 @@ function extentOf(
       return null;
     }
   }
+  if (entity.g && entity.g.length) {
+    /* `multi` không có toạ độ của riêng nó — khung bao là hợp của các hình con.
+       Bỏ qua thì HATCH biến mất khỏi "thu hết bản vẽ" và khỏi phép đếm nằm
+       ngoài khung, dù nó là một trong những thứ to nhất trên bản vẽ. */
+    let box: number[] | null = null;
+    for (const child of entity.g) {
+      box = joinExtent(box, extentOf(child, layer, ctx, stack, depth + 1));
+    }
+    if (box) return box;
+  }
   if (entity.b && entity.b.length >= 4) {
     return [
       Math.min(entity.b[0], entity.b[2]), Math.min(entity.b[1], entity.b[3]),
@@ -372,7 +402,9 @@ function extentOf(
     ];
   }
   if (entity.c && entity.c.length >= 2) {
-    const r = entity.r ?? 0;
+    /* Elip: lấy bán kính lớn hơn cho cả hai chiều. Khung rộng hơn hình thật một
+       chút, nhưng luôn CHỨA nó — khung thiếu thì "thu hết" cắt mất mép. */
+    const r = Math.max(entity.r ?? 0, entity.rx ?? 0, entity.ry ?? 0);
     return [entity.c[0] - r, entity.c[1] - r, entity.c[0] + r, entity.c[1] + r];
   }
   const p = entity.p;
@@ -536,6 +568,96 @@ export function polylinePath(
   return d;
 }
 
+/** Hình học của một đối tượng thành dữ liệu `d` của `<path>`, hoặc chuỗi rỗng
+ * nếu loại đó không vẽ bằng path được (chữ, dấu chỗ đứng).
+ *
+ * Tồn tại để **gộp nét**: một định nghĩa block có 150 đoạn thẳng thì 150 phần tử
+ * SVG chỉ khác nhau ở toạ độ — gộp thành một `<path>` duy nhất giữ nguyên hình
+ * mà bớt 149 node. Trên bản vẽ as-built, đây là chênh lệch giữa hơn 10.000 node
+ * và vài trăm.
+ *
+ * Chỉ gộp được thứ **không chọn riêng được**, tức là hình bên trong định nghĩa
+ * block. Đối tượng ở cấp trên cùng phải giữ phần tử riêng để còn bấm vào.
+ */
+export function pathDataOf(entity: GeomEntity, marker: number): string {
+  switch (entity.k) {
+    case "line": {
+      const p = entity.p ?? [];
+      return p.length >= 4 ? `M${p[0]} ${p[1]}L${p[2]} ${p[3]}` : "";
+    }
+    case "poly":
+      return polylinePath(entity.p ?? [], entity.bulge, !!entity.closed);
+    case "circle": {
+      const c = entity.c ?? [];
+      if (c.length < 2 || !entity.r) return "";
+      return circlePath(c[0], c[1], entity.r);
+    }
+    case "arc": {
+      const c = entity.c ?? [];
+      if (c.length < 2 || !entity.r) return "";
+      return arcPath(c[0], c[1], entity.r, entity.a0 ?? 0, entity.a1 ?? 0);
+    }
+    case "ellipse": {
+      const c = entity.c ?? [];
+      if (c.length < 2 || !entity.rx || !entity.ry) return "";
+      return ellipsePath(c[0], c[1], entity.rx, entity.ry, entity.rot ?? 0, entity.a0 ?? 0, entity.a1 ?? 0);
+    }
+    case "point": {
+      const p = entity.p ?? [];
+      return p.length >= 2 ? circlePath(p[0], p[1], marker / 3) : "";
+    }
+    case "box": {
+      const b = entity.b ?? [];
+      if (b.length < 4) return "";
+      return `M${b[0]} ${b[1]}H${b[2]}V${b[3]}H${b[0]}Z`;
+    }
+    case "multi":
+      return (entity.g ?? []).map((child) => pathDataOf(child, marker)).filter(Boolean).join("");
+    default:
+      /* `insert` và `text` không gộp được: một cái là phép biến đổi, một cái là
+         glyph. Nơi gọi phải tự dựng phần tử riêng cho chúng. */
+      return "";
+  }
+}
+
+/** Elip (hoặc cung elip) thành path.
+ *
+ * `t0`/`t1` là **tham số**, không phải góc: `P(t) = C + rx·cos(t)·u + ry·sin(t)·v`
+ * với `u` xoay `rot` radian. Cung tham số ánh xạ 1-1 sang cung elip của SVG nên
+ * đây là hình chính xác, không phải xấp xỉ.
+ *
+ * `sweep=0` vì AutoCAD đi ngược chiều kim đồng hồ còn cảnh đã bị `scale(1,-1)`.
+ */
+export function ellipsePath(
+  cx: number, cy: number, rx: number, ry: number, rot: number, t0: number, t1: number,
+): string {
+  const TAU = Math.PI * 2;
+  const at = (t: number) => {
+    const x = rx * Math.cos(t);
+    const y = ry * Math.sin(t);
+    return [cx + x * Math.cos(rot) - y * Math.sin(rot), cy + x * Math.sin(rot) + y * Math.cos(rot)];
+  };
+  let sweep = t1 - t0;
+  while (sweep <= 0) sweep += TAU;
+  const deg = (rot * 180) / Math.PI;
+  /* Trọn vòng: một cung elip từ điểm về chính nó là một lệnh RỖNG với SVG, nên
+     phải tách đôi. Dung sai nhỏ vì `endAngle` của AutoCAD hay là 6.28318530717959
+     chứ không đúng 2π. */
+  if (sweep >= TAU - 1e-9) {
+    const [ax, ay] = at(t0);
+    const [bx, by] = at(t0 + Math.PI);
+    return `M${ax} ${ay}A${rx} ${ry} ${deg} 1 0 ${bx} ${by}A${rx} ${ry} ${deg} 1 0 ${ax} ${ay}Z`;
+  }
+  const [ax, ay] = at(t0);
+  const [bx, by] = at(t1);
+  return `M${ax} ${ay}A${rx} ${ry} ${deg} ${sweep > Math.PI ? 1 : 0} 0 ${bx} ${by}`;
+}
+
+/** Đường tròn thành path — hai nửa cung, vì SVG không có lệnh "vẽ cả vòng". */
+export function circlePath(cx: number, cy: number, r: number): string {
+  return `M${cx - r} ${cy}A${r} ${r} 0 1 0 ${cx + r} ${cy}A${r} ${r} 0 1 0 ${cx - r} ${cy}Z`;
+}
+
 /** Cung tròn thành đường SVG. Góc theo radian, ngược chiều kim đồng hồ, đúng
  * quy ước của AutoCAD. */
 export function arcPath(cx: number, cy: number, r: number, a0: number, a1: number): string {
@@ -636,7 +758,9 @@ export function kindLabel(kind: GeomEntity["k"]): string {
     point: "Điểm",
     insert: "Block",
     text: "Chữ",
+    ellipse: "Elip",
     box: "Hình bao",
+    multi: "Vùng gạch",
   };
   return map[kind] ?? kind;
 }

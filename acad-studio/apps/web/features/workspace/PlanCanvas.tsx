@@ -22,7 +22,12 @@
  *
  * Bung thẳng nội dung block ra tại mỗi lần chèn cho **~38.000 node SVG** trên
  * bản vẽ as-built — đủ để treo cả tab, đã thử. Định nghĩa block dựng MỘT lần
- * trong `<defs>`, mỗi lần chèn là một `<use>`: còn khoảng 10.400 node.
+ * trong `<defs>`, mỗi lần chèn là một `<use>`.
+ *
+ * Bên trong mỗi định nghĩa còn **gộp nét**: hình bên trong block không chọn
+ * riêng được, nên 150 đoạn thẳng cùng kiểu nét gộp thành một `<path>` duy nhất.
+ * Chỉ chữ và dấu chỗ đứng phải giữ phần tử riêng. Hai bước cộng lại đưa bản vẽ
+ * as-built từ 38.000 node xuống vài trăm.
  *
  * `<use>` còn cho đúng hành vi chọn: nội dung của nó nằm trong shadow tree nên
  * `event.target` luôn là chính `<use>`, tức là **lần chèn** — bấm vào đâu trong
@@ -54,6 +59,7 @@ import {
   degrees,
   effectiveLayer,
   fidelityOf,
+  pathDataOf,
   polylinePath,
   viewBoxToString,
   zoomViewBox,
@@ -200,6 +206,18 @@ export function PlanCanvas({
  * Dựng cảnh
  * ------------------------------------------------------------------ */
 
+/** Phép biến đổi của một lần chèn.
+ *
+ * `m` là ma trận của chính AutoCAD (`blockTransform`), đã gồm điểm chèn, điểm
+ * gốc block, tỉ lệ âm và trục không vuông góc. Thiếu nó thì lùi về dịch chuyển
+ * thuần: sai vị trí còn dễ nhận ra hơn sai tỉ lệ. */
+function transformOf(entity: GeomEntity): string {
+  const m = entity.m;
+  return m && m.length === 6
+    ? `matrix(${m[0]} ${m[1]}, ${m[2]} ${m[3]}, ${m[4]} ${m[5]})`
+    : `translate(${entity.p?.[0] ?? 0} ${entity.p?.[1] ?? 0})`;
+}
+
 function buildScene(
   entities: readonly GeomEntity[],
   blocks: BlockDefs,
@@ -226,9 +244,46 @@ function buildScene(
     if (!def || !def.length) return null;
 
     building.add(key);
-    const children = def
-      .map((child) => shapeOf(child, effectiveLayer(child, parentLayer), depth + 1, false))
-      .filter((node): node is ReactNode => node !== null);
+    /* Gom `d` của mọi hình gộp được theo độ trung thực — nét khác nhau thì không
+       gộp chung được, và độ trung thực là thứ quyết định nét. */
+    const merged = new Map<Fidelity, string[]>();
+    const children: ReactNode[] = [];
+    for (const child of def) {
+      const layer = effectiveLayer(child, parentLayer);
+      if (hidden.has(layer)) continue;
+      const nestedDef = child.k === "insert" && child.name
+        ? ensureDef(child.name, layer, depth + 1)
+        : null;
+      if (nestedDef) {
+        children.push(<use key={child.h} href={`#${nestedDef}`} transform={transformOf(child)} />);
+        continue;
+      }
+      const d = pathDataOf(child, marker);
+      if (d) {
+        const fidelity = fidelityOf(child, blocks);
+        const list = merged.get(fidelity);
+        if (list) list.push(d); else merged.set(fidelity, [d]);
+        continue;
+      }
+      const node = shapeOf(child, layer, depth + 1, false);
+      if (node) children.push(node);
+    }
+    for (const [fidelity, list] of merged) {
+      const style = STROKE[fidelity];
+      children.push(
+        <path
+          key={`m${fidelity}`}
+          data-fidelity={fidelity}
+          d={list.join("")}
+          stroke={style.color}
+          strokeDasharray={style.dash}
+          strokeWidth={1.4}
+          strokeLinejoin="round"
+          fill="none"
+          vectorEffect="non-scaling-stroke"
+        />,
+      );
+    }
     building.delete(key);
 
     if (!children.length) {
@@ -255,29 +310,22 @@ function buildScene(
     if (entity.k === "insert") {
       const def = entity.name ? blocks[entity.name] : undefined;
       const id = entity.name ? ensureDef(entity.name, layer, depth) : null;
-      if (!id && def && def.length && depth < MAX_BLOCK_DEPTH) {
+      if (id) {
+        return (
+          <use
+            key={entity.h}
+            href={`#${id}`}
+            transform={transformOf(entity)}
+            {...(top ? { "data-entity": entity.h } : {})}
+          />
+        );
+      }
+      if (def && def.length && depth < MAX_BLOCK_DEPTH) {
         /* Có định nghĩa mà không dựng ra node nào nghĩa là bộ lọc layer đã ẩn
            sạch nội dung. Rơi xuống dấu chỗ đứng ở đây là để lại một cái dấu đặc
            cho MỖI lần chèn — tắt một layer bên trong block xong màn hình đầy
            dấu, trong khi lẽ ra phải trống. */
         return null;
-      }
-      if (id) {
-        const m = entity.m;
-        /* `m` là ma trận của chính AutoCAD (`blockTransform`), đã gồm điểm chèn,
-           điểm gốc block, tỉ lệ âm và trục không vuông góc. Thiếu nó thì lùi về
-           dịch chuyển thuần: sai vị trí còn dễ nhận ra hơn sai tỉ lệ. */
-        const transform = m && m.length === 6
-          ? `matrix(${m[0]} ${m[1]}, ${m[2]} ${m[3]}, ${m[4]} ${m[5]})`
-          : `translate(${entity.p?.[0] ?? 0} ${entity.p?.[1] ?? 0})`;
-        return (
-          <use
-            key={entity.h}
-            href={`#${id}`}
-            transform={transform}
-            {...(top ? { "data-entity": entity.h } : {})}
-          />
-        );
       }
     }
     return <Shape key={entity.h} entity={entity} blocks={blocks} marker={marker} top={top} />;
@@ -331,6 +379,10 @@ function Shape({
       if (c.length < 2 || !entity.r) return null;
       return <path {...common} d={arcPath(c[0], c[1], entity.r, entity.a0 ?? 0, entity.a1 ?? 0)} />;
     }
+    case "ellipse": {
+      const d = pathDataOf(entity, marker);
+      return d ? <path {...common} d={d} /> : null;
+    }
     case "box": {
       const b = entity.b ?? [];
       if (b.length < 4) return null;
@@ -355,6 +407,12 @@ function Shape({
           <path d={`M${-size / 2} 0H${size / 2}M0 ${-size / 2}V${size / 2}`} />
         </g>
       );
+    }
+    case "multi": {
+      /* HATCH: nhiều vòng biên + đường gạch, nhưng vẫn là MỘT đối tượng chọn
+         được. Gộp hết vào một `d` — chúng không có gì phân biệt nhau. */
+      const d = pathDataOf(entity, marker);
+      return d ? <path {...common} d={d} strokeLinejoin="round" /> : null;
     }
     case "text": {
       const p = entity.p ?? [];

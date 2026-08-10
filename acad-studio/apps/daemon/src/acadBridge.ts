@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import express, { type Router } from "express";
+import express, { type Response, type Router } from "express";
 import { detectAgents } from "./agents.js";
 import { exportRawCatalog, invokeRaw } from "./objectarx/rawDispatch.js";
 import {
@@ -515,11 +515,34 @@ async function withGeometryLock<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+/** Phản hồi hình học, kèm **chuỗi JSON gốc** của plugin.
+ *
+ * Trả cả hai vì hai bên cần hai thứ khác nhau: mã ở daemon cần đối tượng để đọc
+ * `ok`/`code`, còn HTTP chỉ cần đúng chuỗi đó gửi đi. Tuần tự hoá lại một cây
+ * 1,2 MB vừa parse xong là duyệt thừa một lượt cho mỗi lần tải màn hình. */
+export type GeometrySnapshot = { snapshot: Record<string, unknown>; raw: string };
+
+/** Gửi một chuỗi JSON đã dựng sẵn, không tuần tự hoá lại.
+ *
+ * `res.json(obj)` sẽ duyệt lại toàn bộ cây vừa `JSON.parse` xong để dựng lại
+ * đúng chuỗi mà plugin đã ghi ra. Đo trên bản vẽ as-built: **29 ms** cho một
+ * việc không đổi gì cả.
+ *
+ * **Không nén.** Đã thử gzip mức 1 rồi đo: tốn 20 ms nén + 10 ms giải nén để
+ * bớt 1,3 MB đường truyền — mà daemon chỉ lắng nghe trên `127.0.0.1`, nơi 1,3 MB
+ * đi hết vài mili-giây. Đo end-to-end thì bản có gzip **chậm hơn** 0,42 s so với
+ * 0,37 s. Ghi lại ở đây để lần sau không ai thêm `compression` vào vì nghe hợp
+ * lý: trên loopback nó là lỗ, không phải lãi.
+ */
+function sendJsonText(res: Response, text: string) {
+  res.type("application/json; charset=utf-8").send(text);
+}
+
 export async function requestGeometry(
   target: string,
   options: GeometryRequestOptions = {},
   timeoutMs = 20_000,
-): Promise<Record<string, unknown> | null> {
+): Promise<GeometrySnapshot | null> {
   return withGeometryLock(async () => {
     ensureBridgeDirs();
     const bridgeDir = getBridgeDir();
@@ -534,14 +557,24 @@ export async function requestGeometry(
       try {
         const st = statSync(responsePath);
         if (isDrawingInfoResponseFresh(st.mtimeMs, requestStartedAt)) {
-          const value: unknown = JSON.parse(readFileSync(responsePath, "utf8"));
+          const raw = readFileSync(responsePath, "utf8");
+          const value: unknown = JSON.parse(raw);
           if (value && typeof value === "object" && !Array.isArray(value)) {
             const snapshot = value as Record<string, unknown>;
-            if (snapshot.requestId === requestId) return snapshot;
+            /* Giữ lại chuỗi gốc để tuyến đường HTTP gửi thẳng, khỏi tuần tự hoá
+               lại: payload hình học là 1,2 MB, và `res.json()` sẽ duyệt lại toàn
+               bộ cây vừa parse xong để dựng lại đúng chuỗi này. */
+            if (snapshot.requestId === requestId) return { snapshot, raw };
           }
         }
       } catch { /* chưa có phản hồi, hoặc ghi dở */ }
-      await new Promise((resolve) => setTimeout(resolve, 120));
+      /* Plugin quét khoảng 0,3 s trên bản vẽ as-built của dự án. Một nhịp chờ cố
+         định 120 ms cộng trung bình 60 ms chết vào MỌI lượt đọc — 20% thời gian
+         chờ mà không ai làm gì. Dò dày lúc đầu rồi giãn dần: nhanh khi câu trả
+         lời sắp tới, và không quay CPU khi bản vẽ lớn còn phải quét lâu. */
+      const waited = Date.now() - requestStartedAt;
+      const step = waited < 1_000 ? 15 : waited < 4_000 ? 60 : 150;
+      await new Promise((resolve) => setTimeout(resolve, step));
     }
     return null;
   });
@@ -1136,9 +1169,9 @@ export function acadBridgeRouter(): Router {
       });
     }
     const maxEntities = Number(req.query.maxEntities);
-    let snapshot: Record<string, unknown> | null;
+    let result: GeometrySnapshot | null;
     try {
-      snapshot = await requestGeometry(
+      result = await requestGeometry(
         typeof req.query.target === "string" ? req.query.target : "",
         {
           space: typeof req.query.space === "string" ? req.query.space : undefined,
@@ -1165,17 +1198,18 @@ export function acadBridgeRouter(): Router {
         error: error instanceof Error ? error.message : "không gửi được yêu cầu hình học",
       });
     }
-    if (!snapshot) {
+    if (!result) {
       return res.status(504).json({
         ok: false,
         code: "geometry_timeout",
         error: "Plugin chưa trả hình học. Bản vẽ có thể quá lớn, hoặc AutoCAD đang bận một lệnh.",
       });
     }
+    const { snapshot, raw } = result;
     if (snapshot.ok === false) {
       return res.status(snapshot.code === "not_found" ? 404 : 502).json(snapshot);
     }
-    return res.json(snapshot);
+    return sendJsonText(res, raw);
   });
 
   r.get("/status", async (_req, res) => {

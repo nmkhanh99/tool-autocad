@@ -253,8 +253,15 @@ route, như `blocks.module.css` vừa làm.
   `geometry.json` có `blocks` (147 định nghĩa, 10.122 đối tượng) và mỗi lần chèn
   mang ma trận `m`.
 
-  Chưa làm ở plugin: tessellate các kiểu còn lại qua `worldDraw` — HATCH,
-  DIMENSION, MULTILEADER, VIEWPORT ở cấp trên cùng vẫn chỉ có hình bao.
+  **Đã dựng hình HATCH, DIMENSION, ELLIPSE, SPLINE (2026-08-10).** Hình bao còn
+  0,7% (74/10.888). Còn lại: 43 HATCH tô đặc có biên dạng cạnh rời, 23
+  MULTILEADER, 8 VIEWPORT.
+
+  Chưa làm ở plugin: **`worldDraw`**. Đây là cách duy nhất còn lại cho ba nhóm
+  trên, và cũng là cách AN TOÀN — đường qua `AcGeCurve2d` của hatch giao quyền
+  giải phóng cho người gọi, và đã làm AutoCAD chết một lần (xem `CHANGELOG.md`
+  2026-08-10). `worldDraw` chỉ nhận nguyên thuỷ đồ hoạ, không cấp phát gì cho
+  người gọi.
 - **Giai đoạn 6** — `/drawing-info`, tách `/review` và `/standards`.
 - **Giai đoạn 7** — `/changes` (trục xoay), `/takeoff`, `/settings`.
 - **Giai đoạn 8** — `/publish`, `/batch`, `/cadweb`, `/` Tổng quan. Phạm vi đã

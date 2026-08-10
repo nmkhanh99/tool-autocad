@@ -23,7 +23,9 @@ import {
   fidelityNote,
   fidelityOf,
   fitViewBox,
+  ellipsePath,
   layersOf,
+  pathDataOf,
   polylinePath,
   spaceOrder,
   unionExtent,
@@ -335,6 +337,75 @@ test("cung vượt qua góc 0 vẫn tính đúng độ lớn", () => {
   /* a1 < a0 nghĩa là đã vòng qua 0 — trừ thẳng ra số âm và cờ large-arc sai. */
   const path = arcPath(0, 0, 10, (3 * Math.PI) / 2, Math.PI);
   assert.match(path, /A10 10 0 1 0 /);
+});
+
+test("elip trọn vòng phải tách đôi cung", () => {
+  /* Một cung elip đi từ điểm về CHÍNH NÓ là lệnh rỗng với SVG — cả đường biến
+     mất. 1847 elip của bản vẽ as-built phần lớn là vòng kín. */
+  const full = ellipsePath(0, 0, 10, 5, 0, 0, Math.PI * 2);
+  assert.equal((full.match(/A/g) ?? []).length, 2, full);
+  assert.ok(full.endsWith("Z"), full);
+  /* `endAngle` của AutoCAD hay là 6.28318530717959 chứ không đúng 2π. */
+  assert.equal((ellipsePath(0, 0, 10, 5, 0, 0, 6.28318530717959).match(/A/g) ?? []).length, 2);
+});
+
+test("cung elip một phần chỉ một lệnh cung, có cờ large-arc đúng", () => {
+  assert.equal((ellipsePath(0, 0, 10, 5, 0, 0, Math.PI / 2).match(/A/g) ?? []).length, 1);
+  assert.match(ellipsePath(0, 0, 10, 5, 0, 0, Math.PI / 2), /A10 5 0 0 0 /);
+  /* Quá nửa vòng thì large-arc = 1. */
+  assert.match(ellipsePath(0, 0, 10, 5, 0, 0, (3 * Math.PI) / 2), /A10 5 0 1 0 /);
+});
+
+test("góc nghiêng elip đổi sang độ cho SVG", () => {
+  /* `rot` là radian như mọi góc khác của plugin; tham số xoay của cung elip
+     trong SVG tính bằng độ. */
+  assert.match(ellipsePath(0, 0, 10, 5, Math.PI / 2, 0, Math.PI / 2), /A10 5 90 /);
+});
+
+test("a0/a1 của elip là THAM SỐ, không phải góc thật", () => {
+  /* P(t) = C + rx·cos(t)·u + ry·sin(t)·v. Với elip dẹt, t = π/2 nằm ở đỉnh
+     trục nhỏ (0, ry) — không phải ở góc 90° hình học. */
+  const path = ellipsePath(0, 0, 100, 1, 0, 0, Math.PI / 2);
+  assert.ok(path.startsWith("M100 0"), path);
+  assert.ok(path.includes(" 0 1") || /A100 1 0 0 0 [\d.e-]+ 1$/.test(path), path);
+});
+
+test("gộp nét nối nhiều hình vào một chuỗi d", () => {
+  /* Đây là thứ đưa bản vẽ as-built từ 11.304 node xuống 1.468. */
+  const d = pathDataOf(
+    { ...entity({ k: "multi" }), g: [
+      entity({ k: "line", p: [0, 0, 1, 1] }),
+      entity({ k: "line", p: [2, 2, 3, 3] }),
+    ] },
+    1,
+  );
+  assert.equal(d, "M0 0L1 1M2 2L3 3");
+});
+
+test("chữ và block không gộp được — nơi gọi phải tự dựng phần tử riêng", () => {
+  assert.equal(pathDataOf(entity({ k: "text", p: [0, 0], txt: "x" }), 1), "");
+  assert.equal(pathDataOf(entity({ k: "insert", p: [0, 0] }), 1), "");
+});
+
+test("đường tròn thành path phải khép kín thành vòng", () => {
+  const d = pathDataOf(entity({ k: "circle", c: [0, 0], r: 5 }), 1);
+  assert.equal((d.match(/A/g) ?? []).length, 2, d);
+  assert.ok(d.endsWith("Z"), d);
+});
+
+test("khung bao của HATCH lấy từ các hình con", () => {
+  /* `multi` không có toạ độ của riêng nó. Bỏ qua thì vùng gạch — một trong
+     những thứ to nhất trên bản vẽ — biến mất khỏi "thu hết" và khỏi phép đếm. */
+  const hatch = { ...entity({ k: "multi" }), g: [
+    entity({ k: "line", p: [0, 0, 10, 0] }),
+    entity({ k: "line", p: [0, 0, 0, 20] }),
+  ] };
+  assert.deepEqual(entityExtent(hatch), [0, 0, 10, 20]);
+});
+
+test("khung bao elip dùng bán trục lớn hơn — khung phải CHỨA hình", () => {
+  const el = entity({ k: "ellipse", c: [0, 0], rx: 10, ry: 3 });
+  assert.deepEqual(entityExtent(el), [-10, -10, 10, 10]);
 });
 
 /* ---------------- Layer ---------------- */
