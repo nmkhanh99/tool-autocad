@@ -262,6 +262,11 @@ route, như `blocks.module.css` vừa làm.
 
   **Đã làm nốt (2026-08-11): VIEWPORT, MTEXT, căn lề.** Hình bao còn **0/10.888**.
 
+  **Đã làm nốt (2026-08-11): "Chọn trong AutoCAD".** Đường duy nhất từ màn hình
+  này chạm tới AutoCAD, qua hai pha. Ràng buộc tìm ra bằng cách thử: chọn theo
+  handle chỉ chạy với **không gian hiện hành** của AutoCAD — nút tự khoá kèm lý
+  do khi lệch. Pha xác nhận chưa chạy được trọn trên máy này; xem `CHANGELOG.md`.
+
   Chưa làm ở plugin:
   - **Chữ mã hoá phông Việt cũ** (TCVN3/VNI) đọc ra là chuỗi rác. Xem
     `CHANGELOG.md` 2026-08-11 — cần nhận diện phông rồi giải mã theo bảng.

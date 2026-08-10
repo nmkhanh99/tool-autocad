@@ -2,6 +2,55 @@
 
 ## 2026-08-11
 
+### Added — "Chọn trong AutoCAD" từ khung xem
+
+Chỗ cuối cùng của giai đoạn 5 còn treo. Bấm một đối tượng trong khung xem rồi
+nhờ AutoCAD chọn chính nó — đường **duy nhất** từ màn hình này chạm tới AutoCAD,
+và vẫn đi qua hai pha như mọi thứ khác.
+
+- **Guard phải lấy từ chính lượt đọc đã sinh ra handle.**
+  `/selection/prepare` đòi `catalogGuard: {instance, revision}`, nên plugin nay
+  phát cả hai trong `document` của `geometry.json`. Ghép handle của lượt này với
+  guard đọc ở lượt khác là mở ra đúng khoảng thời gian giữa hai lượt: bản vẽ đổi
+  trong quãng đó thì handle trỏ sang đối tượng khác, guard vẫn hợp lệ, và người
+  dùng chọn nhầm thứ mình không nhìn thấy.
+- **Ràng buộc thật, tìm ra bằng cách thử:** chọn theo handle **chỉ chạy với
+  không gian hiện hành** của AutoCAD; các không gian khác trả `not a top-level
+  entity in current space`. Thử cả 5 không gian của bản vẽ as-built: đúng một
+  cái chạy. Nên plugin phát thêm `document.space`, và nút tự khoá kèm câu "Đối
+  tượng nằm ở Model, còn AutoCAD đang ở Layout 01 — chuyển sang Model rồi thử
+  lại". Bấm được rồi mới báo lỗi là một ngõ cụt.
+- **Mode `selection` mới cho `ConfirmSheet`.** Cả ba cảnh báo của `staged` đều
+  SAI ở đây: chọn không sửa đối tượng nào, `UNDO` không có gì để hoàn tác, và ô
+  tích "tôi hiểu thao tác này không hoàn tác được" là một lời khai sai. Một cảnh
+  báo sai làm hỏng đúng thứ nó tồn tại để bảo vệ — lần sau người dùng đọc lướt
+  cả những cảnh báo đúng.
+
+### Fixed — ba lỗi của lượt này (Codex review)
+
+- **Hộp xác nhận mô tả nhầm đối tượng.** Canvas vẫn bấm được trong lúc chờ máy
+  chủ chuẩn bị, nên `selectedEntity` có thể đã đổi khi thẻ xác nhận hiện ra —
+  ngay trong hộp thoại tồn tại để người dùng kiểm lại. Nay chụp lại đối tượng
+  cùng lúc với thao tác.
+- **Bỏ qua chạy song song với xác nhận.** `busy` chỉ khoá hai nút ở chân hộp
+  thoại; phím Esc và cú bấm ra nền vẫn gọi được. Bỏ mà thắng thì lượt chọn vừa
+  xác nhận hỏng với `operation_not_pending`.
+- **Import chéo feature** (`workspace` → `staged-ops`) — chính guardrail
+  `check:boundaries` của dự án chặn lại. Phần chuẩn bị lệnh chọn chuyển sang
+  `features/staged-ops/selectHandles.ts` và nhận **giá trị trần** thay vì payload
+  hình học: module ở `staged-ops` không được biết hình dạng dữ liệu của feature
+  khác.
+
+### Known — chưa chạy được trọn hai pha trên máy này
+
+Pha chuẩn bị đã chạy thật và trả về operation hợp lệ. Pha xác nhận **chưa** chạy
+được vì AutoCAD trên máy này kẹt ở trạng thái `exact target has an active
+command` sau nhiều lần khởi động lại bằng script; cửa sổ bản vẽ cũng không hiện.
+Đó là trạng thái môi trường, không phải mã — nhưng chưa có bằng chứng chạy thật
+cho pha ghi.
+
+## 2026-08-11
+
 ### Added — VIEWPORT có viền thật, MTEXT có căn lề và nhiều dòng
 
 **Hình bao còn 0/10.888.** Không còn đối tượng nào vẽ bằng hộp chữ nhật.

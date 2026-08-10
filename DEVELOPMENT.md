@@ -370,6 +370,13 @@ không XREF nào); cả mặt bằng kiến trúc, khung tên, trục, cửa, ha
 - Bung ra để vẽ thì Model của bản vẽ này thành **~38.000 node SVG** — renderer
   phải memo hoá cảnh theo dữ liệu, không theo khung nhìn.
 
+**`document` mang bốn thứ, không chỉ tên tệp:** `title`, `file`, `instance`,
+`space`, `revision`. Cặp `instance` + `revision` là **guard** mà
+`/selection/prepare` đòi khi chọn đối tượng theo handle, và nó **phải** lấy từ
+chính lượt đọc đã sinh ra handle. `space` là **không gian hiện hành của
+AutoCAD** — chọn theo handle chỉ chạy với đối tượng ở không gian đó; các không
+gian khác trả `not a top-level entity in current space`.
+
 ⚠️ **`bounds` có thể KHÔNG chứa hết `entities`.** Nó gom từ `getGeomExtents()`,
 mà block rỗng thì hàm đó báo không hợp lệ. Trên bản vẽ thật có 5 block đặt lạc
 cách bản vẽ hàng triệu đơn vị nằm ngoài `bounds`. Nơi nào fit khung theo `bounds`

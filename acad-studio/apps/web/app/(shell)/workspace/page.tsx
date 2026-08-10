@@ -38,12 +38,23 @@ import { Inspector } from "../../../features/workspace/Inspector";
 import { LayerPane } from "../../../features/workspace/LayerPane";
 import { PlanCanvas } from "../../../features/workspace/PlanCanvas";
 import { useGeometry } from "../../../features/workspace/useGeometry";
+import { prepareSelectHandles } from "../../../features/staged-ops/selectHandles";
+import { ConfirmSheet } from "../../../components/ui/ConfirmSheet";
 import {
+  applyStagedOp,
+  isStale,
+  rejectStagedOp,
+  stagedErrorText,
+} from "../../../features/staged-ops/prepareApplyReject";
+import type { StagedOp } from "../../../features/staged-ops/types";
+import {
+  catalogGuardOf,
   collectedAtLabel,
   countFidelity,
   countOutsideBounds,
   fitViewBox,
   layersOf,
+  selectBlockedReason,
   spaceOrder,
   unionExtent,
   zoomPercent,
@@ -151,6 +162,57 @@ export default function WorkspacePage() {
   }, [visible, blocks, hidden]);
 
   const warnings = payload?.warnings ?? [];
+  /* Thao tác chọn đang chờ xác nhận. Đường DUY NHẤT từ màn hình này chạm tới
+     AutoCAD, và nó vẫn đi qua hai pha như mọi thứ khác. */
+  /* Giữ CẢ đối tượng đã chuẩn bị, không chỉ thao tác. Canvas vẫn bấm được trong
+     lúc chờ máy chủ trả lời, nên `selectedEntity` có thể đã đổi sang thứ khác —
+     hoặc về rỗng — khi thẻ xác nhận hiện ra. Đọc nó lúc đó là mô tả một đối
+     tượng KHÁC với đối tượng sắp bị chọn, ngay trong hộp thoại tồn tại để người
+     dùng kiểm lại. */
+  const [pendingSelect, setPendingSelect] =
+    useState<{ op: StagedOp; entity: GeomEntity } | null>(null);
+  const [selectBusy, setSelectBusy] = useState(false);
+  const [selectError, setSelectError] = useState("");
+
+  const startSelect = useCallback(async () => {
+    if (!selectedEntity) return;
+    setSelectBusy(true);
+    setSelectError("");
+    try {
+      const op = await prepareSelectHandles(DAEMON_BASE, {
+        target: payload?.document?.file ?? "",
+        handles: [selectedEntity.h],
+        /* Guard lấy từ CHÍNH `payload` đã sinh ra handle này — xem
+           `catalogGuardOf`. */
+        guard: catalogGuardOf(payload),
+      });
+      setPendingSelect({ op, entity: selectedEntity });
+    } catch (failure) {
+      /* Ảnh chụp cũ thì máy chủ TỪ CHỐI (`document_stale`/`drawing_stale`) chứ
+         không chọn nhầm — nói thêm cách gỡ, vì bản thân mã lỗi không nói. */
+      const text = stagedErrorText(failure);
+      setSelectError(isStale(failure) ? `${text} Bấm "Đọc lại" rồi chọn lại.` : text);
+    } finally {
+      setSelectBusy(false);
+    }
+  }, [selectedEntity, payload]);
+
+  const confirmSelect = useCallback(async () => {
+    if (!pendingSelect) return;
+    setSelectBusy(true);
+    try {
+      await applyStagedOp(DAEMON_BASE, pendingSelect.op);
+      setPendingSelect(null);
+    } catch (failure) {
+      setSelectError(stagedErrorText(failure));
+      /* Apply là ONE-SHOT: hỏng thì id đó chết hẳn, phải chuẩn bị lại. Giữ thẻ
+         xác nhận trên màn hình sẽ mời người dùng bấm lại một id đã hỏng. */
+      setPendingSelect(null);
+    } finally {
+      setSelectBusy(false);
+    }
+  }, [pendingSelect]);
+
   const truncated = !!payload?.truncated;
   const scanCapped = warnings.includes("geometry_scan_cap_reached");
   /* Nội dung block bị cắt KHÔNG bật `truncated` ở cấp trên cùng — plugin chỉ
@@ -340,11 +402,43 @@ export default function WorkspacePage() {
         <Inspector
           entity={selectedEntity}
           blocks={blocks}
+          selectBusy={selectBusy}
+          selectBlocked={selectBlockedReason(selectedEntity, payload)}
+          selectError={selectError}
+          onSelectInAcad={() => void startSelect()}
           onIsolateLayer={isolate}
           onZoomTo={zoomTo}
           onClear={() => setSelected("")}
         />
       </section>
+
+      {pendingSelect ? (
+        <ConfirmSheet
+          title="Chọn đối tượng trong AutoCAD"
+          mode="selection"
+          target={pendingSelect.op.target}
+          summary={`Đổi bộ chọn của AutoCAD sang ${pendingSelect.op.count ?? 1} đối tượng.`}
+          confirmLabel="Xác nhận & chọn"
+          busy={selectBusy}
+          onConfirm={() => void confirmSelect()}
+          onCancel={() => {
+            /* `busy` chỉ khoá hai nút ở chân hộp thoại; phím Esc và cú bấm ra
+               nền vẫn gọi được vào đây. Bỏ qua trong lúc đang ghi, nếu không
+               lệnh bỏ chạy song song với lệnh xác nhận — bỏ mà thắng thì lượt
+               chọn người dùng VỪA xác nhận hỏng với `operation_not_pending`. */
+            if (selectBusy) return;
+            void rejectStagedOp(DAEMON_BASE, pendingSelect.op);
+            setPendingSelect(null);
+          }}
+        >
+          <dl className="props">
+            <dt>Handle</dt><dd>{pendingSelect.entity.h}</dd>
+            <dt>Kiểu</dt><dd>{pendingSelect.entity.t}</dd>
+            <dt>Layer</dt><dd>{pendingSelect.entity.l}</dd>
+            <dt>Không gian</dt><dd>{pendingSelect.entity.sp}</dd>
+          </dl>
+        </ConfirmSheet>
+      ) : null}
       </div>
     </AppShell>
   );

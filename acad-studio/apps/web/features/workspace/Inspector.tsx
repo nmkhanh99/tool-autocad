@@ -12,6 +12,7 @@
  * loại số mà người ta chép thẳng vào bảng khối lượng.
  */
 import { Button } from "../../components/ui/Button";
+import { WriteButton } from "../../components/ui/WriteButton";
 import {
   degrees,
   fidelityLabel,
@@ -24,10 +25,19 @@ import {
 } from "./model";
 
 export function Inspector({
-  entity, blocks, onIsolateLayer, onZoomTo, onClear,
+  entity, blocks, selectBusy, selectBlocked, selectError, onSelectInAcad,
+  onIsolateLayer, onZoomTo, onClear,
 }: {
   entity: GeomEntity | null;
   blocks: BlockDefs;
+  /** Đang chuẩn bị thao tác chọn. */
+  selectBusy: boolean;
+  /** Vì sao chưa chọn được — là *lý do*, không phải cờ boolean: một nút khoá mà
+   * không nói vì sao là một ngõ cụt. Rỗng = chọn được. */
+  selectBlocked: string;
+  /** Vì sao lượt chọn vừa rồi không đi được. Rỗng = chưa có lỗi. */
+  selectError: string;
+  onSelectInAcad: () => void;
   onIsolateLayer: (layer: string) => void;
   onZoomTo: () => void;
   onClear: () => void;
@@ -91,7 +101,29 @@ export function Inspector({
             >
               Sao chép handle
             </Button>
+            {/* Đường DUY NHẤT từ màn hình này chạm tới AutoCAD. Dùng
+                `WriteButton` chứ không phải `Button`: nó tự khoá khi AutoCAD
+                chưa nối, và một nút bấm được rồi mới báo lỗi là một ngõ cụt. */}
+            <WriteButton
+              variant="primary"
+              onClick={onSelectInAcad}
+              disabled={selectBusy || !!selectBlocked}
+              title={selectBlocked
+                || "Chuẩn bị một thao tác chọn; bạn xác nhận rồi AutoCAD mới đổi bộ chọn"}
+            >
+              {selectBusy ? "Đang chuẩn bị…" : "Chọn trong AutoCAD"}
+            </WriteButton>
+            {selectBlocked ? <span className="hint">{selectBlocked}</span> : null}
           </div>
+
+          {selectError ? (
+            <div style={{ padding: "0 16px 12px" }}>
+              <div className="callout" data-kind="stop">
+                <span className="lbl">Không chọn được trong AutoCAD</span>
+                <p>{selectError}</p>
+              </div>
+            </div>
+          ) : null}
 
           <div style={{ padding: "0 16px 16px" }}>
             <p className="hint">

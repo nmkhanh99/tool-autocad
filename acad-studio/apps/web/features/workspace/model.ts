@@ -122,7 +122,18 @@ export type BlockDefs = Record<string, GeomEntity[]>;
 
 export type GeometryResponse = {
   ok?: boolean;
-  document?: { title?: string; file?: string; revision?: number };
+  document?: {
+    title?: string;
+    file?: string;
+    revision?: number;
+    /** Mã phiên của tài liệu trong AutoCAD. Cùng với `revision` tạo thành cặp
+     * guard cho lệnh chọn theo handle. */
+    instance?: string;
+    /** Không gian **hiện hành** của AutoCAD — không phải không gian đang xem
+     * trên màn hình. Lệnh chọn theo handle chỉ chạy được với đối tượng ở không
+     * gian này. */
+    space?: string;
+  };
   /** Số đối tượng theo từng không gian. */
   spaces?: Record<string, number>;
   /** Danh sách layout, thứ tự do bản vẽ quyết định. */
@@ -775,6 +786,60 @@ export function layersOf(
   return [...counts.entries()]
     .map(([name, count]) => ({ name, count }))
     .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+/* ------------------------------------------------------------------ *
+ * Cầu nối sang AutoCAD
+ * ------------------------------------------------------------------ */
+
+/** Cặp `{instance, revision}` rút từ **chính đợt đọc này**, để gửi kèm khi nhờ
+ * AutoCAD chọn đối tượng theo handle.
+ *
+ * ⚠️ Phải lấy từ đợt đã sinh ra handle, không phải đọc thêm một lượt `/docs`
+ * cho mới. Ghép handle của lượt này với guard của lượt khác là mở ra đúng
+ * khoảng thời gian giữa hai lượt: bản vẽ đổi trong quãng đó thì handle trỏ sang
+ * đối tượng khác, guard vẫn hợp lệ, và người dùng chọn nhầm thứ mình không nhìn
+ * thấy.
+ *
+ * `null` khi đợt đọc thiếu `instance` — plugin bản cũ không phát trường này, và
+ * đoán bừa một guard là cách chắc chắn nhất để chọn nhầm.
+ */
+export function catalogGuardOf(
+  payload: GeometryResponse | null,
+): { instance: string; revision: number } | null {
+  const doc = payload?.document;
+  const instance = typeof doc?.instance === "string" ? doc.instance : "";
+  const revision = typeof doc?.revision === "number" ? doc.revision : null;
+  return instance && revision !== null ? { instance, revision } : null;
+}
+
+/** Vì sao chưa chọn được đối tượng này trong AutoCAD — hoặc chuỗi rỗng nếu
+ * chọn được.
+ *
+ * Ràng buộc thật của backend, đã thử trên bản vẽ as-built: chọn theo handle chỉ
+ * chạy với đối tượng ở **không gian hiện hành** của AutoCAD; các không gian khác
+ * trả `not a top-level entity in current space`. Khung xem lại cho phép xem mọi
+ * không gian, nên hai thứ đó lệch nhau là chuyện bình thường.
+ *
+ * Nói trước, đừng để người dùng bấm rồi mới biết: một nút bấm được xong báo lỗi
+ * là một ngõ cụt, còn một nút khoá kèm câu "AutoCAD đang ở Layout 01, chuyển
+ * sang Model rồi thử lại" là một việc làm được.
+ */
+export function selectBlockedReason(
+  entity: GeomEntity | null,
+  payload: GeometryResponse | null,
+): string {
+  if (!entity) return "Chưa chọn đối tượng nào.";
+  if (!catalogGuardOf(payload)) {
+    return "Đợt đọc này không kèm mã phiên bản vẽ. Bấm Đọc lại.";
+  }
+  const current = payload?.document?.space ?? "";
+  /* Không biết không gian hiện hành thì ĐỪNG chặn: plugin bản cũ không phát
+     trường này, và khoá nút vì thiếu thông tin sẽ chặn cả trường hợp vốn chạy
+     được. Cứ để máy chủ trả lời. */
+  if (!current || current === entity.sp) return "";
+  return `Đối tượng nằm ở ${entity.sp}, còn AutoCAD đang ở ${current}. `
+    + `Chuyển sang ${entity.sp} trong AutoCAD rồi thử lại.`;
 }
 
 /* ------------------------------------------------------------------ *

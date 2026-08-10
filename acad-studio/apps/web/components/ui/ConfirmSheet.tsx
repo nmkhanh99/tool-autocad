@@ -37,7 +37,15 @@ export type ConfirmMode =
    * support path, sửa `TRUSTEDPATHS`. Phải tách riêng vì câu "gõ `UNDO` để
    * hoàn tác" là SAI ở đây — `UNDO` không gỡ được mã đã nạp. Nói nhầm một
    * đường thoát không tồn tại còn tệ hơn không nói gì. */
-  | "session";
+  | "session"
+  /** Chỉ đổi **bộ chọn** của AutoCAD: hai pha như `staged`, nhưng không sửa đối
+   * tượng nào và gỡ ra chỉ bằng một phím Esc.
+   *
+   * Không dùng chung `staged` được: cả ba cảnh báo của nó — "không hoàn tác
+   * được", "gõ UNDO trong AutoCAD", ô tích "tôi hiểu thao tác này không hoàn
+   * tác được" — đều SAI ở đây. Một cảnh báo sai làm hỏng đúng thứ nó tồn tại để
+   * bảo vệ: lần sau người dùng đọc lướt cả những cảnh báo đúng. */
+  | "selection";
 
 export function ConfirmSheet({
   title,
@@ -82,7 +90,11 @@ export function ConfirmSheet({
               checked={acked}
               onChange={(event) => setAcked(event.target.checked)}
             />
-            <span>Tôi đã đọc và hiểu thao tác này không hoàn tác được</span>
+            <span>
+              {mode === "selection"
+                ? "Tôi đã xem đối tượng sắp được chọn"
+                : "Tôi đã đọc và hiểu thao tác này không hoàn tác được"}
+            </span>
           </label>
           <Button onClick={onCancel} disabled={busy}>Bỏ qua</Button>
           <WriteButton
@@ -91,13 +103,22 @@ export function ConfirmSheet({
             title={blocked || undefined}
             onClick={onConfirm}
           >
-            {busy ? "Đang ghi…" : confirmLabel}
+            {busy ? (mode === "selection" ? "Đang chọn…" : "Đang ghi…") : confirmLabel}
           </WriteButton>
         </>
       }
     >
       <div className="stack" style={{ gap: "var(--s3)" }}>
-        {mode === "session" ? (
+        {mode === "selection" ? (
+          <div className="callout" data-kind="warn">
+            <span className="lbl">Không sửa gì trong bản vẽ</span>
+            <p>
+              Thao tác này chỉ đổi <strong>bộ chọn</strong> của phiên AutoCAD.
+              Không đối tượng nào bị thay đổi, và gỡ ra chỉ cần bấm{" "}
+              <code>Esc</code> trong AutoCAD.
+            </p>
+          </div>
+        ) : mode === "session" ? (
           <div className="callout" data-kind="stop">
             <span className="lbl">Không gỡ ra được</span>
             <p>
@@ -143,6 +164,16 @@ export function ConfirmSheet({
           <p className="hint">
             Áp lên phiên AutoCAD đang chạy. Không bản vẽ nào bị ghi.
           </p>
+        ) : mode === "selection" ? (
+          <div>
+            {/* Vẫn phải nói RÕ bản vẽ nào: một bộ hồ sơ mở nhiều bản vẽ cùng
+                lúc, và đổi bộ chọn của nhầm bản vẽ là một cú hoang mang thật
+                dù không hỏng dữ liệu. */}
+            <div className="eyebrow">Đổi bộ chọn của bản vẽ</div>
+            <div className="mono" style={{ fontSize: 12 }}>
+              {target || "bản vẽ đang hoạt động"}
+            </div>
+          </div>
         ) : target ? (
           <div>
             <div className="eyebrow">Ghi vào bản vẽ</div>

@@ -573,6 +573,9 @@ static std::string symbolName(AcDbObjectId id) {
     return out;
 }
 
+/** Ten khong gian dang hien hanh, hoac chuoi rong neu khong doc duoc. */
+static std::string currentSpaceName(AcDbDatabase* db);
+
 static std::string layoutNameFor(AcDbBlockTableRecord* btr) {
     if (!btr) return "";
     AcDbObjectId layoutId = btr->getLayoutId();
@@ -589,6 +592,17 @@ static std::string layoutNameFor(AcDbBlockTableRecord* btr) {
     AcString name;
     btr->getName(name);
     return toUtf8(name.kwszPtr());
+}
+
+static std::string currentSpaceName(AcDbDatabase* db) {
+    if (!db) return "";
+    AcDbBlockTableRecord* space = nullptr;
+    if (acdbOpenObject(space, db->currentSpaceId(), AcDb::kForRead) != Acad::eOk || !space) {
+        return "";
+    }
+    const std::string name = layoutNameFor(space);
+    space->close();
+    return name;
 }
 
 static void bumpBounded(std::map<std::string, long long>& values,
@@ -3488,8 +3502,20 @@ static void writeGeometry() {
         ",\"collectedAt\":" + std::to_string((long long)time(nullptr)) +
         ",\"source\":{\"channel\":\"objectarx\",\"protocol\":1,\"pluginVersion\":\"" +
         std::string(kPluginVersion) + "\"}" +
+        // `instance` + `revision` la CAP GUARD ma `/selection/prepare` doi khi
+        // chon doi tuong theo handle. Phai lay tu CHINH luot doc nay: ghep
+        // handle cua luot nay voi guard doc o mot luot khac la mo ra dung
+        // khoang thoi gian giua hai luot — ban ve doi trong quang do thi handle
+        // tro sang doi tuong khac, va nguoi dung chon nham thu minh khong thay.
         ",\"document\":{\"title\":" + jsonString(toUtf8(doc->docTitle())) +
         ",\"file\":" + jsonString(toUtf8(doc->fileName())) +
+        ",\"instance\":" + jsonString(acadDocumentInstanceToken(doc)) +
+        // Khong gian HIEN HANH cua AutoCAD. Can no vi lenh chon theo handle chi
+        // chay duoc voi doi tuong o khong gian nay — cac khong gian khac tra
+        // "not a top-level entity in current space". Khong gui ra thi giao dien
+        // chi biet sau khi da bam va da hong; gui ra thi no khoa nut san kem ly
+        // do va chi cho nguoi dung cach doi.
+        ",\"space\":" + jsonString(currentSpaceName(db)) +
         ",\"revision\":" + std::to_string((long long)acadDatabaseRevision(db)) + "}" +
         ",\"projection\":\"xy\"" +
         ",\"filter\":{\"space\":" + jsonString(wantSpace) +

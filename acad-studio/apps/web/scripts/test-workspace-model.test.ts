@@ -13,6 +13,7 @@ import test from "node:test";
 
 import {
   arcPath,
+  catalogGuardOf,
   clientToViewBox,
   collectedAtLabel,
   countFidelity,
@@ -28,6 +29,7 @@ import {
   layersOf,
   pathDataOf,
   polylinePath,
+  selectBlockedReason,
   shapeLabel,
   spaceOrder,
   unionExtent,
@@ -469,6 +471,53 @@ test("hình bắt qua worldDraw luôn là hình thiếu, không phải hình th�
 test("khung bao elip dùng bán trục lớn hơn — khung phải CHỨA hình", () => {
   const el = entity({ k: "ellipse", c: [0, 0], rx: 10, ry: 3 });
   assert.deepEqual(entityExtent(el), [-10, -10, 10, 10]);
+});
+
+/* ---------------- Cầu nối sang AutoCAD ---------------- */
+
+test("guard chọn đối tượng phải lấy từ CHÍNH đợt đọc, thiếu thì trả null", () => {
+  /* Ghép handle của lượt này với guard của lượt khác là mở ra đúng khoảng thời
+     gian giữa hai lượt: bản vẽ đổi trong quãng đó thì handle trỏ sang đối tượng
+     khác, guard vẫn hợp lệ, và người dùng chọn nhầm thứ mình không nhìn thấy.
+     Nên hàm này chỉ đọc payload, không tự đi lấy ở đâu khác. */
+  assert.deepEqual(
+    catalogGuardOf({ document: { instance: "ABC-1", revision: 7 } }),
+    { instance: "ABC-1", revision: 7 },
+  );
+  /* Plugin bản cũ không phát `instance`. Đoán bừa một guard là cách chắc chắn
+     nhất để chọn nhầm đối tượng. */
+  assert.equal(catalogGuardOf({ document: { revision: 7 } }), null);
+  assert.equal(catalogGuardOf({ document: { instance: "ABC-1" } }), null);
+  assert.equal(catalogGuardOf(null), null);
+});
+
+test("revision 0 vẫn là revision hợp lệ", () => {
+  /* Bản vẽ vừa mở chưa sửa gì có `revision: 0` — kiểm bằng độ chân trị sẽ coi
+     nó là thiếu và chặn luôn lệnh chọn trên đúng trường hợp phổ biến nhất. */
+  assert.deepEqual(
+    catalogGuardOf({ document: { instance: "ABC-1", revision: 0 } }),
+    { instance: "ABC-1", revision: 0 },
+  );
+});
+
+test("nói trước vì sao chưa chọn được, đừng để bấm rồi mới biết", () => {
+  /* Ràng buộc thật của backend, đã thử trên bản vẽ as-built: chọn theo handle
+     chỉ chạy với đối tượng ở KHÔNG GIAN HIỆN HÀNH; các không gian khác trả
+     "not a top-level entity in current space". */
+  const guard = { document: { instance: "A", revision: 0, space: "01" } };
+  const inModel = entity({ sp: "Model" });
+  const inLayout = entity({ sp: "01" });
+  assert.match(selectBlockedReason(inModel, guard), /Model.*01/);
+  assert.equal(selectBlockedReason(inLayout, guard), "");
+  assert.match(selectBlockedReason(null, guard), /Chưa chọn/);
+  assert.match(selectBlockedReason(inLayout, { document: { space: "01" } }), /Đọc lại/);
+});
+
+test("không biết không gian hiện hành thì ĐỪNG chặn", () => {
+  /* Plugin bản cũ không phát `space`. Khoá nút vì thiếu thông tin sẽ chặn cả
+     trường hợp vốn chạy được — cứ để máy chủ trả lời. */
+  const old = { document: { instance: "A", revision: 0 } };
+  assert.equal(selectBlockedReason(entity({ sp: "Model" }), old), "");
 });
 
 /* ---------------- Layer ---------------- */
