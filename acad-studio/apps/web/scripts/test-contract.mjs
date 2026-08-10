@@ -181,6 +181,53 @@ assert.match(
   "auto-BOM phải dựng thẻ mới khi thẻ cũ không còn trong hội thoại hiện tại",
 );
 
+/* Quyết định D6: nếu UI hiển thị trạng thái đã lưu / chưa lưu thì `/docs`
+ * PHẢI trả `dbmod`, và plugin PHẢI phát trường đó. Ba nơi phải khớp nhau —
+ * lệch một nơi là chấm xanh nói dối trên một bản vẽ chưa lưu. */
+if (codeOnly.includes('data-saved=')) {
+  const bridge = readFileSync(
+    join(webDir, "../daemon/src/acadBridge.ts"), "utf8");
+  assert.match(bridge, /dbmod\?: number;/, "OpenAcadDocument phải khai dbmod");
+  assert.match(sourceAt("lib/daemon/docs.ts"), /dbmod\?: number;/, "AcadDocument phải khai dbmod");
+  const plugin = readFileSync(
+    join(webDir, "../../../objectarx/mepbridge.cpp"), "utf8");
+  assert.match(plugin, /\\"dbmod\\":/, "writeDocs() của plugin phải phát dbmod");
+  assert.match(
+    sourceAt("Titlebar.tsx"),
+    /doc\.dbmod === undefined \? "unknown"/,
+    "thiếu dbmod phải hiện KHÔNG BIẾT, không được coi là đã lưu",
+  );
+  // Chấm chỉ đúng khi danh sách bản vẽ được nạp lại đúng lúc. Nghe thiếu một
+  // trong ba sự kiện này là chấm treo ở trạng thái cũ mà không ai báo.
+  for (const signal of ["drawingModified", "drawingSaved", "pluginLoaded"]) {
+    assert.ok(
+      sourceAt("AppShell.tsx").includes(signal),
+      `shell phải nạp lại danh sách bản vẽ khi có sự kiện ${signal}`,
+    );
+  }
+  assert.match(plugin, /emitEvent\("drawingSaved"/, "plugin phải phát drawingSaved sau khi lưu");
+  assert.match(
+    plugin,
+    /acadDocumentModifiedKnown/,
+    "dbmod phải có trạng thái KHÔNG BIẾT, không mặc định là đã lưu",
+  );
+}
+
+/* Không phần tử nào của shell được dẫn tới một route chưa tồn tại — dẫn người
+ * dùng tới 404 tệ hơn hẳn một liên kết mờ đi kèm lý do. Ba nơi điều hướng phải
+ * hỏi CÙNG một nguồn là danh sách `BUILT` trong nav.ts. */
+assert.match(sourceAt("Rail.tsx"), /item\.built \?/, "rail phải kiểm item.built");
+assert.match(
+  sourceAt("Titlebar.tsx"),
+  /isRouteBuilt\("\/settings"\)[\s\S]*isRouteBuilt\("\/changes"\)/,
+  "pill kết nối và chip thay đổi phải kiểm route tồn tại",
+);
+assert.match(
+  sourceAt("CommandPalette.tsx"),
+  /BUILT_ROUTES/,
+  "bảng lệnh phải kiểm route tồn tại",
+);
+
 /* Một EventSource duy nhất, và ở đúng chỗ. Chỉ đếm "= 1" thì không đủ: hôm
  * trước nó đã bằng 1 khi còn nằm trong page.tsx, nên tiêu chí đó pass mà không
  * đo được gì. Nhiều instance nghĩa là mỗi panel tự mở một kết nối SSE riêng. */

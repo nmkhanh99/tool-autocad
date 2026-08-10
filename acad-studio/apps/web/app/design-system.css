@@ -18,6 +18,18 @@
        Mẫu chỉ khoá `busy` và `off`; ba trạng thái `missing`, `no-plugin`,
        `mute` cũng là lúc không thể ghi vào bản vẽ.
 
+   (3) Mục 9 ở cuối file: cỡ cho `svg` trong `.searchbtn`/`.stagedchip`, và
+       trạng thái thứ ba cho chấm "đã lưu" trên doctab.
+       Mẫu sizing `svg` theo từng ngữ cảnh (`.btn svg`, `.rail-link svg`,
+       `.searchfield svg`…) nhưng bỏ sót hai chỗ này. Một `<svg>` có `viewBox`
+       mà không có `width` mặc định rộng 300px, nên biểu tượng phình ra và đẩy
+       vỡ cả thanh tiêu đề. Đây là thiếu sót của mẫu, không phải chủ ý.
+
+       Chấm "đã lưu": mẫu chỉ có hai trạng thái vì nó giả định luôn đọc được
+       `dbmod`. Thực tế plugin bản cũ không phát trường này, nên phải có trạng
+       thái KHÔNG BIẾT — một chấm xanh sai trên bản vẽ chưa lưu là đường dẫn
+       tới mất dữ liệu khi người dùng khởi động lại AutoCAD.
+
    `* {box-sizing}` và `html, body {height:100%}` để nguyên global: legacy khai
    giống hệt nên trùng lặp vô hại.
    ============================================================ */
@@ -864,3 +876,15 @@ body[data-acad="off"]  [data-write] { opacity: .4; pointer-events: none; }
 body[data-acad="missing"]   [data-write],
 body[data-acad="no-plugin"] [data-write],
 body[data-acad="mute"]      [data-write] { opacity: .4; pointer-events: none; }
+
+/* ---------- 9. SAI LỆCH (3) — CỠ BIỂU TƯỢNG CÒN THIẾU ----------
+   Xem danh sách sai lệch ở đầu file. Bỏ khi mẫu bổ sung hai quy tắc này. */
+.searchbtn svg,
+.stagedchip svg { width: 15px; height: 15px; flex: none; }
+
+/* Chấm rỗng, viền đứt = chưa đọc được trạng thái lưu. Khác hẳn chấm đặc (chưa
+   lưu) và chấm xám (đã lưu) — phân biệt bằng HÌNH DẠNG, không chỉ bằng màu. */
+.doctab .dot[data-saved="unknown"] {
+  background: transparent; border: 1.5px dashed var(--muted);
+  width: 8px; height: 8px;
+}

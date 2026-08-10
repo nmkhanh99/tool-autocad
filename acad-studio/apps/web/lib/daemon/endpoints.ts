@@ -29,4 +29,7 @@ export const endpoints = {
   /** SSE sự kiện reactor từ plugin. Chỉ `features/acad-connection/events.ts`
    * được mở kết nối này — xem lý do ở đó. */
   acadEvents: (base: string) => `${trim(base)}/api/acad/events`,
+
+  /** AutoCAD đã cài chưa, đang chạy chưa, có job nào đang chiếm phiên không. */
+  acadStatus: (base: string) => `${trim(base)}/api/acad/status`,
 } as const;

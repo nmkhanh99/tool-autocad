@@ -22,6 +22,12 @@ export type AcadDocument = {
   /** Revision của bản vẽ, do plugin cấp. Không phải revision snapshot CadWeb
    * và không phải content-hash hồ sơ — bốn thứ này không so sánh được với nhau. */
   revision?: number;
+  /** 1 = có thay đổi chưa lưu, 0 = sạch, **thiếu = không biết**.
+   *
+   * Plugin bản cũ không phát trường này. "Không biết" phải hiển thị khác "đã
+   * lưu": một chấm xanh sai trên bản vẽ chưa lưu là đúng thứ dẫn tới mất dữ
+   * liệu khi người dùng khởi động lại AutoCAD. */
+  dbmod?: number;
 };
 
 export type DocsSnapshot = {

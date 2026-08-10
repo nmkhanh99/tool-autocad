@@ -32,6 +32,7 @@
 #include <acedads.h>
 #include <adscodes.h>
 #include <acdocman.h>
+#include <rxevent.h>
 #include <dbmain.h>
 #include <dbents.h>
 #include <dbmline.h>
@@ -75,6 +76,13 @@ static const uint64_t gDocumentNonce =
 static uint64_t gNextDocumentInstance = 1;
 static std::map<const AcApDocument*, std::string> gDocumentInstances;
 static std::map<const AcDbDatabase*, uint64_t> gDatabaseRevisions;
+// Revision tai lan luu gan nhat. So sanh voi gDatabaseRevisions cho ra
+// "da sua ke tu lan luu" — thu ma AcApDocument khong co accessor nao.
+static std::map<const AcDbDatabase*, uint64_t> gSavedRevisions;
+// Moc dac biet: biet chac ban ve DANG BAN, du bo dem revision o gia tri nao.
+// Dung khi plugin nap SAU luc nguoi dung da sua — luc do khong co lich su nao
+// de so, nhung DBMOD that van doc duoc.
+static const uint64_t kDirtyBaseline = ~static_cast<uint64_t>(0);
 
 std::string acadDocumentInstanceToken(const AcApDocument* document) {
     if (!document) return "";
@@ -95,10 +103,63 @@ uint64_t acadDatabaseRevision(const AcDbDatabase* database) {
     return gDatabaseRevisions[database];
 }
 
+// Ban ve co thay doi chua luu?
+//
+// AutoCAD co bien he thong DBMOD, nhung acedGetVar chi doc duoc TAI LIEU HIEN
+// HANH (code drawing-info da phai canh bao dbmod_unavailable_for_non_current_document).
+// AcApDocument khong co accessor nao cho viec nay — da tra header ObjectARX 2027:
+// chi co isQuiescent / isReadOnly / isCommandInputInactive / isNamedDrawing.
+//
+// Nen suy tu dem revision: DB reactor tang bo dem moi lan sua, AcRxEventReactor
+// dat lai moc khi luu xong. Cach nay dung cho MOI ban ve dang mo, khong chi ban
+// ve hien hanh.
+//
+// Gioi han da biet: DB reactor chi gan vao database cua tai lieu dang hoat dong,
+// nen thay doi do CODE khac gay ra tren mot ban ve nen (plugin khac, job headless)
+// se khong duoc dem. Sua cua NGUOI DUNG luon xay ra khi tai lieu dang hoat dong
+// nen van duoc dem dung.
+// Ban ve co thay doi chua luu? Tra ve false neu KHONG BIET.
+//
+// Hai nguon, theo thu tu tin cay:
+//
+//  1. DBMOD that — chi doc duoc cho TAI LIEU HIEN HANH (acedGetVar khong doc
+//     duoc tai lieu nen). Day la nguon chinh xac: no ve 0 khi nguoi dung undo
+//     het ve moc da luu, dieu ma mot bo dem chi-tang khong the bieu dien.
+//  2. Bo dem revision so voi moc luu gan nhat — dung cho ban ve NEN.
+//
+// Moi lan doc duoc (1) thi moc cua (2) cung duoc dong bo lai, nen khi tai lieu
+// tro thanh nen no van mang trang thai dung.
+//
+// Khong biet phai bao la khong biet: plugin nap sau khi nguoi dung da sua thi
+// khong co lich su nao de so, va bao "da luu" luc do la duong dan toi mat du lieu.
+static bool acadDocumentModifiedKnown(AcApDocument* doc, bool& modified) {
+    if (!doc) return false;
+    AcDbDatabase* db = doc->database();
+    if (!db) return false;
+
+    if (acDocManager && doc == acDocManager->curDocument()) {
+        resbuf rb = {};
+        if (acedGetVar(ACRX_T("DBMOD"), &rb) == RTNORM && rb.restype == RTSHORT) {
+            modified = (rb.resval.rint != 0);
+            gSavedRevisions[db] = modified ? kDirtyBaseline : acadDatabaseRevision(db);
+            return true;
+        }
+    }
+
+    auto saved = gSavedRevisions.find(db);
+    if (saved == gSavedRevisions.end()) return false;
+    modified = (saved->second == kDirtyBaseline)
+        || (acadDatabaseRevision(db) != saved->second);
+    return true;
+}
+
 static void forgetDocumentState(const AcApDocument* document) {
     if (!document) return;
     gDocumentInstances.erase(document);
-    if (document->database()) gDatabaseRevisions.erase(document->database());
+    if (document->database()) {
+        gDatabaseRevisions.erase(document->database());
+        gSavedRevisions.erase(document->database());
+    }
 }
 
 // ============================ UTF-8 <-> wchar_t (UTF-32 tren Mac) ============================
@@ -233,6 +294,8 @@ static void writeDocs() {
             if (!d) continue;
             if (!first) json += ",";
             first = false;
+            bool dbmodValue = false;
+            const bool dbmodKnown = acadDocumentModifiedKnown(d, dbmodValue);
             json += "{\"title\":\"" + jsonEsc(toUtf8(d->docTitle())) +
                     "\",\"file\":\"" + jsonEsc(toUtf8(d->fileName())) +
                     "\",\"active\":" + (d == pActive ? "true" : "false") +
@@ -240,6 +303,11 @@ static void writeDocs() {
                         jsonEsc(acadDocumentInstanceToken(d)) + "\"" +
                     ",\"revision\":" +
                         std::to_string(acadDatabaseRevision(d->database())) +
+                    // Bo han truong dbmod khi KHONG BIET — UI phan biet
+                    // "khong doc duoc" voi "da luu".
+                    (dbmodKnown
+                        ? std::string(",\"dbmod\":") + (dbmodValue ? "1" : "0")
+                        : std::string()) +
                     "}";
         }
         delete it;
@@ -2596,6 +2664,10 @@ public:
     void documentActivated(AcApDocument* d) override {
         // Re-attach only after activation; never removeReactor on a dead db pointer.
         attachDbReactor();
+        // Tai lieu vua thanh hien hanh -> bay gio moi doc duoc DBMOD that cua no.
+        // Nho vay ban ve da mo TU TRUOC khi nap plugin cung co moc dung, ngay
+        // khi nguoi dung bam sang no.
+        writeDocs();   // tu dat lai moc dbmod cho tai lieu vua thanh hien hanh
         emitEvent("docActivated", d ? toUtf8(d->docTitle()) : "");
         writeDocs();
     }
@@ -2640,9 +2712,33 @@ public:
         }
     }
 };
+// AcRxEventReactor la NOI DUY NHAT trong ObjectARX bao "da luu xong":
+// AcDbDatabaseReactor va AcApDocManagerReactor deu khong co callback nay
+// (da tra header 2027). Khong co no thi khong the biet ban ve sach hay ban.
+class MepRxEventReactor : public AcRxEventReactor {
+public:
+    void saveComplete(AcDbDatabase* db, const ACHAR*) override {
+        if (!db) return;
+        gSavedRevisions[db] = acadDatabaseRevision(db);
+        writeDocs();
+        // Phai phat su kien: UI nap lai danh sach ban ve theo su kien, va
+        // writeDocs() mot minh khong danh thuc ai ca — cham "chua luu" se treo
+        // o trang thai cu cho toi lan mo/dong ban ve tiep theo.
+        emitEvent("drawingSaved", "");
+    }
+    // Ban ve vua mo la sach, du bo dem revision dang o gia tri nao.
+    void dwgFileOpened(AcDbDatabase* db, const ACHAR*) override {
+        if (db) gSavedRevisions[db] = acadDatabaseRevision(db);
+    }
+    void databaseToBeDestroyed(AcDbDatabase* db) override {
+        if (db) gSavedRevisions.erase(db);
+    }
+};
+
 static MepDocReactor gDocReactor;
 static MepEdReactor  gEdReactor;
 static MepDbReactor  gDbReactor;
+static MepRxEventReactor gRxEventReactor;
 // Track BOTH document and database so we never removeReactor on a freed AcDbDatabase*
 // after the owning document is destroyed (common when opening many demo DWGs).
 static AcApDocument* gDocWatched = nullptr;
@@ -2697,6 +2793,7 @@ static void startReactors() {
     if (gReactorsOn) return;
     if (acDocManager) acDocManager->addReactor(&gDocReactor);
     if (acedEditor)   acedEditor->addReactor(&gEdReactor);
+    if (acrxEvent)    acrxEvent->addReactor(&gRxEventReactor);
     attachDbReactor();
     gReactorsOn = true;
 }
@@ -2704,9 +2801,11 @@ static void stopReactors() {
     if (!gReactorsOn) return;
     if (acDocManager) acDocManager->removeReactor(&gDocReactor);
     if (acedEditor)   acedEditor->removeReactor(&gEdReactor);
+    if (acrxEvent)    acrxEvent->removeReactor(&gRxEventReactor);
     detachDbReactor();
     gDocumentInstances.clear();
     gDatabaseRevisions.clear();
+    gSavedRevisions.clear();
     gReactorsOn = false;
 }
 

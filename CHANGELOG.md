@@ -1,5 +1,129 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 3: shell dùng chung, và giao diện mới chạy được
+
+Lần đầu người dùng nhìn thấy bộ mẫu thiết kế chạy thật: `/changes` mở ra với
+titlebar, rail 14 mục, thanh trạng thái, ⌘K và nhật ký hoạt động.
+
+### Added
+
+- `components/ui/icons.tsx` — 27 glyph, **sinh từ** `mau-thiet-ke/js/app.js`
+  @ `82f5232` chứ không chép tay. 27 đường path SVG chép tay là 27 cơ hội sai
+  một toạ độ mà không ai phát hiện tới lúc nhìn thấy icon méo.
+- `components/shell/nav.ts` — NAV 5 nhóm/14 mục + 15 lệnh ⌘K, cũng sinh từ mẫu.
+  Cờ `built` nghĩa là *route tồn tại và điều hướng tới được*; mục chưa có route
+  hiện dạng vô hiệu hoá kèm lý do, thay vì dẫn tới trang trống.
+- `components/shell/` — `AppShell`, `Titlebar`, `Rail`, `Statusbar`,
+  `CommandPalette`, `ActivityDrawer`, `useRail`.
+- `components/ui/` — 5 primitive có ít nhất hai nơi dùng: `Button`, `Tag`,
+  `Panel`, `Modal`, `GuardStrip`. 20 primitive còn lại của kế hoạch **chưa
+  dựng** — tạo khi màn hình thứ hai cần, không sớm hơn.
+- `features/acad-connection/useAcadState.ts` — 6 trạng thái kết nối.
+- `features/acad-connection/WriteButton.tsx` — nút ghi, đọc trạng thái từ
+  **context** chứ không nhận qua prop: nếu nơi gọi phải tự truyền, sớm muộn sẽ
+  có chỗ truyền nhầm. Không có provider thì mặc định `off` — fail-closed.
+- `features/staged-ops/store.ts` — hàng chờ dùng chung cho chip titlebar và huy
+  hiệu rail; hai nơi không bao giờ nói hai con số khác nhau.
+- `lib/storage.ts` — 4 khoá, mọi truy cập bọc try/catch (Safari riêng tư ném
+  ngay khi **đọc** `localStorage`).
+- Cầu nối hai chiều giữa màn hình legacy và shell mới. Xoá ở giai đoạn 8.
+
+### Fixed — quyết định D6 (`dbmod`), và kế hoạch đã sai về nó
+
+Kế hoạch ước lượng "~5 dòng C++: đọc DBMOD cho từng document trong iterator".
+**Không làm được như vậy**, đã kiểm chứng trên header ObjectARX 2027 thật:
+
+- `acedGetVar(DBMOD)` chỉ đọc được **tài liệu hiện hành** — chính code
+  `/drawing-info` cũ đã phải cảnh báo `dbmod_unavailable_for_non_current_document`.
+- `AcApDocument` **không có** accessor nào cho việc này: chỉ `isQuiescent`,
+  `isReadOnly`, `isCommandInputInactive`, `isNamedDrawing`.
+- `AcDbDatabaseReactor` và `AcApDocManagerReactor` **đều không có** callback
+  "đã lưu".
+
+Đường đi được là suy từ bộ đếm revision mà plugin đã có: DB reactor tăng bộ đếm
+mỗi lần sửa, và `AcRxEventReactor::saveComplete` — nơi **duy nhất** trong
+ObjectARX báo đã lưu xong — đặt lại mốc. Cách này đúng cho **mọi** bản vẽ đang
+mở, không chỉ bản vẽ hiện hành.
+
+Giới hạn đã biết, ghi trong code: DB reactor chỉ gắn vào database của tài liệu
+đang hoạt động, nên thay đổi do *code khác* gây ra trên một bản vẽ nền không
+được đếm. Sửa của **người dùng** luôn xảy ra khi tài liệu đang hoạt động nên vẫn
+đếm đúng.
+
+Chấm trên doctab vì vậy có **ba** trạng thái chứ không phải hai: đã lưu, chưa
+lưu, và **không đọc được**. Một chấm xanh sai trên bản vẽ chưa lưu là đúng thứ
+dẫn tới mất dữ liệu khi người dùng khởi động lại AutoCAD.
+
+Codex review bắt thêm hai lỗi P1 trong chính bản D6 này, cả hai đều đúng:
+
+- **Chấm treo ở trạng thái cũ.** Shell chỉ nạp lại danh sách bản vẽ khi có sự
+  kiện `doc*`. Sửa bản vẽ phát `drawingModified`, còn lưu xong thì
+  `saveComplete` chỉ ghi lại `docs.json` mà không đánh thức ai — nên chấm không
+  đổi cho tới lần mở/đóng bản vẽ tiếp theo. Nay plugin phát thêm sự kiện
+  `drawingSaved`, và shell nghe cả ba tín hiệu.
+- **Bản vẽ bẩn trước khi nạp plugin bị báo là đã lưu.** Plugin nạp sau khi người
+  dùng đã sửa thì cả hai bản đồ revision đều trống, hiệu bằng 0, và kết quả là
+  `dbmod: 0` — sai theo đúng hướng nguy hiểm. Nay `acadDatabaseModifiedKnown()`
+  trả về "không biết" khi chưa có mốc, và mốc được đặt từ **DBMOD thật** ngay
+  khi tài liệu trở thành hiện hành (lúc đó `acedGetVar` mới đọc được nó). Bản vẽ
+  mở từ trước vì thế có mốc đúng ngay khi người dùng bấm sang nó.
+- **Undo hết về mốc đã lưu vẫn báo chưa lưu** (review lần hai). Bộ đếm revision
+  chỉ tăng, nên nó không biểu diễn được việc quay về trạng thái sạch. Nay tài
+  liệu **hiện hành** đọc thẳng `DBMOD` thật — nguồn chính xác, về 0 khi undo hết
+  — và mỗi lần đọc được thì mốc của bản vẽ nền cũng được đồng bộ lại.
+
+### Fixed — một lỗi nữa, ở tầng daemon
+
+Codex review lần ba: `useAcadState` coi **bất kỳ** `activeJob` nào là "đang
+bận". Nhưng daemon **không bao giờ** đặt `activeJob` về `null` — nó giữ bản ghi
+job cuối cùng để `/job/:id` còn tra được. Suy như vậy nghĩa là sau job đầu tiên,
+shell kẹt vĩnh viễn ở trạng thái `busy` và **mọi nút ghi bị khoá**.
+
+Daemon vốn đã có định nghĩa đúng của "đang bận" (`state === "sent"` và chưa quá
+120 giây) nhưng chôn trong một câu `if` ở route khác. Nay nó được tách thành
+`acadBusy()` và trả về qua `/status`; UI đọc cờ đó thay vì tự suy. Một định
+nghĩa, hai nơi dùng, không thể lệch.
+
+### Fixed — hai lỗi cuối, từ review lần bốn
+
+- **Tab bản vẽ giả vờ tương tác được.** Chúng là `<button role="tab">` nhưng
+  không có handler: bấm vào tab nền không có gì xảy ra. Đổi bản vẽ hiện hành là
+  một lệnh **ghi** (`activate-document`) và phải đi qua chuẩn bị → xác nhận như
+  mọi lệnh ghi khác, nên luồng đó thuộc màn hình dùng nó. Cho tới lúc đó, tab
+  là chỉ báo **đọc-thôi** kèm hướng dẫn đổi bản vẽ trong AutoCAD — một "tab" bấm
+  không phản ứng luôn bị hiểu là app hỏng.
+- **Kết quả đọc cũ ghi đè kết quả mới.** Nhịp 15 giây và lần đọc do sự kiện
+  kích hoạt có thể chồng nhau và về không theo thứ tự gửi đi. Hậu quả cụ thể:
+  pill quay lại "đã nối" sau khi AutoCAD đã tắt, và nút ghi mở lại cho tới nhịp
+  sau. Nay mỗi lần đọc mang số thứ tự và chỉ lần mới nhất được ghi state.
+
+### Một phát hiện đã xem xét và KHÔNG sửa
+
+Review lần năm báo `drawingModified` đọc lại `docs.json` cũ vì `commandEnded`
+không gọi `writeDocs()`. Đã kiểm chứng và **không đúng**: `listOpenDocs()` ghi
+`docs.req` rồi *chờ* `docs.json` có `mtime >= reqAt`, không thì trả
+`alive: false` (`acadBridge.ts:322-339`); phía plugin, watcher thấy `docs.req`
+đổi là gọi `writeDocs()` ngay (`mepbridge.cpp:1818-1821`). Snapshot tươi theo
+thiết kế, không có gì để sửa.
+
+### Technical
+
+- Plugin **đã build được** (`./build.sh --build-only`, universal x86_64+arm64,
+  export `acrxEntryPoint`). Chưa nạp vào AutoCAD để chạy thử.
+- Sai lệch thứ 3 của `design-system.css`: cỡ `svg` trong `.searchbtn` /
+  `.stagedchip` (mẫu bỏ sót, `<svg>` có `viewBox` mà không có `width` mặc định
+  rộng 300px và làm vỡ thanh tiêu đề), cộng trạng thái chấm thứ ba.
+- Bất biến mới: nếu UI render `data-saved` thì cả bốn nơi — plugin C++,
+  `OpenAcadDocument`, `AcadDocument`, `Titlebar` — phải cùng khai `dbmod`.
+- `AppShell` đặt `data-screen` trên **cả** phần tử gốc, không chỉ `<body>`: bản
+  đóng gói là HTML tĩnh và test route phải đọc được mốc trước khi React chạy.
+- Kiểm bằng Chrome thật: ⌘K mở bảng lệnh (15 lệnh, mũi tên, Enter, Esc); ⌘B thu
+  rail xuống 64px và lưu lựa chọn; **điều hướng client-side hai chiều** giữa
+  shell và legacy gỡ sạch cả bốn attribute — đúng kịch bản phản biện cảnh báo là
+  dễ rò nhất.
+
+---
+
 ## 2026-08-10 — Giai đoạn 2B: chat sửa message theo ID, không theo vị trí
 
 Mọi handler của chat đều có dạng "thêm chỗ giữ chỗ → await mạng 0,2–120 giây →

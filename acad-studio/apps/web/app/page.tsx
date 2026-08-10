@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { GROUPS, MENU_FUNCTIONS, byId, type Fn } from "./functions";
 import {
   applyStagedOp,
@@ -1237,6 +1238,11 @@ export default function Page() {
 
       <main className="legacy-main">
         <div className="topbar">
+          {/* Cầu nối tạm sang giao diện mới. Xoá ở giai đoạn 8 khi màn hình
+              legacy này được thay hẳn. */}
+          <Link className="pillbtn" href="/changes" title="Giao diện mới đang được dựng theo bộ mẫu thiết kế">
+            → Giao diện mới
+          </Link>
           <button className="pillbtn" onClick={() => setPanel(!panel)}>🧰 Chức năng</button>
           <button className="pillbtn" onClick={() => openPreconstruction()}
             title="Bóc khối lượng, lập dự toán, quản lý hiện trường và AI">

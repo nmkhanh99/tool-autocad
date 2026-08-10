@@ -81,6 +81,17 @@ chuyển nó sang route.
   13 chỗ tạo message không ID mà grep không tìm hết.
 - Kiểm end-to-end bằng Chrome: hai thao tác nối tiếp, mỗi lỗi vào đúng message.
 
+### Giai đoạn 3 — Shell dùng chung (2026-08-10)
+
+- `icons.tsx` (27 glyph) và `nav.ts` (14 mục / 15 lệnh) **sinh từ mẫu**.
+- `AppShell` + titlebar / rail / statusbar / ⌘K / nhật ký; 5 primitive UI.
+- `useAcadState` 6 trạng thái; `WriteButton` đọc trạng thái từ context,
+  fail-closed khi thiếu provider.
+- **D6 xong**: plugin phát `dbmod` cho mọi bản vẽ đang mở, suy từ bộ đếm
+  revision + `AcRxEventReactor::saveComplete`. Plugin đã build được.
+- Kiểm bằng Chrome: ⌘K, ⌘B, và điều hướng client-side hai chiều gỡ sạch
+  attribute.
+
 ---
 
 ## Quyết định đã chốt
@@ -101,24 +112,30 @@ khoảng **21–33 ngày công**, tính riêng ngoài 95–140 ngày front-end.
 
 ## Next
 
-### Giai đoạn 3 — Shell dùng chung
+### Nạp plugin mới vào AutoCAD và kiểm `dbmod` thật
 
-Không còn gì chặn. Nội dung: titlebar / rail / statusbar / command palette ⌘K /
-activity drawer; `Button` primitive có `disabled` thật (CSS `pointer-events`
-không chặn Tab+Enter); 4 khoá lưu trữ; `useDrawTarget` phải giữ lựa chọn `""` =
-file `.work`.
+Việc duy nhất của giai đoạn 3 **chưa xác minh trên AutoCAD thật**. Bundle đã
+build ở `objectarx/build/Acad-Bridge.bundle` nhưng chưa nạp.
 
-Kèm việc backend theo **D6**: thêm `dbmod` vào `writeDocs()`
-(`objectarx/mepbridge.cpp`) và `dbmod?: number` vào `OpenAcadDocument`.
+1. `cd objectarx && ./build.sh` (bỏ `--build-only` để cài vào ApplicationPlugins).
+2. Khởi động lại AutoCAD — **AutoCAD không nạp lại bundle giữa phiên**.
+3. Mở 2 bản vẽ, sửa một cái, không lưu. Kiểm `~/Acad-Bridge/docs.json` có
+   `"dbmod":1` cho bản vẽ đã sửa và `0` cho bản còn lại.
+4. Lưu bản vẽ đó → `dbmod` phải về `0` **ngay**, không đợi nhịp 2,1 s.
 
-Cũng là lúc dựng `ConfirmSheet` dùng chung — nó cần `Modal`/`Button`/
-`GuardStrip` của design system, nên hoãn từ 2A sang đây.
+Nếu bước 3 cho `dbmod:1` ở cả hai, giả định "sửa của người dùng luôn xảy ra khi
+tài liệu đang hoạt động" sai ở đâu đó — đọc lại ghi chú giới hạn trong
+`acadDatabaseModified()`.
+
+### Giai đoạn 4 — `/library/blocks` và `/library/lisp`
+
+PR mẫu chốt convention cho việc migrate panel sang route. Kèm `ConfirmSheet`
+dùng chung — nó cần `Modal`/`Button`/`GuardStrip`, giờ đã có.
 
 ---
 
 ## Later
 
-- **Giai đoạn 4** — `/library/blocks`, `/library/lisp`. Không còn bị D2 chặn.
 - **Giai đoạn 5** — `/workspace`: hit-test entity trên canvas WebGL2 là code
   mới hoàn toàn, không tái sử dụng được gì.
 - **Giai đoạn 6** — `/drawing-info`, tách `/review` và `/standards`.

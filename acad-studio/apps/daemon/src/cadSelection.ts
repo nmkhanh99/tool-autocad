@@ -17,7 +17,10 @@ const HANDLE_RE = /^[0-9A-F]+$/;
 const SUBJECT_PREVIEW_LIMIT = 100;
 const MAX_OPERATIONS = 200;
 
-type OpenDocument = Required<OpenAcadDocument>;
+// `dbmod` cố ý ở ngoài `Required`: plugin bản cũ không phát trường này, và
+// thiếu nó nghĩa là KHÔNG BIẾT chứ không phải dữ liệu hỏng. Bốn trường còn lại
+// vẫn bắt buộc — thiếu chúng là phản hồi plugin không hợp lệ.
+type OpenDocument = Required<Omit<OpenAcadDocument, "dbmod">> & Pick<OpenAcadDocument, "dbmod">;
 
 type DocumentGuard = {
   instance: string;

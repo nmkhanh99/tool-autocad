@@ -293,6 +293,9 @@ export type OpenAcadDocument = {
   active: boolean;
   instance?: string;
   revision?: number;
+  /** 1 = có thay đổi chưa lưu, 0 = sạch. Thiếu trường này nghĩa là plugin đang
+   * chạy là bản cũ hơn — UI phải coi là KHÔNG BIẾT, không được coi là đã lưu. */
+  dbmod?: number;
 };
 
 /** Resolve one open document, preferring a full-path match over a title match. */
@@ -685,6 +688,19 @@ interface JobRecord {
   tempPath?: string;
 }
 let activeJob: JobRecord | null = null;
+
+/** Đang có job chiếm phiên AutoCAD hay không.
+ *
+ * `activeJob` KHÔNG bao giờ được đặt lại về null — nó giữ lại bản ghi job cuối
+ * cùng để `/job/:id` còn tra được. Vì vậy "có activeJob" **không** đồng nghĩa
+ * với "đang bận"; chỉ job ở trạng thái `sent` và chưa quá hạn mới thật sự đang
+ * chiếm phiên. UI đọc cờ này qua `/status` thay vì tự suy từ `activeJob`, để
+ * hai bên không thể lệch định nghĩa. */
+const JOB_BUSY_MS = 120_000;
+function acadBusy(): boolean {
+  return liveJobPending > 0 ||
+    !!(activeJob && activeJob.state === "sent" && Date.now() - activeJob.createdAt < JOB_BUSY_MS);
+}
 const history: JobRecord[] = [];
 let liveJobQueue: Promise<void> = Promise.resolve();
 let liveJobPending = 0;
@@ -1000,6 +1016,7 @@ export function acadBridgeRouter(): Router {
       coreConsole: findCoreConsole(),
       bridgeDir: getBridgeDir(),
       activeJob: activeJob ? { jobId: activeJob.jobId, state: activeJob.state } : null,
+      busy: acadBusy(),
       trustedHint:
         "Lần đầu chạy job nếu AutoCAD hỏi SECURELOAD, chọn 'Load'. Để hết hỏi: lệnh TRUSTEDPATHS thêm " +
         getBridgeDir() + "/...",
@@ -1672,10 +1689,7 @@ export function acadBridgeRouter(): Router {
   r.post("/job", async (req, res) => {
     const { lisp, wait = 15000 } = req.body ?? {};
     if (!lisp) return res.status(400).json({ error: "Thiếu 'lisp' (payload AutoLISP)" });
-    if (
-      liveJobPending > 0 ||
-      (activeJob && activeJob.state === "sent" && Date.now() - activeJob.createdAt < 120000)
-    )
+    if (acadBusy())
       return res.status(409).json({ error: "Đang có job chạy dở", jobId: activeJob?.jobId });
     if (!(await acadRunning()))
       return res.status(400).json({ error: "AutoCAD chưa chạy — POST /api/acad/open trước" });

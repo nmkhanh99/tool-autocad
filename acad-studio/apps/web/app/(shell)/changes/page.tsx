@@ -1,32 +1,35 @@
 "use client";
 
-import { useEffect } from "react";
+import { AppShell } from "../../../components/shell/AppShell";
 
-/** Route giàn giáo của giai đoạn 0 — chưa có nội dung sản phẩm.
+/** Màn "Thay đổi chờ duyệt" chưa được dựng — nó là trục xoay của sản phẩm và
+ * thuộc giai đoạn 7, sau khi có `ConfirmSheet` và bảng diff.
  *
- * Nó tồn tại để `scripts/test-route-serving.mjs` chứng minh được rằng bản đóng
- * gói phục vụ ĐÚNG route con: không có `trailingSlash: true`, request /changes/
- * rơi vào catch-all của daemon và trả HTTP 200 với nội dung route "/".
- *
- * Từ giai đoạn 1 nó còn là chỗ duy nhất chứng minh `design-system.css` thật sự
- * áp được: nếu gate `body[data-ds]` sai, trang này mất nền sáng ngay.
- * Giai đoạn 3 sẽ thay bằng `AppShell` và việc đặt attribute chuyển về đó.
+ * Route này tồn tại từ giai đoạn 0 để `scripts/test-route-serving.mjs` chứng
+ * minh bản đóng gói phục vụ đúng route con; từ giai đoạn 3 nó còn là nơi duy
+ * nhất `AppShell` thật sự chạy, nên mọi lỗi của shell lộ ra ở đây trước.
  *
  * KHÔNG tạo `app/(shell)/page.tsx` chừng nào `app/page.tsx` legacy còn sống:
  * cả hai cùng resolve về "/" và Next 16 âm thầm bỏ file trong route group,
- * không một dòng cảnh báo nào. Màn Tổng quan chỉ được tạo trong cùng commit với
- * việc dời `app/page.tsx` sang `app/legacy/page.tsx` (giai đoạn 8).
+ * không một dòng cảnh báo nào.
  */
 export default function ChangesPage() {
-  useEffect(() => {
-    document.body.dataset.ds = "1";
-    return () => { delete document.body.dataset.ds; };
-  }, []);
-
   return (
-    <div data-screen="changes" className="pad stack">
-      <h1>Thay đổi chờ duyệt</h1>
-      <p className="hint">Màn hình chưa được dựng — xem ROADMAP.md, giai đoạn 7.</p>
-    </div>
+    <AppShell
+      screen="changes"
+      title="Thay đổi chờ duyệt"
+      sub="Mọi lệnh ghi vào bản vẽ dừng ở đây chờ người xác nhận"
+    >
+      <div className="pad stack">
+        <div className="statebox">
+          <p>Màn hình này chưa được dựng.</p>
+          <p className="hint">
+            Nó thuộc giai đoạn 7 của kế hoạch chuyển giao diện — xem
+            {" "}<code>ROADMAP.md</code>. Hàng chờ hiện sống trong trình duyệt;
+            máy chủ không lưu thao tác đã chuẩn bị và không có API liệt kê chúng.
+          </p>
+        </div>
+      </div>
+    </AppShell>
   );
 }
