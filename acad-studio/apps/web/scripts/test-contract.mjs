@@ -228,6 +228,16 @@ assert.match(
   "bảng lệnh phải kiểm route tồn tại",
 );
 
+/* Địa chỉ daemon khai đúng một lần. Đặt tên biến môi trường khác ở một màn
+ * hình nghĩa là màn hình đó trỏ sai địa chỉ trong bản đóng gói (scripts/package.mjs
+ * chỉ set NEXT_PUBLIC_DAEMON_URL) trong khi mọi thứ khác vẫn chạy — kiểu lỗi chỉ
+ * lộ ra sau khi giao hàng. */
+assert.equal(
+  countCodeExcept("NEXT_PUBLIC_", "lib/daemon/endpoints.ts"),
+  0,
+  "chỉ lib/daemon/endpoints.ts được đọc biến môi trường địa chỉ daemon",
+);
+
 /* Một EventSource duy nhất, và ở đúng chỗ. Chỉ đếm "= 1" thì không đủ: hôm
  * trước nó đã bằng 1 khi còn nằm trong page.tsx, nên tiêu chí đó pass mà không
  * đo được gì. Nhiều instance nghĩa là mỗi panel tự mở một kết nối SSE riêng. */

@@ -1,5 +1,75 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 4 (phần 2): route `/library/blocks` (chỉ đọc)
+
+### Added
+
+- `app/(shell)/library/blocks/page.tsx` — màn Thư viện block trong giao diện
+  mới: bộ lọc, lưới định nghĩa, pane chi tiết. **Chỉ đọc.**
+- `app/(shell)/library/blocks/blocks.module.css` — style riêng của màn hình,
+  trích từ mẫu. Mỗi màn hình trong bộ mẫu có một khối `<style>` riêng bên cạnh
+  design system; những style đó **không** được nhét vào `design-system.css` —
+  chúng chỉ phục vụ một màn hình, và đưa vào hệ dùng chung là làm nó phình ra
+  rồi lệch khỏi mẫu.
+- `features/blocks/useBlockLibrary.ts` — đọc danh mục. Hook này **không cấp
+  đường ghi nào**, nên không có cách nào vô tình ghi vào bản vẽ từ màn hình mới.
+- `daemonFailureText()` trong `lib/daemon/client.ts`.
+
+### Changed
+
+- `nav.ts`: `/library/blocks` vào danh sách route đã tồn tại.
+
+### Fixed
+
+- Lỗi mạng không còn hiện `"Failed to fetch"` — chuỗi thô của trình duyệt không
+  nói gì với người đang dùng app. Nay nêu ba nguyên nhân thực tế kèm lối thoát:
+  daemon chưa chạy, sai cổng, hoặc mở bằng `file://`.
+
+- Nguồn thư viện hỏng không còn xoá cả danh mục (Codex review). Hai lời gọi
+  không ngang hàng: danh mục là nội dung màn hình, danh sách thư mục nguồn chỉ
+  là một con số phụ ở thanh lọc. Gộp vào một `Promise.all` nghĩa là mất cả màn
+  hình vì một thông tin bên lề — panel cũ cũng tách hai đường này.
+
+- Pane chi tiết không còn biến mất ở màn hình hẹp (Codex review). Design system
+  ẩn `.split > .detail` ở ≤1240px — hợp lý cho những màn có thông tin trùng ở
+  cột trái, nhưng ở đây pane đó là nơi **duy nhất** xem được metadata và đường
+  sang trình sửa, nên ẩn nó biến việc bấm vào một block thành thao tác không có
+  gì xảy ra. CSS module xếp chồng nó xuống dưới lưới thay vì ẩn.
+- Nút "Mở màn hình cũ để sửa" giờ **thật sự mở** thư viện ở màn hình cũ
+  (`/?panel=blocks`). Trước đó nó chỉ về trang gốc còn panel vẫn đóng — nhãn
+  hứa một việc mà liên kết không làm.
+
+- **Địa chỉ daemon từng có hai tên biến môi trường** (Codex review). Tôi đặt
+  `NEXT_PUBLIC_ACAD_DAEMON` cho shell và route mới, trong khi màn hình cũ và
+  `scripts/package.mjs` dùng `NEXT_PUBLIC_DAEMON_URL`. Bản đóng gói chỉ set cái
+  sau, nên giao diện mới sẽ trỏ sai địa chỉ **trong khi mọi thứ khác vẫn chạy**
+  — kiểu lỗi chỉ lộ ra sau khi giao hàng. Nay có đúng một `DAEMON_BASE` trong
+  `lib/daemon/endpoints.ts`, và contract test cấm mọi file khác đọc
+  `NEXT_PUBLIC_*`.
+
+### Cố ý làm khác mẫu
+
+- Bộ lọc trạng thái đồng bộ có **6** mục chứ không phải 4 như mẫu. Backend có 5
+  trạng thái; mẫu chỉ vẽ 3, và thiếu đúng `conflict` — trạng thái duy nhất người
+  dùng buộc phải xử lý tay. Lọc mà thiếu một trạng thái nghĩa là có block không
+  bao giờ tìm thấy được.
+
+### Docs
+
+- `USER_GUIDE.md` bổ sung mục **Giao diện mới**: cách đi lại giữa hai giao diện,
+  ba phím tắt của khung chung, ba trạng thái chấm "đã lưu", và hướng dẫn màn Thư
+  viện block kèm giới hạn chỉ-đọc. Codex review nhắc đúng — tôi đã bỏ sót việc
+  này từ giai đoạn 3, khi shell mới bắt đầu có màn hình người dùng nhìn thấy.
+
+### Chưa làm — nói rõ trên chính màn hình
+
+Tạo block từ bộ chọn, chèn vào bản vẽ, đồng bộ định nghĩa và sửa metadata vẫn ở
+màn hình cũ. Đó là các lệnh **ghi**, và chúng cần `ConfirmSheet` cùng luồng hai
+pha chưa dựng lại ở đây. Trang nói thẳng điều đó và có liên kết sang màn hình cũ
+ngay tại chỗ người dùng cần, thay vì vẽ nút rồi để nó không làm gì.
+
+---
+
 ## 2026-08-10 — Giai đoạn 4 (phần 1): tách tầng dữ liệu thư viện block
 
 ### Added

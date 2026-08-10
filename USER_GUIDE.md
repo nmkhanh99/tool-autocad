@@ -67,14 +67,56 @@ mọi thao tác, vì daemon từ chối các nguồn không nằm trong danh sá
 
 ---
 
-## 5. Hướng dẫn từng màn hình
+## 5. Giao diện mới
 
-Sẽ bổ sung sau, theo từng giai đoạn migrate. Viết trước khi màn hình tồn tại sẽ
-tạo ra tài liệu mô tả thứ không có thật.
+Giao diện đang được dựng lại. Hai giao diện chạy song song và bạn đi lại giữa
+chúng được:
 
-Thứ tự dự kiến: Thư viện block · Thư viện LISP · Khung bản vẽ · Thông tin bản vẽ
-· Kiểm tra · Hồ sơ tiêu chuẩn · Thay đổi chờ duyệt · Bóc tách · Kết nối AutoCAD
-· Xuất bản PDF · Xử lý thư mục · Đồng bộ CadWeb · Tổng quan · Trợ lý AI.
+- Từ **màn hình cũ**: bấm **→ Giao diện mới** ở thanh trên.
+- Từ **giao diện mới**: bấm **Màn hình cũ** ở cuối thanh điều hướng bên trái.
+
+### Khung chung
+
+Thanh điều hướng bên trái chia 5 nhóm, 14 mục. Mục **chưa dựng thì mờ đi và nói
+rõ lý do** khi bạn rê chuột vào — không dẫn bạn tới trang trống.
+
+| Thao tác | Phím |
+|---|---|
+| Mở bảng lệnh, đi tới màn hình | `⌘K` |
+| Thu / mở thanh điều hướng | `⌘B` |
+| Đóng bảng lệnh, hộp thoại | `Esc` |
+
+Thanh trên hiển thị: bản vẽ AutoCAD **đang mở** (không phải tệp mở gần đây), số
+thay đổi chờ duyệt, và trạng thái kết nối AutoCAD. Chấm cạnh mỗi bản vẽ có **ba**
+trạng thái — đã lưu, chưa lưu, và *không đọc được* (chấm rỗng viền đứt: plugin
+AcadBridge bản cũ chưa báo được trạng thái này, hãy build lại plugin).
+
+Thanh điều hướng thu gọn tự động khi cửa sổ hẹp dưới 900px; dưới mức đó nút
+thu/mở bị khoá và nói rõ vì sao.
+
+### Thư viện block (`/library/blocks`)
+
+Duyệt và tra cứu định nghĩa block dùng chung.
+
+- Ô tìm kiếm khớp cả tên hiển thị, tên kỹ thuật và thẻ.
+- Bộ lọc có **6** trạng thái đồng bộ: khớp thư viện · bản vẽ dùng bản cũ · chỉ có
+  trong bản vẽ · chỉ có trong thư viện · **xung đột** · và "mọi trạng thái".
+  Xung đột là trạng thái duy nhất bạn buộc phải xử lý tay.
+- Bấm một block để xem chi tiết ở cột phải: trạng thái đồng bộ, kiểu block, số
+  thuộc tính, không gian cho phép, điểm chèn.
+- **Không có ảnh xem trước.** Máy chủ không render hình block, nên ô đó hiện tên
+  định nghĩa thay vì một hình vẽ ngụ ý máy chủ biết block trông thế nào.
+
+**Màn hình này chỉ đọc.** Tạo block từ bộ chọn, chèn vào bản vẽ, đồng bộ định
+nghĩa và sửa metadata vẫn ở màn hình cũ — chúng là lệnh ghi và cần bước xác nhận
+chưa dựng lại ở đây. Nút **Mở màn hình cũ để sửa** mở thẳng thư viện ở màn hình
+cũ.
+
+### Các màn hình còn lại
+
+Chưa dựng. Thứ tự dự kiến: Thư viện LISP · Khung bản vẽ · Thông tin bản vẽ ·
+Kiểm tra · Hồ sơ tiêu chuẩn · Thay đổi chờ duyệt · Bóc tách · Kết nối AutoCAD ·
+Xuất bản PDF · Xử lý thư mục · Đồng bộ CadWeb · Tổng quan · Trợ lý AI.
 
 ---
 

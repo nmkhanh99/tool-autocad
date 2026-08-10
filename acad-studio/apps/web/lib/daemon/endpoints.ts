@@ -6,6 +6,14 @@
  * chứa chuỗi "/api/" — nó phải đi qua đây.
  */
 
+/** Địa chỉ daemon, khai ĐÚNG MỘT LẦN cho toàn app.
+ *
+ * `scripts/package.mjs` set biến này lúc build bản đóng gói. Đặt tên khác ở một
+ * màn hình nào đó nghĩa là màn hình đó trỏ sai địa chỉ trong bản đóng gói mà
+ * mọi thứ khác vẫn chạy — kiểu lỗi chỉ lộ ra sau khi giao hàng.
+ */
+export const DAEMON_BASE = process.env.NEXT_PUBLIC_DAEMON_URL || "http://127.0.0.1:8788";
+
 /** Daemon base có thể đến từ env hoặc từ props, có hoặc không có dấu / cuối. */
 function trim(base: string): string {
   return base.replace(/\/+$/, "");
@@ -32,4 +40,9 @@ export const endpoints = {
 
   /** AutoCAD đã cài chưa, đang chạy chưa, có job nào đang chiếm phiên không. */
   acadStatus: (base: string) => `${trim(base)}/api/acad/status`,
+
+  /** Danh mục block: định nghĩa trong thư viện + đối chiếu với bản vẽ đang mở. */
+  blocks: (base: string) => `${trim(base)}/api/acad/blocks`,
+  /** Thư mục nguồn mà thư viện quét để tìm định nghĩa block. */
+  blockSources: (base: string) => `${trim(base)}/api/acad/blocks/sources`,
 } as const;

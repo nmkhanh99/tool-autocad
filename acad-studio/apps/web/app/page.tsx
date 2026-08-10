@@ -11,6 +11,7 @@ import {
 import { useAcadEvents } from "../features/acad-connection/events";
 import { newMessageId, patchById } from "../features/assistant/messages";
 import { fetchDocs } from "../lib/daemon/docs";
+import { DAEMON_BASE } from "../lib/daemon/endpoints";
 import DrawingInfoPanel from "./DrawingInfoPanel";
 import DrawingStandardsPanel from "./DrawingStandardsPanel";
 import BlockLibraryPanel from "./BlockLibraryPanel";
@@ -26,7 +27,7 @@ import {
   type LispManifestProposal,
 } from "./lispProposal";
 
-const DAEMON = process.env.NEXT_PUBLIC_DAEMON_URL || "http://127.0.0.1:8788";
+const DAEMON = DAEMON_BASE;
 const TOP_KEYS = new Set(["dir", "dwgs", "outDir", "save", "timeoutMs"]);
 
 declare global {
@@ -247,6 +248,22 @@ export default function Page() {
   useEffect(() => {
     document.body.dataset.legacy = "1";
     return () => { delete document.body.dataset.legacy; };
+  }, []);
+
+  /* Deep-link từ giao diện mới. Màn Thư viện block mới là bản chỉ đọc và đưa
+     người dùng về đây để sửa — nếu nó chỉ mở trang gốc thì lời hứa "mở màn hình
+     cũ để sửa" là sai, người dùng còn phải tự đi tìm panel.
+     Đọc thẳng `location.search` chứ không dùng `useSearchParams`: với
+     `output: "export"` hook đó bắt buộc phải bọc Suspense, và ở đây không đáng.
+     Xoá tham số khỏi URL sau khi mở để F5 không mở lại panel ngoài ý muốn. */
+  useEffect(() => {
+    const panel = new URLSearchParams(window.location.search).get("panel");
+    if (!panel) return;
+    if (panel === "blocks") setBlockLibraryOpen(true);
+    else if (panel === "lisp") setLispLibraryOpen(true);
+    else return;
+    setPanel(false);   // đóng bảng chức năng để panel vừa mở không bị che
+    window.history.replaceState({}, "", window.location.pathname);
   }, []);
 
   useEffect(() => { loadAgents(); loadConvs(); loadRawCatalog(); loadDrawDocs(); }, []);

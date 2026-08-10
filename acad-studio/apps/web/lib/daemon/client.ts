@@ -71,3 +71,19 @@ export async function daemonJson<T>(response: Response): Promise<T> {
   if (!response.ok || record?.ok === false) throw failureOf(response, record || {});
   return body as T;
 }
+
+/** Câu chữ cho người dùng khi một lời gọi daemon hỏng.
+ *
+ * `fetch` ném `TypeError` khi không nối được — và trình duyệt cho ra đúng chuỗi
+ * "Failed to fetch", thứ không nói gì với người đang dùng app. Ba nguyên nhân
+ * thực tế đều có lối thoát cụ thể, nên nói ra chúng thay vì để người dùng đoán.
+ */
+export function daemonFailureText(error: unknown): string {
+  if (error instanceof DaemonError) return error.message;
+  if (error instanceof TypeError) {
+    return "Không nối được tới daemon. Kiểm tra: daemon đã chạy chưa " +
+      "(pnpm --filter @acad/daemon start), cổng có đúng 8788 không, và app có " +
+      "được mở qua localhost thay vì file:// không.";
+  }
+  return error instanceof Error ? error.message : String(error);
+}

@@ -1,0 +1,74 @@
+/* Style riêng của màn Thư viện block — trích từ `mau-thiet-ke/library-blocks.html`
+ * @ 82f5232.
+ *
+ * Mỗi màn hình trong bộ mẫu có một khối <style> riêng bên cạnh design system
+ * dùng chung. Những style đó KHÔNG được nhét vào `design-system.css`: chúng chỉ
+ * phục vụ một màn hình, và đưa vào hệ dùng chung là làm nó phình ra rồi lệch
+ * khỏi mẫu. Dùng CSS Module như `CadWebViewerPanel.module.css` đang làm.
+ *
+ * `.split` và `.detail` KHÔNG ở đây — chúng là bố cục dùng chung, đã có sẵn
+ * trong design system.
+ */
+
+.blockgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: var(--s4);
+}
+
+.blockcard {
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  text-align: left;
+}
+.blockcard:hover { border-color: var(--fg-55); }
+.blockcard[aria-selected="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--acc-14);
+}
+
+/* KHÔNG vẽ hình xem trước bịa. Dịch vụ block không render thumbnail, nên ô này
+   hiện TÊN định nghĩa — một hình vẽ ở đây sẽ ngụ ý máy chủ biết block trông
+   như thế nào, điều nó không biết. */
+.prev {
+  height: 96px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  padding: var(--s3);
+  text-align: center;
+}
+.prev .gl {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-55);
+  letter-spacing: 0.02em;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+.prev .np { font-size: 10px; color: var(--muted); }
+
+.meta { padding: var(--s3); display: flex; flex-direction: column; gap: 5px; }
+.n2 { font-size: 13px; font-weight: 590; }
+
+.detailPad { padding: var(--s4); display: flex; flex-direction: column; gap: var(--s4); }
+
+/* Design system ẩn pane chi tiết ở ≤1240px (`.split > .detail { display:none }`)
+   — hợp lý cho những màn có thông tin trùng ở cột trái. Ở màn này thì KHÔNG:
+   pane đó là nơi duy nhất xem được metadata và đường sang trình sửa, nên ẩn nó
+   biến việc bấm vào một block thành thao tác không có gì xảy ra.
+   Xếp chồng xuống dưới lưới thay vì ẩn. */
+@media (max-width: 1240px) {
+  :global(.split) { grid-template-rows: auto auto; }
+  :global(.split) > .detailPane {
+    display: block;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+}

@@ -25,9 +25,8 @@ import { useAcadState } from "../../features/acad-connection/useAcadState";
 import { AcadStateProvider } from "../../features/acad-connection/WriteButton";
 import { useStagedOps } from "../../features/staged-ops/store";
 import { fetchDocs, type AcadDocument } from "../../lib/daemon/docs";
+import { DAEMON_BASE } from "../../lib/daemon/endpoints";
 import { useAcadEvents } from "../../features/acad-connection/events";
-
-const DAEMON = process.env.NEXT_PUBLIC_ACAD_DAEMON || "http://127.0.0.1:8788";
 
 export function AppShell({ screen, title, sub, actions, children }: {
   /** Khớp `id` trong NAV — quyết định mục nào sáng ở rail. */
@@ -38,14 +37,14 @@ export function AppShell({ screen, title, sub, actions, children }: {
   children: ReactNode;
 }) {
   const rail = useRail();
-  const acad = useAcadState(DAEMON);
+  const acad = useAcadState(DAEMON_BASE);
   const staged = useStagedOps();
   const [docs, setDocs] = useState<AcadDocument[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const reloadDocs = useCallback(() => {
-    fetchDocs(DAEMON).then((snapshot) => setDocs(snapshot.docs)).catch(() => setDocs([]));
+    fetchDocs(DAEMON_BASE).then((snapshot) => setDocs(snapshot.docs)).catch(() => setDocs([]));
   }, []);
 
   useEffect(reloadDocs, [reloadDocs]);
@@ -53,7 +52,7 @@ export function AppShell({ screen, title, sub, actions, children }: {
   // Chỉ nghe `doc*` là không đủ: người dùng sửa bản vẽ phát `drawingModified`,
   // lưu xong phát `drawingSaved` — bỏ hai cái đó thì chấm "chưa lưu" treo ở
   // trạng thái cũ cho tới lần mở/đóng bản vẽ tiếp theo.
-  useAcadEvents(DAEMON, (event) => {
+  useAcadEvents(DAEMON_BASE, (event) => {
     if (
       event.type.startsWith("doc") ||
       event.type === "drawingModified" ||
@@ -143,7 +142,7 @@ export function AppShell({ screen, title, sub, actions, children }: {
           onClose={() => setPaletteOpen(false)}
           onOpenDrawer={() => setDrawerOpen(true)}
         />
-        <ActivityDrawer daemon={DAEMON} open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+        <ActivityDrawer daemon={DAEMON_BASE} open={drawerOpen} onClose={() => setDrawerOpen(false)} />
       </div>
     </AcadStateProvider>
   );

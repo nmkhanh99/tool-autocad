@@ -129,8 +129,25 @@ tài liệu đang hoạt động" sai ở đâu đó — đọc lại ghi chú g
 
 ### Giai đoạn 4 — `/library/blocks` và `/library/lisp`
 
-PR mẫu chốt convention cho việc migrate panel sang route. Kèm `ConfirmSheet`
-dùng chung — nó cần `Modal`/`Button`/`GuardStrip`, giờ đã có.
+**Xong:** tách `features/blocks/model.ts` (9 test); route `/library/blocks`
+bản **chỉ đọc** với CSS module riêng trích từ mẫu.
+
+**Còn lại:**
+
+- Phần **ghi** của thư viện block — tạo từ bộ chọn, chèn vào bản vẽ, đồng bộ
+  định nghĩa, sửa metadata. Cần `ConfirmSheet` dùng chung (đã có
+  `Modal`/`Button`/`GuardStrip` để dựng). Hiện những việc này vẫn ở màn hình cũ
+  và trang mới nói rõ điều đó.
+- `/library/lisp`: gom hai nơi về một (`LispLibraryPanel` + card duyệt trong
+  chat), `.countdown` 2 phút thật, guardstrip điều kiện duyệt, hiện rõ
+  `analysisCoverage`. **Giữ nguyên `askAgent()`** — budget 180 KB, cắt đôi 12
+  lần, chống prompt-injection.
+- Xoá CSS `blocklib-*` (281 dòng) và `lisp-*` (407 dòng) khỏi `globals.css` khi
+  panel cũ bị gỡ.
+
+**Ghi chú cho phiên sau:** mỗi màn hình trong mẫu có khối `<style>` riêng ngoài
+design system. Đừng nhét chúng vào `design-system.css` — dùng CSS module cạnh
+route, như `blocks.module.css` vừa làm.
 
 ---
 
