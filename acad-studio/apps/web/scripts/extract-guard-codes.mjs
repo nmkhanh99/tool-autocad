@@ -9,7 +9,7 @@
  * lạ và nhận được câu "HTTP 409".
  *
  * Mỗi mã phải rơi vào MỘT trong ba trạng thái, nếu không script fail:
- *   1. có entry trong `features/staged-ops/guards.ts` — mã người dùng gặp được,
+ *   1. có entry trong `lib/daemon/guards.ts` — mã người dùng gặp được,
  *      phải có câu giải thích và lối thoát;
  *   2. nằm trong GENERIC_CODES — lỗi lập trình hoặc lỗi giao thức, người dùng
  *      không làm gì được, hiển thị thông điệp thô là đủ;
@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 
 const webDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const daemonSrc = resolve(webDir, "../daemon/src");
-const guardsFile = join(webDir, "features/staged-ops/guards.ts");
+const guardsFile = join(webDir, "lib/daemon/guards.ts");
 
 /** Mã người dùng không hành động được: lỗi lập trình, lỗi giao thức, hoặc lỗi
  * hạ tầng đã có thông điệp riêng. Hiển thị message thô của daemon là đủ. */
@@ -79,7 +79,7 @@ if (process.argv.includes("--list")) {
 
 if (!existsSync(guardsFile)) {
   console.log(
-    `✓ guard codes: ${codes.size} mã trong daemon; chưa có features/staged-ops/guards.ts (giai đoạn 0–1)`,
+    `✓ guard codes: ${codes.size} mã trong daemon; chưa có lib/daemon/guards.ts (giai đoạn 0–1)`,
   );
   process.exit(0);
 }
@@ -113,7 +113,7 @@ assert.equal(
   0,
   `daemon phát ${missing.length} mã lỗi mà UI chưa có thái độ:\n  ` +
     missing.map((c) => `${c}  (${[...codes.get(c)].join(", ")})`).join("\n  ") +
-    "\n\nThêm entry vào features/staged-ops/guards.ts, hoặc thêm vào GENERIC_CODES" +
+    "\n\nThêm entry vào lib/daemon/guards.ts, hoặc thêm vào GENERIC_CODES" +
     " trong script này nếu người dùng thật sự không làm gì được với mã đó.",
 );
 

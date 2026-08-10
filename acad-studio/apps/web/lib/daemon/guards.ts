@@ -11,6 +11,12 @@
  * Nguyên tắc viết: nói CHUYỆN GÌ ĐÃ XẢY RA chứ không nhắc lại mã lỗi; giải
  * thích ngắn; và luôn có bước tiếp theo, kể cả khi bước đó là "chuẩn bị lại".
  * Không xin lỗi, không đổ lỗi cho người dùng.
+ *
+ * Nằm ở `lib/daemon/` chứ không ở `features/staged-ops/`: script trích mã quét
+ * **toàn bộ** daemon, nên bản đồ này nói cho cả app chứ không riêng hàng chờ
+ * hai pha. Thư viện LISP là nơi gọi thứ hai; để nó trong một feature nghĩa là
+ * feature khác phải import chéo feature, hoặc tự viết lại câu chữ cho cùng một
+ * mã — rồi hai màn hình giải thích cùng một lỗi bằng hai cách khác nhau.
  */
 export type Guard = {
   /** Một câu, thì quá khứ, mô tả điều đã xảy ra. */

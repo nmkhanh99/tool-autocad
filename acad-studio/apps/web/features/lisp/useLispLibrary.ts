@@ -42,6 +42,10 @@ export type LispCatalog = {
   refreshing: boolean;
   error: string;
   reload: (force?: boolean) => void;
+  /** Tăng mỗi lần đọc xong danh mục. Nơi gọi dùng nó để đọc lại những thứ phái
+   * sinh — cụ thể là `manifestRevision` của tài nguyên đang chọn, thứ không có
+   * trong danh mục nhưng lại đổi cùng lúc với nó. */
+  version: number;
 };
 
 export function useLispLibrary(daemon: string): LispCatalog {
@@ -52,6 +56,7 @@ export function useLispLibrary(daemon: string): LispCatalog {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [version, setVersion] = useState(0);
   /* Cùng lý do như `useBlockLibrary`: kết quả về muộn không được đè lên trạng
      thái mới hơn. Ở đây còn dễ xảy ra hơn vì `reload(true)` bắt máy chủ quét
      lại đĩa — nó chậm hơn hẳn một lượt đọc thường. */
@@ -79,6 +84,7 @@ export function useLispLibrary(daemon: string): LispCatalog {
           : EMPTY_COUNTS,
       );
       setTruncated(body.truncated === true);
+      setVersion((current) => current + 1);
     } catch (failure) {
       if (stale()) return;
       // Giữ danh sách cũ — xem lý do ở `useBlockLibrary`.
@@ -102,5 +108,6 @@ export function useLispLibrary(daemon: string): LispCatalog {
     refreshing,
     error,
     reload: (force = false) => void load(force),
+    version,
   };
 }

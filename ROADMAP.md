@@ -182,8 +182,15 @@ chuyển sang `components/ui/` — hạ tầng dùng chung, không thuộc `stag
   (a) chỉ dựng đầy đủ khi chạy trong app desktop, web thì hiện lý do; (b) dời
   cả luồng duyệt vào desktop shell; (c) đổi thiết kế bảo mật. **Chưa chốt.**
 
-  Phần chắc chắn làm được ở web: nạp script (`POST /:id/load`), quản lý thư mục
-  gốc (`/roots`), `.countdown` 2 phút thật cho token nạp.
+  **Nạp script và thư mục gốc đã xong (2026-08-10).** `ConfirmSheet` có thêm chế
+  độ `session` cho lệnh đổi phiên AutoCAD chứ không ghi bản vẽ; `guards.ts`
+  chuyển sang `lib/daemon/`.
+
+  Một mục của kế hoạch **bỏ**: `.countdown` 2 phút cho "token nạp". Mẫu vẽ nó,
+  nhưng `POST /:id/load` **không** phát token nào — nó chạy job LISP rồi trả kết
+  quả trong 15 giây. Cái có hạn 2 phút là **token duyệt** của
+  `approval-challenge`, thuộc luồng duyệt (desktop). Dựng đồng hồ đếm ngược ở
+  màn nạp là vẽ một cơ chế không tồn tại.
 
   **Giữ nguyên `askAgent()`** — budget 180 KB, cắt đôi 12 lần, chống
   prompt-injection.

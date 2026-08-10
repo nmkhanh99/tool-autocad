@@ -15,7 +15,7 @@
  */
 import { daemonRecord, DaemonError, asRecord, type JsonRecord } from "../../lib/daemon/client";
 import { endpoints } from "../../lib/daemon/endpoints";
-import { guardFor } from "./guards";
+import { guardFor } from "../../lib/daemon/guards";
 import type { PrepareRequest, StagedAction, StagedOp } from "./types";
 
 /** Mã báo rằng thứ app đang cầm đã cũ so với bản vẽ. Màn hình nhận được nên

@@ -1,5 +1,94 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 4 (phần 7): nạp script LISP · thư mục gốc
+
+Hai lệnh ghi của thư viện LISP mà **web làm được**. Duyệt manifest thì không —
+xem phần 6 và mục còn treo trong `ROADMAP.md`.
+
+### Added — nạp vào phiên AutoCAD
+
+`features/lisp/{actions.ts,LoadDialog.tsx,useLispDetail.ts}` →
+`POST /api/acad/lisp/:id/load`.
+
+**`ConfirmSheet` có chế độ thứ ba: `session`.** Nạp LISP không ghi vào bản vẽ,
+nên chế độ `immediate` là sai ở đúng một câu — nó bảo người dùng gõ `UNDO` để
+hoàn tác, mà `UNDO` **không** gỡ được mã đã nạp. Chỉ một đường thoát không tồn
+tại còn tệ hơn không chỉ. Chế độ mới nói: phiên chỉ trở lại như cũ khi đóng
+AutoCAD.
+
+Đọc `buildLibraryLoadLisp` thì "nạp" là **ba** thay đổi, không phải một, và hộp
+thoại nói đủ cả ba:
+
+1. `(load ...)` **thực thi** file — biểu thức ở mức cao nhất chạy ngay, kể cả
+   biểu thức sửa bản vẽ;
+2. thư mục được thêm vào support path (`ACAD`) của phiên;
+3. thư mục được thêm vào **`TRUSTEDPATHS`** — từ đó AutoCAD tin mã ở đó mà không
+   hỏi `SECURELOAD` nữa.
+
+Nạp **hỏng** thì LISP khôi phục cả (2) và (3); nạp **xong** thì không — chúng
+nằm lại tới khi đóng AutoCAD. Giấu (3) là giấu một thay đổi về bảo mật.
+
+Guardstrip ở đây là guardstrip **thật**: `loadable` và `reviewStatus` đọc từ
+chính danh mục mà máy chủ sẽ đọc lại, nên tick/chéo là kết luận có cơ sở. Riêng
+hàng **phụ thuộc** để `pending` — danh mục chỉ trả tên tham chiếu, còn phân giải
+tên đó ra tài nguyên nào là logic của máy chủ.
+
+`useLispDetail` tồn tại vì một lý do hẹp: danh mục **không** trả
+`manifestRevision`, mà mọi lệnh ghi đều đòi nó làm `baseRevision`. Đổi tài
+nguyên là xoá revision cũ ngay — giữ lại thì nút Nạp có thể gửi revision của tài
+nguyên trước đó, và 409 nhận được sẽ nói một lý do không dính gì tới sự thật.
+
+### Added — thư mục gốc
+
+`features/lisp/RootsDialog.tsx` → `POST /roots` và `POST /roots/import-autocad`.
+
+Khác nguồn của thư viện block ở hai chỗ dễ nhầm: đây là **thư mục** (máy chủ từ
+chối nếu là file), và thêm vào **có** tác dụng — lượt quét sau sẽ đọc nó. Chặn
+trước ba thứ đáng tin vì chúng lặp lại đúng điều kiện của `addRoot()`: rỗng,
+`~` (máy chủ không nở dấu ngã), và gốc hệ thống.
+
+"Lấy support path từ AutoCAD" là một **job LISP** đọc `ACADPREFIX`, không phải
+phép đọc cấu hình — nên cần AutoCAD mở và plugin trả lời, và nó dùng
+`WriteButton` để khoá thật khi không ghi được.
+
+### Changed — `guards.ts` chuyển sang `lib/daemon/`
+
+Script trích mã quét **toàn bộ** daemon, nên bản đồ mã-lỗi → câu chữ nói cho cả
+app chứ không riêng hàng chờ hai pha. Thư viện LISP là nơi gọi thứ hai; để nó
+trong `features/staged-ops/` nghĩa là feature khác phải import chéo feature —
+hoặc tự viết lại câu chữ cho cùng một mã, rồi hai màn hình giải thích cùng một
+lỗi bằng hai cách.
+
+Vài mã của daemon mang **tham số** (`review_required:stale`,
+`dependency_review_required:<id>:<ref>`) nên `guards.ts` tra không ra. Thêm
+`lispFailureText()` dịch chúng; có test cho cả ca tham chiếu chứa dấu hai chấm
+(`C:/lisp/common.lsp`) mà một `split(":")` ngây thơ sẽ cắt cụt.
+
+### Fixed — hộp thoại tự mâu thuẫn, và 409 lại thành ngõ cụt (Codex review, P2 ×2)
+
+- **`ConfirmSheet` chế độ `session` vẫn in câu "Ghi vào bản vẽ đang hoạt động
+  trong AutoCAD"** ngay dưới cảnh báo "không ghi vào bản vẽ". Hai câu chọi nhau
+  trong đúng một hộp thoại người dùng đang cân nhắc chuyện bảo mật. Nay chế độ
+  này nói: *áp lên phiên AutoCAD đang chạy, không bản vẽ nào bị ghi*.
+- **`useLispDetail` chỉ bám `[daemon, id]`**, nên `manifestRevision` không bao
+  giờ đọc lại khi vẫn đang chọn cùng một tài nguyên. Một thay đổi từ bên ngoài
+  là mọi lượt nạp sau đó ăn `revision_conflict` **mãi**, kể cả sau khi tải lại
+  danh mục — không có đường thoát nào trên trang ngoài chọn sang tài nguyên khác
+  rồi chọn lại. Nay `useLispLibrary` phát `version` tăng theo mỗi lượt đọc, và
+  chi tiết đọc lại theo nó.
+
+### Technical
+
+- `state: "sent"` **không** phải "đã nạp xong" — máy chủ chỉ chờ AutoCAD trong
+  15 giây. Thông báo nói đúng điều đó thay vì báo thành công.
+- 10 bất biến mới ở `test-contract.mjs`; test 43 → **47**.
+- **Chưa kiểm được bằng mắt.** Extension Chrome kẹt từ lượt trước và không hồi
+  phục kể cả sau khi đóng hết tab, tạo group mới, đổi host — mọi tab báo "error
+  page" trong khi dev server vẫn trả 200 qua `curl`. Bù bằng test cho phần dễ
+  sai nhất (giải mã lỗi) và bằng bất biến cho phần câu chữ.
+
+---
+
 ## 2026-08-10 — Giai đoạn 4 (phần 6): `/library/lisp` bản chỉ đọc
 
 ### Added

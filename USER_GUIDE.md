@@ -213,8 +213,41 @@ khi **chính app đó khởi chạy daemon**. Mở giao diện trong trình duy�
 duyệt được — đây là thiết kế bảo mật cố ý, không phải thiếu tính năng. Bản duyệt
 còn hết hạn sau **2 phút**, nên mỗi lượt phải làm liền một mạch.
 
-**Vẫn còn ở màn hình cũ:** phân tích bằng agent, duyệt manifest, nạp script,
-quản lý thư mục gốc.
+#### Nạp script vào AutoCAD
+
+Nút **Nạp vào AutoCAD** ở pane chi tiết. Chỉ nạp được script **đã duyệt** và có
+định dạng nạp được — hộp xác nhận liệt kê từng điều kiện và nói rõ cái nào chưa
+đạt.
+
+Ba điều xảy ra khi nạp, không phải một:
+
+1. **AutoCAD thực thi file ngay.** Biểu thức nào nằm ở mức cao nhất sẽ chạy
+   luôn — kể cả biểu thức sửa bản vẽ. Chỉ định nghĩa hàm thì không sao; đó là
+   điều bản duyệt phải xác nhận.
+2. Thư mục chứa mã được thêm vào **support path** của phiên.
+3. Thư mục đó được thêm vào **`TRUSTEDPATHS`** — từ đó AutoCAD tin mã trong thư
+   mục ấy mà không hỏi `SECURELOAD` nữa.
+
+Nạp hỏng thì (2) và (3) được trả lại như cũ. Nạp **xong** thì chúng nằm lại tới
+khi bạn đóng AutoCAD. **`UNDO` không gỡ được mã đã nạp.**
+
+Nếu thông báo nói "đã gửi lệnh nạp, AutoCAD chưa trả kết quả" thì lệnh mới chỉ
+tới AutoCAD — kiểm tra trong AutoCAD trước khi gõ tên lệnh.
+
+#### Thư mục gốc
+
+Nút **Thư mục gốc** ở góc trên. Đây là các thư mục mà lượt quét sẽ đọc; chưa có
+thư mục nào thì danh mục rỗng dù trên đĩa có script.
+
+- Phải là **một thư mục**, không phải file — khác với nguồn của thư viện block.
+- **Không dùng `~`**; gốc hệ thống và thư mục nhà bị từ chối vì quá rộng.
+- **Lấy support path từ AutoCAD** đọc *Support File Search Path* của AutoCAD
+  đang chạy và thêm từng đường dẫn. Cần AutoCAD mở và plugin trả lời. Đường dẫn
+  không tồn tại bị bỏ qua và đếm lại cho bạn.
+- Thêm xong phải **Quét lại đĩa** thì danh mục mới đọc thư mục mới.
+- **Không bỏ được thư mục gốc** — backend chưa có đường đó.
+
+**Vẫn còn ở màn hình cũ:** phân tích bằng agent và duyệt manifest.
 
 ### Các màn hình còn lại
 

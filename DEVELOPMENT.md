@@ -62,11 +62,13 @@ apps/web/
 │   ├── assistant/           model tin nhắn chat
 │   ├── blocks/              model + hook đọc + actions + 3 form (metadata,
 │   │                        tạo từ bộ chọn, nguồn thư viện)
-│   ├── lisp/                model + hook đọc danh mục AutoLISP
+│   ├── lisp/                model + hook đọc + actions + 2 hộp thoại
+│   │                        (nạp vào phiên, thư mục gốc)
 │   └── staged-ops/          hàng chờ hai pha
 ├── lib/                     hạ tầng dùng chung, không thuộc feature nào
 │   ├── acadState.ts         kiểu + nhãn + canWrite của trạng thái AutoCAD
-│   ├── daemon/              client, endpoints (nguồn duy nhất của URL), docs
+│   ├── daemon/              client, endpoints (nguồn duy nhất của URL), docs,
+│   │                        guards (mã lỗi daemon → câu chữ, dùng cho cả app)
 │   └── storage.ts
 └── scripts/                 guardrail + test hợp đồng
 ```

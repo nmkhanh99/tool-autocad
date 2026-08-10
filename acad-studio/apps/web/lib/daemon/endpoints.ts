@@ -58,4 +58,16 @@ export const endpoints = {
 
   /** Danh mục AutoLISP: tài nguyên + thư mục gốc + số đếm. */
   lispCatalog: (base: string) => `${trim(base)}/api/acad/lisp`,
+  /** Chi tiết một tài nguyên. Cần nó để lấy `manifestRevision` — danh mục không
+   * trả trường đó, mà mọi lệnh ghi đều đòi nó làm `baseRevision`. */
+  lispResource: (base: string, id: string) =>
+    `${trim(base)}/api/acad/lisp/${encodeURIComponent(id)}`,
+  /** Nạp resource vào PHIÊN AutoCAD đang chạy. Không ghi vào bản vẽ, nhưng đổi
+   * support path và `TRUSTEDPATHS` của phiên, và **thực thi** mã ngay. */
+  lispLoad: (base: string, id: string) =>
+    `${trim(base)}/api/acad/lisp/${encodeURIComponent(id)}/load`,
+  /** Thư mục gốc được quản lý. */
+  lispRoots: (base: string) => `${trim(base)}/api/acad/lisp/roots`,
+  /** Đọc Support File Search Path của AutoCAD đang chạy rồi thêm làm thư mục gốc. */
+  lispRootsImport: (base: string) => `${trim(base)}/api/acad/lisp/roots/import-autocad`,
 } as const;

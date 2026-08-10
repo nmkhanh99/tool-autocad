@@ -463,6 +463,64 @@ assert.match(
   /library\.truncated/,
   "phải nói ra khi danh sách bị cắt bớt",
 );
+/* Nạp LISP KHÔNG ghi vào bản vẽ, nên không được dùng `mode="immediate"` —
+ * chế độ đó bảo người dùng gõ `UNDO` để hoàn tác, mà `UNDO` không gỡ được mã đã
+ * nạp. Chỉ một đường thoát không tồn tại còn tệ hơn không chỉ. */
+assert.match(
+  stripComments(sourceAt("lisp/LoadDialog.tsx")),
+  /mode="session"/,
+  "hộp nạp LISP phải dùng chế độ session, không phải immediate",
+);
+assert.match(
+  stripComments(sourceAt("ConfirmSheet.tsx")),
+  /mode === "session"[\s\S]{0,400}?UNDO<\/code> không gỡ được/,
+  "chế độ session phải nói rõ UNDO không gỡ được",
+);
+/* Chế độ `session` không được kèm câu "ghi vào bản vẽ đang hoạt động" — nó mâu
+ * thuẫn thẳng với cảnh báo phía trên, ngay trong hộp thoại người dùng đang cân
+ * nhắc chuyện bảo mật. */
+assert.match(
+  stripComments(sourceAt("ConfirmSheet.tsx")),
+  /mode === "session" \? \([\s\S]{0,300}?Không bản vẽ nào bị ghi/,
+  "chế độ session phải nói rõ không bản vẽ nào bị ghi",
+);
+/* `manifestRevision` phải đọc lại theo mỗi lượt đọc danh mục. Bám mỗi `id` thì
+ * một thay đổi từ bên ngoài khiến mọi lượt nạp sau ăn `revision_conflict` mãi,
+ * không có đường thoát trên trang. */
+assert.match(
+  stripComments(sourceAt("lisp/useLispDetail.ts")),
+  /\}, \[daemon, id, catalogVersion\]\)/,
+  "revision chi tiết phải đọc lại khi danh mục đọc lại",
+);
+
+/* Ba thứ `load` đổi trong phiên AutoCAD, phải nói đủ: mã được THỰC THI, support
+ * path và TRUSTEDPATHS bị thêm vào. Thiếu cái thứ ba là giấu một thay đổi về
+ * BẢO MẬT — AutoCAD sẽ tin mã trong thư mục đó mà không hỏi nữa. */
+assert.match(
+  sourceAt("lisp/LoadDialog.tsx"),
+  /TRUSTEDPATHS/,
+  "hộp nạp phải nói rõ TRUSTEDPATHS bị đổi",
+);
+assert.match(
+  sourceAt("lisp/LoadDialog.tsx"),
+  /thực thi<\/strong> file ngay khi nạp/,
+  "hộp nạp phải nói rõ nạp là chạy mã",
+);
+/* Phụ thuộc: app KHÔNG phân giải được tham chiếu thành tài nguyên, đó là logic
+ * của máy chủ. Vẽ tick/chéo cho hàng đó là đoán. */
+assert.match(
+  stripComments(sourceAt("lisp/LoadDialog.tsx")),
+  /dependencies\.length \? \([\s\S]{0,200}?data-pass="pending"/,
+  "hàng phụ thuộc phải để pending — app không kiểm được",
+);
+/* Mã có tham số (`review_required:stale`) không tra được trong `guards.ts`.
+ * Không dịch thì người dùng đọc đúng chuỗi thô của daemon. */
+assert.match(
+  stripComments(sourceAt("lisp/actions.ts")),
+  /startsWith\("dependency_review_required:"\)/,
+  "phải dịch các mã lỗi mang tham số của luồng nạp",
+);
+
 /* Nút quét đĩa phải khoá theo `refreshing`, không theo `loading`: `loading` chỉ
  * đúng ở lần đọc đầu, nên dùng nó thì nút mở lại ngay và cho bấm chồng nhiều
  * lượt quét đĩa — thao tác đắt nhất màn này. Và danh sách KHÔNG được dùng

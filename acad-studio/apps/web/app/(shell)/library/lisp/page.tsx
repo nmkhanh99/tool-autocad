@@ -26,6 +26,15 @@ import { Button } from "../../../../components/ui/Button";
 import { Tag } from "../../../../components/ui/Tag";
 import { Icon } from "../../../../components/ui/icons";
 import { useLispLibrary } from "../../../../features/lisp/useLispLibrary";
+import { useLispDetail } from "../../../../features/lisp/useLispDetail";
+import { LoadDialog } from "../../../../features/lisp/LoadDialog";
+import { RootsDialog } from "../../../../features/lisp/RootsDialog";
+import {
+  addLispRoot,
+  importAutocadRoots,
+  loadResource,
+} from "../../../../features/lisp/actions";
+import { WriteButton } from "../../../../components/ui/WriteButton";
 import {
   coverageIsComplete,
   coverageLabel,
@@ -59,6 +68,16 @@ export default function LispLibraryPage() {
   const [query, setQuery] = useState("");
   const [reviewFilter, setReviewFilter] = useState("");
   const [selectedId, setSelectedId] = useState("");
+  const [loadOpen, setLoadOpen] = useState(false);
+  const [rootsOpen, setRootsOpen] = useState(false);
+  const [inFlight, setInFlight] = useState(false);
+  const [rootError, setRootError] = useState("");
+  const [rootNotice, setRootNotice] = useState("");
+  /** Kết quả lượt nạp gần nhất, gắn với tài nguyên đã sinh ra nó — cùng lý do
+   * như `notice` ở `/library/blocks`: giữ toàn cục thì thông báo cũ hiện dưới
+   * tài nguyên mới và ngụ ý thao tác vừa rồi áp lên nó. */
+  const [loadResultState, setLoadResult] =
+    useState<{ ok: boolean; id: string; text: string } | null>(null);
   const library = useLispLibrary(DAEMON_BASE);
 
   const shown = useMemo(() => {
@@ -70,6 +89,7 @@ export default function LispLibraryPage() {
 
   // Tra trong TOÀN danh mục — xem lý do ở `/library/blocks`.
   const selected = library.resources.find((r) => r.id === selectedId) || null;
+  const detail = useLispDetail(DAEMON_BASE, selectedId, library.version);
 
   return (
     <AppShell
@@ -83,6 +103,9 @@ export default function LispLibraryPage() {
               lượt quét đĩa — thứ đắt nhất trong màn này. */}
           <Button onClick={() => library.reload(true)} disabled={library.refreshing}>
             {library.refreshing ? "Đang quét…" : "Quét lại đĩa"}
+          </Button>
+          <Button onClick={() => { setRootError(""); setRootNotice(""); setRootsOpen(true); }}>
+            Thư mục gốc
           </Button>
           <Link className="btn" href="/?panel=lisp">Mở màn hình cũ để duyệt</Link>
         </>
@@ -211,7 +234,14 @@ export default function LispLibraryPage() {
         </div>
 
         <aside className="detail" aria-label="Chi tiết script" data-od-id="lisp-detail">
-          {selected ? <ResourceDetail resource={selected} /> : (
+          {selected ? (
+            <ResourceDetail
+              resource={selected}
+              notice={loadResultState?.id === selected.id ? loadResultState : null}
+              inFlight={inFlight}
+              onLoad={() => { setLoadResult(null); setLoadOpen(true); }}
+            />
+          ) : (
             <div className="pad">
               <div className="statebox" data-state="empty">
                 <strong>Chọn một script</strong>
@@ -224,11 +254,92 @@ export default function LispLibraryPage() {
           )}
         </aside>
       </div>
+
+      {loadOpen && selected ? (
+        <LoadDialog
+          resource={selected}
+          revision={detail.revision}
+          revisionLoading={detail.loading}
+          revisionError={detail.error}
+          busy={inFlight}
+          onCancel={() => setLoadOpen(false)}
+          onLoad={() => {
+            const resource = selected;
+            /* Đóng hộp thoại ngay: máy chủ chờ AutoCAD tới 15 giây và có thể
+               trả `state: "sent"` — giữ hộp chặn màn hình suốt quãng đó chắn
+               đúng lúc người ta cần nhìn sang AutoCAD. */
+            setLoadOpen(false);
+            setInFlight(true);
+            void loadResource(DAEMON_BASE, resource.id, detail.revision, "").then((result) => {
+              setInFlight(false);
+              setLoadResult({
+                ok: result.ok,
+                id: resource.id,
+                text: result.ok ? result.hint : result.error,
+              });
+              /* Quét lại: nạp xong máy chủ có thể gắn cảnh báo
+                 `staged_support_paths_added_to_autocad_session` cho tài nguyên. */
+              library.reload();
+            });
+          }}
+        />
+      ) : null}
+
+      {rootsOpen ? (
+        <RootsDialog
+          roots={library.roots}
+          busy={inFlight}
+          error={rootError}
+          notice={rootNotice}
+          onClose={() => setRootsOpen(false)}
+          onAdd={(path, label) => {
+            setRootError("");
+            setRootNotice("");
+            setInFlight(true);
+            return addLispRoot(DAEMON_BASE, path, label).then((result) => {
+              setInFlight(false);
+              if (result.ok) {
+                setRootNotice(`Đã thêm “${result.root.label}”. Quét lại để đọc thư mục này.`);
+              } else {
+                setRootError(result.error);
+              }
+              /* Tải lại dù thành công hay không: thêm gốc thành công thì danh
+                 sách phải đổi, còn hỏng vì trùng đường dẫn thì danh sách hiện
+                 tại mới là câu trả lời. */
+              library.reload();
+              return result.ok;
+            });
+          }}
+          onImport={() => {
+            setRootError("");
+            setRootNotice("");
+            setInFlight(true);
+            void importAutocadRoots(DAEMON_BASE, "").then((result) => {
+              setInFlight(false);
+              if (result.ok) {
+                setRootNotice(
+                  `Thêm ${result.added.length} thư mục` +
+                  (result.skippedCount ? `, bỏ qua ${result.skippedCount} đường dẫn không dùng được` : "") +
+                  ". Quét lại để đọc chúng.",
+                );
+              } else {
+                setRootError(result.error);
+              }
+              library.reload();
+            });
+          }}
+        />
+      ) : null}
     </AppShell>
   );
 }
 
-function ResourceDetail({ resource }: { resource: LispResource }) {
+function ResourceDetail({ resource, notice, inFlight, onLoad }: {
+  resource: LispResource;
+  notice: { ok: boolean; text: string } | null;
+  inFlight: boolean;
+  onLoad: () => void;
+}) {
   return (
     <div className="pad stack" style={{ gap: "var(--s3)" }}>
       <div>
@@ -344,10 +455,23 @@ function ResourceDetail({ resource }: { resource: LispResource }) {
         value={resource.manifest ? "đã có" : "chưa có"}
       />
 
+      {notice ? (
+        <div className="callout" data-kind={notice.ok ? undefined : "stop"}>
+          <span className="lbl">{notice.ok ? "Đã gửi lệnh nạp" : "Không nạp được"}</span>
+          <p>{notice.text}</p>
+        </div>
+      ) : null}
+
+      <div className="row" style={{ gap: "var(--s2)" }}>
+        <WriteButton variant="primary" onClick={onLoad} disabled={inFlight}>
+          {inFlight ? "Đang nạp…" : "Nạp vào AutoCAD"}
+        </WriteButton>
+      </div>
+
       <div className="callout" style={{ marginTop: "auto" }}>
         <p className="hint">
-          Chưa dựng ở đây: phân tích bằng agent, duyệt manifest, nạp script, quản
-          lý thư mục gốc.{" "}
+          Chưa dựng ở đây: phân tích bằng agent và duyệt manifest — duyệt là thao
+          tác của app desktop.{" "}
           <Link href="/?panel=lisp">Mở thư viện LISP ở màn hình cũ</Link>.
         </p>
       </div>

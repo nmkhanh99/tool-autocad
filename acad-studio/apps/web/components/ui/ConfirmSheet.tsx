@@ -32,7 +32,12 @@ export type ConfirmMode =
   /** Máy chủ đã chuẩn bị sẵn thao tác; xác nhận là ghi bản đã xem. */
   | "staged"
   /** Không có bước chuẩn bị — xác nhận là AutoCAD ghi ngay lập tức. */
-  | "immediate";
+  | "immediate"
+  /** Không chạm bản vẽ, mà đổi **phiên AutoCAD đang chạy**: nạp mã, thêm
+   * support path, sửa `TRUSTEDPATHS`. Phải tách riêng vì câu "gõ `UNDO` để
+   * hoàn tác" là SAI ở đây — `UNDO` không gỡ được mã đã nạp. Nói nhầm một
+   * đường thoát không tồn tại còn tệ hơn không nói gì. */
+  | "session";
 
 export function ConfirmSheet({
   title,
@@ -92,13 +97,24 @@ export function ConfirmSheet({
       }
     >
       <div className="stack" style={{ gap: "var(--s3)" }}>
-        <div className="callout" data-kind="stop">
-          <span className="lbl">Không hoàn tác được</span>
-          <p>
-            App không giữ lịch sử để quay lại. Cách duy nhất hoàn tác là gõ{" "}
-            <code>UNDO</code> trong AutoCAD ngay sau đó.
-          </p>
-        </div>
+        {mode === "session" ? (
+          <div className="callout" data-kind="stop">
+            <span className="lbl">Không gỡ ra được</span>
+            <p>
+              Thao tác này đổi <strong>phiên AutoCAD đang chạy</strong>, không
+              ghi vào bản vẽ. <code>UNDO</code> không gỡ được — phiên chỉ trở lại
+              như cũ khi bạn đóng AutoCAD.
+            </p>
+          </div>
+        ) : (
+          <div className="callout" data-kind="stop">
+            <span className="lbl">Không hoàn tác được</span>
+            <p>
+              App không giữ lịch sử để quay lại. Cách duy nhất hoàn tác là gõ{" "}
+              <code>UNDO</code> trong AutoCAD ngay sau đó.
+            </p>
+          </div>
+        )}
 
         {mode === "immediate" ? (
           <div className="callout" data-kind="warn">
@@ -110,7 +126,24 @@ export function ConfirmSheet({
           </div>
         ) : null}
 
-        {target ? (
+        {mode === "session" ? (
+          <div className="callout" data-kind="warn">
+            <span className="lbl">Ghi ngay, không qua hàng chờ</span>
+            <p>
+              Không có bước chuẩn bị. Bấm xác nhận là AutoCAD nạp ngay — thao tác
+              này không xuất hiện ở màn Thay đổi chờ duyệt.
+            </p>
+          </div>
+        ) : null}
+
+        {/* Chế độ `session` KHÔNG ghi vào bản vẽ nào, nên câu "ghi vào bản vẽ
+            đang hoạt động" ở đây sẽ mâu thuẫn thẳng với cảnh báo phía trên —
+            trong đúng một hộp thoại mà người dùng đang cân nhắc chuyện bảo mật. */}
+        {mode === "session" ? (
+          <p className="hint">
+            Áp lên phiên AutoCAD đang chạy. Không bản vẽ nào bị ghi.
+          </p>
+        ) : target ? (
           <div>
             <div className="eyebrow">Ghi vào bản vẽ</div>
             <div className="mono" style={{ fontSize: 12 }}>{target}</div>

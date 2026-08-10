@@ -12,6 +12,8 @@ import {
   reviewLabel,
   warningLabel,
 } from "../features/lisp/model";
+import { lispFailureText } from "../features/lisp/actions";
+import { DaemonError } from "../lib/daemon/client";
 
 test("mã lạ được trả lại nguyên văn, không nuốt thành ô trống", () => {
   // Một nhãn xấu còn tra được trong code; một ô trống thì không.
@@ -146,4 +148,44 @@ test("đủ nhãn cho mọi giá trị analysisCoverage máy chủ ghi ra", () =
     assert.notEqual(coverageLabel(coverage), coverage, `thiếu nhãn cho ${coverage}`);
   }
   assert.equal(coverageLabel("pham-vi-moi"), "pham-vi-moi");
+});
+
+/* ── Giải mã lỗi của luồng nạp ──────────────────────────────────────────────
+   Vài mã của daemon mang tham số sau dấu hai chấm, nên `guards.ts` (tra theo mã
+   trần) không khớp được. Không dịch thì người dùng đọc đúng chuỗi thô kiểu
+   `dependency_review_required:LSP-07:cty/common.lsp`. */
+
+test("mã lỗi mang tham số được dịch, không lộ chuỗi thô", () => {
+  const of = (code: string) => lispFailureText(new DaemonError(code, code, 409));
+
+  const review = of("review_required:stale");
+  assert.match(review, /Bản duyệt đã cũ/, "phải dịch cả trạng thái trong mã");
+  assert.doesNotMatch(review, /review_required:/, "không được lộ mã thô");
+
+  const dependency = of("dependency_review_required:LSP-07:cty/common.lsp");
+  assert.match(dependency, /cty\/common\.lsp/, "phải nói rõ phụ thuộc nào");
+  assert.doesNotMatch(dependency, /LSP-07:/, "không được lộ mã thô");
+
+  const unresolved = of("dependency_unresolved:cty/missing.lsp");
+  assert.match(unresolved, /cty\/missing\.lsp/);
+  assert.doesNotMatch(unresolved, /dependency_unresolved/);
+});
+
+test("tham chiếu phụ thuộc chứa dấu hai chấm không bị cắt mất", () => {
+  // `split(":")` ngây thơ sẽ cắt mất phần sau dấu hai chấm thứ ba.
+  const text = lispFailureText(
+    new DaemonError("x", "dependency_review_required:LSP-07:C:/lisp/common.lsp", 409),
+  );
+  assert.match(text, /C:\/lisp\/common\.lsp/);
+});
+
+test("mã không tham số vẫn dùng câu chữ dùng chung của guards", () => {
+  const text = lispFailureText(new DaemonError("revision_conflict", "revision_conflict", 409));
+  assert.doesNotMatch(text, /^revision_conflict$/, "phải có câu giải thích, không phải mã trần");
+  assert.ok(text.length > 20, "guard phải cho ra một câu đủ nghĩa");
+});
+
+test("mã lạ hoàn toàn vẫn ra được thông điệp của daemon", () => {
+  const text = lispFailureText(new DaemonError("Máy chủ nói gì đó", "mot_ma_moi_tinh", 500));
+  assert.ok(text.length > 0);
 });

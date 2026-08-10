@@ -62,6 +62,58 @@ createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Access-Control-Allow-Origin": "*" });
     return res.write(": stub\n\n");
   }
+  let lispRoots = globalThis.__lispRoots ||= [
+    { id: "r1", label: "Thư viện công ty", path: "/Data/lisp/cty" },
+    { id: "r2", label: "Vendor", path: "/Data/lisp/vendor" },
+  ];
+
+  if (path === "/api/acad/lisp/roots" && req.method === "GET") {
+    return send(res, 200, { ok: true, roots: lispRoots });
+  }
+  if (path === "/api/acad/lisp/roots" && req.method === "POST") {
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    return req.on("end", () => {
+      const body = JSON.parse(raw || "{}");
+      if (!String(body.path || "").startsWith("/")) {
+        return send(res, 400, { ok: false, code: "invalid_root_path", error: "invalid_root_path" });
+      }
+      const root = {
+        id: `r${lispRoots.length + 1}`,
+        label: body.label || String(body.path).split("/").filter(Boolean).pop(),
+        path: body.path,
+      };
+      globalThis.__lispRoots = [...lispRoots, root];
+      return send(res, 201, { ok: true, root });
+    });
+  }
+  if (path === "/api/acad/lisp/roots/import-autocad" && req.method === "POST") {
+    const added = [{ id: "r9", label: "AutoCAD Support · support", path: "/Data/acad/support" }];
+    globalThis.__lispRoots = [...lispRoots, ...added];
+    return send(res, 200, { ok: true, added, skippedCount: 2 });
+  }
+  const lispLoad = path.match(/^\/api\/acad\/lisp\/([^/]+)\/load$/);
+  if (lispLoad && req.method === "POST") {
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    return req.on("end", () => {
+      const body = JSON.parse(raw || "{}");
+      if (body.baseRevision !== "rev-lsp-01") {
+        return send(res, 409, {
+          ok: false, code: "revision_conflict", error: "revision_conflict",
+        });
+      }
+      return send(res, 200, { ok: true, state: "done", jobId: "stub-1" });
+    });
+  }
+  const lispOne = path.match(/^\/api\/acad\/lisp\/([^/]+)$/);
+  if (lispOne && req.method === "GET") {
+    return send(res, 200, {
+      ok: true,
+      resource: { id: decodeURIComponent(lispOne[1]), manifestRevision: "rev-lsp-01" },
+    });
+  }
+
   if (path === "/api/acad/lisp") {
     const resources = [
       {
@@ -87,8 +139,14 @@ createServer((req, res) => {
         sourceHash: "4be210dd0f7c48ab91335ce6d0aa7712bb4419aa02cf5511e7d38c9a4b1f2e6d",
         readable: true, loadable: true, loadBlockReason: null,
         commands: ["CTY-SETVARS"], functions: [], dependencies: ["cty/common.lsp"],
-        reviewStatus: "unreviewed", manifest: null,
-        warnings: ["manifest_inferred_unreviewed"],
+        reviewStatus: "approved",
+        manifest: { review: {
+          status: "approved", analysisCoverage: "full-source",
+          acknowledgedIncompleteAnalysis: false, reviewedAt: "2026-06-12T01:00:00Z",
+          reviewedBy: "user",
+          approvedSourceHash: "4be210dd0f7c48ab91335ce6d0aa7712bb4419aa02cf5511e7d38c9a4b1f2e6d",
+        } },
+        warnings: [],
       },
       {
         id: "LSP-03", name: "Bộ công cụ nội bộ (đã biên dịch)", extension: ".vlx",
@@ -108,10 +166,7 @@ createServer((req, res) => {
     return send(res, 200, {
       ok: true,
       resources,
-      roots: [
-        { id: "r1", label: "Thư viện công ty", path: "/Data/lisp/cty" },
-        { id: "r2", label: "Vendor", path: "/Data/lisp/vendor" },
-      ],
+      roots: lispRoots,
       counts: { total: 3, readable: 2, loadable: 2, reviewed: 1, needsReview: 2 },
       truncated: false,
       scanWarnings: [],
