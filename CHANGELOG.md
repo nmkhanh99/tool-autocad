@@ -54,6 +54,24 @@ hộp và người dùng tin đó là bản vẽ.
   dùng, và giám sát không thấy gì. Nay `GeometryRequestError` tách riêng: đầu vào
   sai → 400, sự cố vận hành → 500.
 
+### Technical — kiểm lại toàn bộ sau khi nạp bản plugin cuối
+
+Khởi động lại AutoCAD để nạp bản build có khoá tài liệu, trần quét, và các bản
+sửa phép chiếu, rồi chạy lại trên bản vẽ as-built: 258 đối tượng, `bounds` theo
+từng space, 103 đối tượng `a:1` (62 hình bao + 41 tim ống MLINE), handle duy
+nhất trên cả 258, mọi entity có layer, `h` (handle) và `th` (chiều cao chữ) tách
+bạch. Chặn tiêm dòng trả đúng 400 `invalid_geometry_request`.
+
+Bản kẹp `maxEntities` chỉ có tác dụng **sau khi khởi động lại daemon** — tiến
+trình đang chạy giữ code cũ, và lần kiểm đầu tiên đã cho ra kết quả đảo ngược
+đúng như hành vi cũ (`1e21` → 1 đối tượng, `0.5` → 20.000). Sau khi khởi động
+lại: `1e21` → kẹp về 100.000 trả đủ 258; `0.5` → sàn về 1 kèm `truncated`.
+
+**Hai thứ chưa kiểm được trên bản vẽ này:** trần quét 200.000 (bản vẽ chỉ có 258
+đối tượng) và bản sửa polyline khép kín (bản vẽ không có polyline có bulge trên
+mặt phẳng nghiêng — đếm được 0 trường hợp `projected-bulge`). Cả hai vẫn là sửa
+đúng theo mã nguồn, nhưng chưa có bằng chứng chạy thật.
+
 ### Fixed — polyline khép kín bị mở toác khi bulge bị chiếu phẳng (Codex review)
 
 Cờ `approx` gánh hai lý do khác nhau — cắt bớt đỉnh, và bulge không tả được sau
