@@ -10,13 +10,16 @@
  * Enter hay Space. Với sản phẩm mà mọi lệnh ghi đều không hoàn tác được, "nút
  * trông như bị khoá nhưng vẫn bấm được bằng bàn phím" là lỗ hổng thật.
  *
+ * Nằm ở `components/ui/` chứ không ở `features/`: mọi màn hình đều cần nút này,
+ * và một primitive không được phụ thuộc vào một feature cụ thể.
+ *
  * Trạng thái đọc từ **context**, không nhận qua prop: nếu nơi gọi phải tự
  * truyền `acadState`, sớm muộn sẽ có chỗ truyền nhầm hoặc quên. Không có
  * provider thì mặc định là `off` — fail-closed.
  */
 import { createContext, useContext, type ReactNode } from "react";
-import { Button, type ButtonProps } from "../../components/ui/Button";
-import { canWrite, type AcadState } from "./useAcadState";
+import { Button, type ButtonProps } from "./Button";
+import { canWrite, type AcadState } from "../../lib/acadState";
 
 const AcadStateContext = createContext<AcadState>("off");
 

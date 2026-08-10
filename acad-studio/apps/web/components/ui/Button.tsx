@@ -2,9 +2,9 @@
 
 /** Nút — primitive thuần, không biết gì về AutoCAD.
  *
- * Nút GHI vào bản vẽ không dùng trực tiếp component này mà dùng
- * `features/acad-connection/WriteButton`: khoá lệnh ghi là tri thức nghiệp vụ,
- * và một primitive dùng chung không được kéo theo cả tầng kết nối.
+ * Nút GHI vào bản vẽ không dùng trực tiếp component này mà dùng `WriteButton`
+ * bên cạnh: khoá lệnh ghi cần trạng thái kết nối AutoCAD, và tách ra giữ cho
+ * nút thường không kéo theo context nào.
  */
 import type { ButtonHTMLAttributes } from "react";
 

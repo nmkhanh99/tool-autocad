@@ -1,0 +1,114 @@
+"use client";
+
+/** Hộp xác nhận cho mọi lệnh ghi vào bản vẽ.
+ *
+ * Ba thứ nó bắt buộc phải nói, và không màn hình nào được tự viết lại:
+ *
+ *  1. **Ghi cái gì, vào bản vẽ nào.** Người dùng xác nhận một thao tác cụ thể,
+ *     không phải xác nhận chung chung.
+ *  2. **Không có hoàn tác.** App không giữ journal, không có inverse-op, không
+ *     có endpoint hoàn tác. Đường duy nhất quay lại là gõ `UNDO` trong AutoCAD.
+ *  3. **Có qua hàng chờ hay không.** Đây là chỗ dễ hiểu nhầm nhất: phần lớn
+ *     lệnh ghi là hai pha (chuẩn bị → xác nhận → ghi), nhưng vài đường như chèn
+ *     block và chèn bảng BOQ là MỘT PHA — bấm xác nhận là AutoCAD ghi ngay. Gọi
+ *     cả hai là "xác nhận" mà không phân biệt sẽ khiến người dùng tưởng còn một
+ *     bước nữa để rút lui.
+ *
+ * Ô tích xác nhận là bắt buộc và cố ý gây ma sát: một lệnh không hoàn tác được
+ * không nên chỉ cách một cú bấm nhầm.
+ */
+import { useState, type ReactNode } from "react";
+import { Modal } from "../../components/ui/Modal";
+import { Button } from "../../components/ui/Button";
+import { WriteButton } from "../../components/ui/WriteButton";
+
+export type ConfirmMode =
+  /** Máy chủ đã chuẩn bị sẵn thao tác; xác nhận là ghi bản đã xem. */
+  | "staged"
+  /** Không có bước chuẩn bị — xác nhận là AutoCAD ghi ngay lập tức. */
+  | "immediate";
+
+export function ConfirmSheet({
+  title,
+  mode,
+  target,
+  summary,
+  confirmLabel = "Xác nhận & ghi",
+  busy = false,
+  onConfirm,
+  onCancel,
+  children,
+}: {
+  title: string;
+  mode: ConfirmMode;
+  /** Bản vẽ sẽ bị ghi. Rỗng nghĩa là bản vẽ đang hoạt động. */
+  target?: string;
+  /** Một câu nói rõ thao tác chạm vào cái gì. */
+  summary: string;
+  confirmLabel?: string;
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  children?: ReactNode;
+}) {
+  const [acked, setAcked] = useState(false);
+
+  return (
+    <Modal
+      title={title}
+      sub={summary}
+      onClose={onCancel}
+      footer={
+        <>
+          <label className="check" style={{ marginRight: "auto" }}>
+            <input
+              type="checkbox"
+              checked={acked}
+              onChange={(event) => setAcked(event.target.checked)}
+            />
+            <span>Tôi đã đọc và hiểu thao tác này không hoàn tác được</span>
+          </label>
+          <Button onClick={onCancel} disabled={busy}>Bỏ qua</Button>
+          <WriteButton
+            variant="primary"
+            disabled={!acked || busy}
+            onClick={onConfirm}
+          >
+            {busy ? "Đang ghi…" : confirmLabel}
+          </WriteButton>
+        </>
+      }
+    >
+      <div className="stack" style={{ gap: "var(--s3)" }}>
+        <div className="callout" data-kind="stop">
+          <span className="lbl">Không hoàn tác được</span>
+          <p>
+            App không giữ lịch sử để quay lại. Cách duy nhất hoàn tác là gõ{" "}
+            <code>UNDO</code> trong AutoCAD ngay sau đó.
+          </p>
+        </div>
+
+        {mode === "immediate" ? (
+          <div className="callout" data-kind="warn">
+            <span className="lbl">Ghi ngay, không qua hàng chờ</span>
+            <p>
+              Thao tác này không có bước chuẩn bị. Bấm xác nhận là AutoCAD thực
+              hiện ngay — nó sẽ không xuất hiện ở màn Thay đổi chờ duyệt.
+            </p>
+          </div>
+        ) : null}
+
+        {target ? (
+          <div>
+            <div className="eyebrow">Ghi vào bản vẽ</div>
+            <div className="mono" style={{ fontSize: 12 }}>{target}</div>
+          </div>
+        ) : (
+          <p className="hint">Ghi vào bản vẽ đang hoạt động trong AutoCAD.</p>
+        )}
+
+        {children}
+      </div>
+    </Modal>
+  );
+}

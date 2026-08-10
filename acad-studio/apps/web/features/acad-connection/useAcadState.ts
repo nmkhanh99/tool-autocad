@@ -24,24 +24,8 @@ import { daemonJson } from "../../lib/daemon/client";
 import { endpoints } from "../../lib/daemon/endpoints";
 import { useAcadEvents } from "./events";
 
-export type AcadState = "on" | "busy" | "off" | "missing" | "no-plugin" | "mute";
-
-/** Nhãn dài cho pill ở titlebar, nhãn ngắn cho thanh trạng thái. Câu chữ lấy
- * nguyên từ mẫu để hai bên không lệch nhau. */
-export const ACAD_STATE_LABEL: Record<AcadState, { label: string; short: string }> = {
-  on: { label: "AutoCAD 2027 · đã nối", short: "đã nối" },
-  busy: { label: "AutoCAD đang bận", short: "bận" },
-  off: { label: "AutoCAD chưa chạy", short: "chưa chạy" },
-  missing: { label: "Chưa cài AutoCAD", short: "chưa cài" },
-  "no-plugin": { label: "Chưa cài plugin AcadBridge", short: "thiếu plugin" },
-  mute: { label: "Plugin không phản hồi", short: "plugin câm" },
-};
-
-/** Ghi được vào bản vẽ hay không. Chỉ `on` mới ghi được — `busy` cũng không,
- * vì AutoCAD đang chiếm bởi một lệnh khác. */
-export function canWrite(state: AcadState): boolean {
-  return state === "on";
-}
+import { type AcadState } from "../../lib/acadState";
+export { ACAD_STATE_LABEL, canWrite, type AcadState } from "../../lib/acadState";
 
 type StatusPayload = {
   app?: string | null;

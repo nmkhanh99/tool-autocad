@@ -1,5 +1,102 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 4 (phần 3): lệnh ghi của thư viện block
+
+### Added
+
+- `features/staged-ops/ConfirmSheet.tsx` — hộp xác nhận dùng chung cho mọi lệnh
+  ghi. Nó bắt buộc nói ba điều: ghi cái gì vào bản vẽ nào, **không có hoàn tác**,
+  và **có qua hàng chờ hay không**. Điều thứ ba là chỗ dễ hiểu nhầm nhất: phần
+  lớn lệnh ghi là hai pha, nhưng chèn block và chèn bảng BOQ là **một pha** —
+  gọi cả hai là "xác nhận" mà không phân biệt sẽ khiến người dùng tưởng còn một
+  bước nữa để rút lui. Ô tích xác nhận là bắt buộc và cố ý gây ma sát.
+- `features/blocks/actions.ts` — `insert` và `sync`, kèm `expectedRevision` để
+  máy chủ từ chối nếu người khác vừa sửa thư viện.
+- Hai nút ghi trên `/library/blocks`, dùng `WriteButton` nên bị khoá thật khi
+  AutoCAD không ở trạng thái ghi được.
+
+### Changed — sắp lại ranh giới thư mục
+
+`ConfirmSheet` ở `features/staged-ops` cần `WriteButton` ở
+`features/acad-connection` — vi phạm chính quy tắc "feature không import chéo
+feature". Trạng thái kết nối AutoCAD là **hạ tầng dùng chung**, không phải một
+feature ngang hàng, nên:
+
+- kiểu + nhãn + `canWrite` chuyển sang `lib/acadState.ts`;
+- `WriteButton` + `AcadStateProvider` chuyển sang `components/ui/`;
+- `features/acad-connection/useAcadState.ts` giữ phần *đọc* trạng thái
+  (polling, SSE, heuristic phân biệt `no-plugin` với `mute`).
+
+### Fixed — plugin: cờ dirty không được xả khi job không dùng lệnh
+
+Phát hiện khi chạy thật, không phải từ đọc code. Vẽ một đường qua
+`(command "_.CIRCLE" …)` thì chấm "chưa lưu" trên doctab đổi ngay. Vẽ bằng
+`entmake` thuần thì **không có gì xảy ra** — `docs.json` báo `dbmod=1` nhưng UI
+treo ở trạng thái cũ.
+
+Nguyên nhân: `drawingModified` chỉ được phát trong `commandEnded`. Một job LISP
+sửa bản vẽ bằng `entmake` không kết thúc lệnh nào, nên cờ dirty nằm mãi. Chính
+các job của app đi đường này.
+
+Nay nhịp watcher xả cờ khi `isQuiescent()` — điều kiện bắt buộc, xả giữa chừng
+một lệnh đang chạy sẽ báo "đã sửa" trước khi lệnh đó thật sự xong.
+
+Đã kiểm lại đúng ca hỏng sau khi nạp plugin mới: `entmake` thuần → sự kiện
+`drawingModified` phát ra, `dbmod` 0 → 1, chấm trên doctab đổi theo.
+
+### Fixed — UI hứa một việc backend không làm
+
+Codex review bắt đúng loại lỗi mà cả bộ guardrail này tồn tại để chặn. Hộp xác
+nhận `sync` của tôi viết "đè bản đang có" và "mọi thể hiện của block đổi hình
+theo". Đọc lại `blockLibraryRouter.ts`: `/blocks/sync` **đòi định nghĩa phải có
+sẵn** trong bản vẽ rồi gọi `writeCadMetadata` — nó chỉ ghi thông tin mô tả, và
+**không hề** nhập hay thay hình học.
+
+Người dùng sẽ xác nhận một thao tác nghe như phá huỷ mà thực tế không xảy ra —
+rồi tin rằng hình block đã được cập nhật.
+
+Nay: nhãn đổi thành "Đồng bộ metadata", hộp xác nhận nói rõ hình học không đổi,
+và nút bị **chặn trước** khi định nghĩa chưa có trong bản vẽ (`local_only`) kèm
+lý do, thay vì để người dùng bấm rồi nhận 409.
+
+### Fixed — hai lỗi nữa về luồng chèn
+
+- **Hộp thoại chặn màn hình đúng lúc cần sang AutoCAD.** Máy chủ chờ tới **2
+  phút** để người dùng chỉ điểm chèn *trong AutoCAD*, mà hộp xác nhận chỉ đóng
+  sau khi request trả về — nó chắn màn hình suốt quãng đó và không có đường huỷ
+  nếu lệnh treo. Nay hộp đóng ngay khi gửi lệnh, và thông báo nói rõ phải chuyển
+  sang AutoCAD cùng giới hạn 2 phút.
+- **Thông báo hiện dưới nhầm block.** Nó được giữ ở dạng toàn cục trong khi
+  người dùng đổi block đang chọn được — thông báo của thao tác cũ sẽ hiện dưới
+  định nghĩa mới và ngụ ý thao tác vừa áp lên nó. Nay thông báo gắn với `blockId`
+  đã sinh ra nó.
+
+### Fixed — và một lần tôi tự sửa quá tay
+
+- **Chặn trước dựa trên dữ liệu không đáng tin.** Tôi đã vô hiệu hoá nút Đồng bộ
+  theo `syncStatus`, viện nguyên tắc "chặn trước, không báo lỗi sau". Codex chỉ
+  ra `GET /api/acad/blocks` nhận request bằng `_req` — nó **bỏ qua mọi tham số**,
+  kể cả `target`. Danh mục là toàn cục và `syncStatus` là trạng thái lần quét
+  gần nhất, không phải trạng thái so với bản vẽ đang mở: một block `synced` với
+  bản vẽ A vẫn có thể cần ghi metadata ở bản vẽ B. Chặn theo dữ liệu như vậy làm
+  nút chết oan. Nay bỏ chặn, và hộp xác nhận nói rõ máy chủ sẽ từ chối nếu bản
+  vẽ chưa có định nghĩa. Nguyên tắc "chặn trước" chỉ đúng khi phép kiểm **đáng
+  tin**.
+- Gỡ luôn tham số `?target=` khỏi lời gọi danh mục — máy chủ không đọc nó, giữ
+  lại là ngụ ý một khả năng không tồn tại.
+- **Bấm hai lần xếp hai lệnh ghi.** Hộp thoại đóng ngay khi gửi, nhưng `insert`
+  chờ tới 2 phút; không khoá lại thì cú bấm thứ hai gửi thêm một lệnh nữa với
+  cùng `expectedRevision`. Nay có cờ đang-bay, nút đổi nhãn "Đang chờ AutoCAD…".
+
+### Technical
+
+- Bất biến mới: `ConfirmSheet` phải có cảnh báo riêng cho chế độ `immediate` và
+  câu "không hoàn tác được"; `features/blocks/actions.ts` không được nhắc tới
+  `staged-ops` (bỏ comment trước khi đếm); hộp xác nhận sync phải nói "hình học
+  không đổi" và không được chứa lời hứa thay hình học.
+
+---
+
 ## 2026-08-10 — Xác minh `dbmod` trên AutoCAD thật
 
 Plugin AcadBridge đã build và **nạp vào AutoCAD 2027**. Đây là thứ duy nhất của

@@ -1,13 +1,14 @@
 "use client";
 
-/** Thư viện block — bản chỉ đọc.
+/** Thư viện block.
  *
- * Màn hình này duyệt và tra cứu định nghĩa block. Nó **không** cấp đường ghi
- * nào: tạo block từ bộ chọn, chèn vào bản vẽ, đồng bộ định nghĩa và sửa
- * metadata vẫn nằm ở màn hình cũ cho tới khi được dựng lại ở đây.
+ * Duyệt, tra cứu, và hai lệnh ghi: **chèn vào bản vẽ** và **đồng bộ định nghĩa**.
+ * Cả hai là MỘT PHA — máy chủ không có bước chuẩn bị cho chúng, nên chúng không
+ * đi qua hàng chờ Thay đổi và `ConfirmSheet` phải nói rõ điều đó.
  *
- * Nói thẳng điều đó trên trang thay vì vẽ nút rồi để nó không làm gì. Trang có
- * liên kết sang màn hình cũ ngay tại chỗ người dùng cần.
+ * Chưa dựng lại ở đây: tạo block từ bộ chọn, sửa metadata, quản lý thư mục
+ * nguồn. Trang nói thẳng và có liên kết sang màn hình cũ, thay vì vẽ nút rồi để
+ * nó không làm gì.
  *
  * Hai điểm bám theo bộ mẫu, cố ý:
  *
@@ -20,7 +21,10 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "../../../../components/shell/AppShell";
 import { Tag } from "../../../../components/ui/Tag";
+import { WriteButton } from "../../../../components/ui/WriteButton";
 import { Icon } from "../../../../components/ui/icons";
+import { ConfirmSheet } from "../../../../features/staged-ops/ConfirmSheet";
+import { runBlockAction } from "../../../../features/blocks/actions";
 import { useBlockLibrary } from "../../../../features/blocks/useBlockLibrary";
 import {
   blockMatches,
@@ -46,7 +50,15 @@ export default function BlocksLibraryPage() {
   const [query, setQuery] = useState("");
   const [syncFilter, setSyncFilter] = useState("");
   const [selectedId, setSelectedId] = useState("");
-  const library = useBlockLibrary(DAEMON_BASE, "");
+  const [pending, setPending] = useState<"insert" | "sync" | null>(null);
+  /* Thông báo phải gắn với BLOCK đã sinh ra nó. Giữ nó ở dạng toàn cục thì khi
+     người dùng chọn block khác, thông báo cũ hiện dưới block mới và ngụ ý thao
+     tác vừa rồi áp lên định nghĩa đó. */
+  const [notice, setNotice] = useState<{ ok: boolean; blockId: string; text: string } | null>(null);
+  /** Lệnh đang bay. `insert` chờ tới 2 phút, nên không khoá lại thì một cú bấm
+   * thứ hai sẽ xếp thêm một lệnh ghi nữa với cùng `expectedRevision`. */
+  const [inFlight, setInFlight] = useState(false);
+  const library = useBlockLibrary(DAEMON_BASE);
 
   const shown = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("vi");
@@ -147,18 +159,89 @@ export default function BlocksLibraryPage() {
           aria-label="Chi tiết block"
           data-od-id="blocks-detail"
         >
-          {selected ? <BlockDetail block={selected} /> : (
+          {selected ? (
+            <BlockDetail
+              block={selected}
+              notice={notice?.blockId === selected.id ? notice : null}
+              inFlight={inFlight}
+              onAction={(action) => { setNotice(null); setPending(action); }}
+            />
+          ) : (
             <div className={styles.detailPad}>
               <p className="hint">Chọn một định nghĩa để xem chi tiết.</p>
             </div>
           )}
         </aside>
       </div>
+
+      {pending && selected ? (
+        <ConfirmSheet
+          title={pending === "insert" ? "Chèn block vào bản vẽ" : "Đồng bộ metadata block"}
+          mode="immediate"
+          summary={pending === "insert"
+            ? `Chèn “${selected.displayName}” (${selected.technicalName}) vào bản vẽ đang hoạt động.`
+            : `Ghi thông tin mô tả của “${selected.technicalName}” lên định nghĩa đã có trong bản vẽ.`}
+          confirmLabel={pending === "insert" ? "Chèn ngay" : "Ghi metadata ngay"}
+          onCancel={() => setPending(null)}
+          onConfirm={() => {
+            const action = pending;
+            const block = selected;
+            /* Đóng hộp thoại NGAY khi gửi lệnh, không đợi máy chủ trả về.
+               Với `insert`, máy chủ chờ tới 2 phút để người dùng chỉ điểm chèn
+               TRONG AutoCAD — giữ một hộp thoại chặn màn hình suốt quãng đó là
+               chắn đúng lúc người ta cần sang cửa sổ khác, và không có đường
+               huỷ nếu lệnh treo. */
+            setPending(null);
+            setInFlight(true);
+            setNotice({
+              ok: true,
+              blockId: block.id,
+              text: action === "insert"
+                ? "Đã gửi lệnh. Chuyển sang cửa sổ AutoCAD để chỉ điểm chèn — lệnh chờ tối đa 2 phút."
+                : "Đang ghi metadata…",
+            });
+            void runBlockAction(DAEMON_BASE, action, {
+              blockId: block.id,
+              target: "",
+              expectedRevision: library.revision,
+            }).then((result) => {
+              setNotice({
+                ok: result.ok,
+                blockId: block.id,
+                text: result.ok ? result.hint : result.error,
+              });
+              setInFlight(false);
+              if (result.ok) library.reload();
+            });
+          }}
+        >
+          {pending === "insert" ? (
+            <p className="hint">
+              AutoCAD sẽ chờ bạn <b>chỉ điểm chèn</b> trong cửa sổ của nó. Chuyển
+              sang AutoCAD ngay sau khi xác nhận — lệnh chờ có giới hạn thời gian.
+            </p>
+          ) : (
+            <p className="hint">
+              Chỉ ghi <b>metadata</b> — tên, mô tả, nhóm, thẻ — lên định nghĩa
+              block đã có trong bản vẽ. <b>Hình học của block không đổi</b>, và
+              không thể hiện nào của nó bị vẽ lại. Muốn đổi hình thì phải chèn
+              lại định nghĩa từ thư viện.
+              {" "}Nếu bản vẽ hiện tại chưa có định nghĩa này, máy chủ sẽ từ chối
+              và bảo bạn dùng <b>Chèn vào bản vẽ</b> trước.
+            </p>
+          )}
+        </ConfirmSheet>
+      ) : null}
     </AppShell>
   );
 }
 
-function BlockDetail({ block }: { block: BlockDefinition }) {
+function BlockDetail({ block, notice, inFlight, onAction }: {
+  block: BlockDefinition;
+  notice: { ok: boolean; blockId: string; text: string } | null;
+  inFlight: boolean;
+  onAction: (action: "insert" | "sync") => void;
+}) {
   return (
     <div className={styles.detailPad}>
       <div>
@@ -185,11 +268,29 @@ function BlockDetail({ block }: { block: BlockDefinition }) {
         </div>
       ) : null}
 
+      {notice ? (
+        <div className="callout" data-kind={notice.ok ? undefined : "stop"}>
+          <span className="lbl">{notice.ok ? "Đã gửi lệnh" : "Không thực hiện được"}</span>
+          <p>{notice.text}</p>
+        </div>
+      ) : null}
+
+      <div className="row" style={{ gap: "var(--s2)", flexWrap: "wrap" }}>
+        <WriteButton variant="primary" onClick={() => onAction("insert")} disabled={inFlight}>
+          {inFlight ? "Đang chờ AutoCAD…" : "Chèn vào bản vẽ"}
+        </WriteButton>
+        {/* KHÔNG chặn theo `syncStatus`: danh mục là toàn cục, không theo bản
+            vẽ đang mở (xem ghi chú trong useBlockLibrary). Chặn theo dữ liệu
+            không đáng tin còn tệ hơn để máy chủ từ chối kèm lý do rõ ràng. */}
+        <WriteButton onClick={() => onAction("sync")} disabled={inFlight}>
+          Đồng bộ metadata
+        </WriteButton>
+      </div>
+
       <div className="callout" style={{ marginTop: "auto" }}>
         <p className="hint">
-          Màn hình này chỉ đọc. Chèn block vào bản vẽ, tạo từ bộ chọn, đồng bộ
-          định nghĩa và sửa metadata vẫn ở màn hình cũ — đó là các lệnh ghi và
-          chúng chưa được dựng lại ở đây.{" "}
+          Chưa dựng ở đây: tạo block từ bộ chọn, sửa metadata, quản lý thư mục
+          nguồn.{" "}
           <Link href="/?panel=blocks">Mở thư viện ở màn hình cũ</Link>.
         </p>
       </div>

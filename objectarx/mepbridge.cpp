@@ -76,6 +76,10 @@ static const uint64_t gDocumentNonce =
 static uint64_t gNextDocumentInstance = 1;
 static std::map<const AcApDocument*, std::string> gDocumentInstances;
 static std::map<const AcDbDatabase*, uint64_t> gDatabaseRevisions;
+// Ban ve co thay doi chua duoc bao cho app. DB reactor bat co nay; `commandEnded`
+// hoac nhip watcher xa no. Khai o day (khong phai canh cac reactor) vi nhip
+// watcher nam TRUOC khoi reactor trong file nay.
+static bool gDirty = false;
 // Revision tai lan luu gan nhat. So sanh voi gDatabaseRevisions cho ra
 // "da sua ke tu lan luu" — thu ma AcApDocument khong co accessor nao.
 static std::map<const AcDbDatabase*, uint64_t> gSavedRevisions;
@@ -1847,6 +1851,24 @@ static void fsCallback(ConstFSEventStreamRef, void*, size_t, void*,
         execNativeJob(readAll(gNativePath));   // vẽ C++ thuần, khong LISP/SECURELOAD
     }
     mepRawOnWatchTick();   // ObjectARX raw catalog (raw.job → raw.done)
+
+    // Xa co dirty khi khong con lenh nao chay.
+    //
+    // Binh thuong `commandEnded` lam viec nay. Nhung mot job LISP sua ban ve
+    // bang `entmake` thuan (khong goi `command`) thi KHONG co lenh nao ket thuc,
+    // nen co dirty nam mai va app khong bao gio biet ban ve da doi — cham "chua
+    // luu" tren doctab treo o trang thai cu. Chinh cac job cua app di duong nay.
+    //
+    // `isQuiescent()` la dieu kien bat buoc: xa giua chung mot lenh dang chay se
+    // bao "da sua" truoc khi lenh do that su xong.
+    if (gDirty && acDocManager) {
+        AcApDocument* cur = acDocManager->curDocument();
+        if (cur && cur->isQuiescent()) {
+            gDirty = false;
+            writeDocs();
+            emitEvent("drawingModified", "");
+        }
+    }
     // Primary job.lsp
     if (stat(gJobPath.c_str(), &st) == 0 && tsChanged(st.st_mtimespec, gJobMtime)) {
         gJobMtime = st.st_mtimespec;
@@ -2642,7 +2664,6 @@ static void highlightLayer(AcApDocument* pDoc, const std::string& layer) {
 }
 
 // ============================ reactors: su kien realtime -> app ============================
-static bool gDirty = false;
 static void attachDbReactor();   // forward
 static void detachDbReactor();
 

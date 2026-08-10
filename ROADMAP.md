@@ -136,12 +136,15 @@ khoảng **21–33 ngày công**, tính riêng ngoài 95–140 ngày front-end.
 **Xong:** tách `features/blocks/model.ts` (9 test); route `/library/blocks`
 bản **chỉ đọc** với CSS module riêng trích từ mẫu.
 
+**Xong tiếp (2026-08-10):** `ConfirmSheet` dùng chung; hai lệnh ghi một pha
+`insert` / `sync` trên `/library/blocks`; sắp lại ranh giới (`lib/acadState.ts`
++ `components/ui/WriteButton`).
+
 **Còn lại:**
 
-- Phần **ghi** của thư viện block — tạo từ bộ chọn, chèn vào bản vẽ, đồng bộ
-  định nghĩa, sửa metadata. Cần `ConfirmSheet` dùng chung (đã có
-  `Modal`/`Button`/`GuardStrip` để dựng). Hiện những việc này vẫn ở màn hình cũ
-  và trang mới nói rõ điều đó.
+- Phần ghi còn thiếu của thư viện block: **tạo từ bộ chọn**, **sửa metadata**,
+  **quản lý thư mục nguồn**. Ba việc này cần form nhập liệu, nặng hơn hai lệnh
+  vừa làm. Hiện vẫn ở màn hình cũ và trang mới nói rõ.
 - `/library/lisp`: gom hai nơi về một (`LispLibraryPanel` + card duyệt trong
   chat), `.countdown` 2 phút thật, guardstrip điều kiện duyệt, hiện rõ
   `analysisCoverage`. **Giữ nguyên `askAgent()`** — budget 180 KB, cắt đôi 12

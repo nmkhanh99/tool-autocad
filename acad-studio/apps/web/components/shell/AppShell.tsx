@@ -22,7 +22,7 @@ import { Statusbar } from "./Statusbar";
 import { Titlebar } from "./Titlebar";
 import { useRail } from "./useRail";
 import { useAcadState } from "../../features/acad-connection/useAcadState";
-import { AcadStateProvider } from "../../features/acad-connection/WriteButton";
+import { AcadStateProvider } from "../ui/WriteButton";
 import { useStagedOps } from "../../features/staged-ops/store";
 import { fetchDocs, type AcadDocument } from "../../lib/daemon/docs";
 import { DAEMON_BASE } from "../../lib/daemon/endpoints";

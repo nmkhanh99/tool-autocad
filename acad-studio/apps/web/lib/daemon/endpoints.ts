@@ -45,4 +45,8 @@ export const endpoints = {
   blocks: (base: string) => `${trim(base)}/api/acad/blocks`,
   /** Thư mục nguồn mà thư viện quét để tìm định nghĩa block. */
   blockSources: (base: string) => `${trim(base)}/api/acad/blocks/sources`,
+  /** Lệnh GHI của thư viện block. Một pha: gọi là AutoCAD làm ngay, không có
+   * bước chuẩn bị và không đi qua hàng chờ Thay đổi. */
+  blockAction: (base: string, action: "insert" | "sync") =>
+    `${trim(base)}/api/acad/blocks/${action}`,
 } as const;

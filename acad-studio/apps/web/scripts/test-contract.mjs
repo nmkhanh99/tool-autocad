@@ -238,6 +238,47 @@ assert.equal(
   "chỉ lib/daemon/endpoints.ts được đọc biến môi trường địa chỉ daemon",
 );
 
+/* Lệnh ghi MỘT PHA phải nói rõ là nó không qua hàng chờ. `/blocks/insert` và
+ * `/blocks/sync` không có bước chuẩn bị phía máy chủ; gọi chúng là "xác nhận"
+ * mà không phân biệt sẽ khiến người dùng tưởng còn một bước nữa để rút lui. */
+assert.match(
+  sourceAt("ConfirmSheet.tsx"),
+  /mode === "immediate"[\s\S]*?Ghi ngay, không qua hàng chờ/,
+  "ConfirmSheet phải cảnh báo riêng cho lệnh ghi một pha",
+);
+assert.match(
+  sourceAt("ConfirmSheet.tsx"),
+  /không hoàn tác được/,
+  "ConfirmSheet phải nói rõ không có hoàn tác",
+);
+assert.match(
+  sourceAt("blocks/page.tsx"),
+  /mode="immediate"/,
+  "thư viện block ghi một pha — phải dùng đúng chế độ cảnh báo",
+);
+/* `/blocks/sync` CHỈ ghi metadata lên một định nghĩa đã có trong bản vẽ
+ * (`writeCadMetadata`); nó không nhập và không thay hình học. Mô tả nó là "đồng
+ * bộ định nghĩa" là hứa một việc backend không làm — đúng loại lỗi cả bộ
+ * guardrail này tồn tại để chặn. */
+assert.match(
+  sourceAt("blocks/page.tsx"),
+  /Hình học của block không đổi/,
+  "hộp xác nhận sync phải nói rõ hình học không đổi",
+);
+assert.doesNotMatch(
+  stripComments(sourceAt("blocks/page.tsx")),
+  /đè bản đang có|đổi hình theo/,
+  "không được hứa sync thay hình học block",
+);
+/* Thao tác của thư viện block KHÔNG được đi qua hàng chờ: máy chủ không có
+ * bước chuẩn bị cho chúng, nên một op staged cho hai verb này chỉ là ý định
+ * trong localStorage. */
+assert.doesNotMatch(
+  stripComments(sourceAt("blocks/actions.ts")),
+  /staged-ops/,
+  "blocks/insert và blocks/sync không được đưa vào hàng chờ",
+);
+
 /* Một EventSource duy nhất, và ở đúng chỗ. Chỉ đếm "= 1" thì không đủ: hôm
  * trước nó đã bằng 1 khi còn nằm trong page.tsx, nên tiêu chí đó pass mà không
  * đo được gì. Nhiều instance nghĩa là mỗi panel tự mở một kết nối SSE riêng. */
