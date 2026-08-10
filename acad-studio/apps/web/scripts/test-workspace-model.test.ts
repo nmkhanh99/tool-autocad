@@ -22,11 +22,13 @@ import {
   entityExtent,
   fidelityNote,
   fidelityOf,
+  kindLabel,
   fitViewBox,
   ellipsePath,
   layersOf,
   pathDataOf,
   polylinePath,
+  shapeLabel,
   spaceOrder,
   unionExtent,
   viewBoxToString,
@@ -384,7 +386,39 @@ test("gộp nét nối nhiều hình vào một chuỗi d", () => {
 
 test("chữ và block không gộp được — nơi gọi phải tự dựng phần tử riêng", () => {
   assert.equal(pathDataOf(entity({ k: "text", p: [0, 0], txt: "x" }), 1), "");
+  assert.equal(pathDataOf(entity({ k: "mtext", p: [0, 0] }), 1), "");
   assert.equal(pathDataOf(entity({ k: "insert", p: [0, 0] }), 1), "");
+});
+
+test("chữ nhiều dòng vẫn có khung bao và vẫn đếm được layer", () => {
+  /* `mtext` không có hình học nào ngoài điểm neo — nhưng nó VẼ RA, nên phải
+     nằm trong khung bao và trong bảng layer như mọi thứ khác. */
+  const mt = { ...entity({ k: "mtext", l: "0-TEXT", p: [5, 7] }), lines: ["a", "b"] };
+  assert.deepEqual(entityExtent(mt), [5, 7, 5, 7]);
+  assert.deepEqual(layersOf([mt]), [{ name: "0-TEXT", count: 1 }]);
+});
+
+test("khối chữ đã bung không được gọi là vùng gạch", () => {
+  /* MTEXT đi qua `explodeFragments` ra `k:"multi"` — cùng kiểu với HATCH. Gọi
+     chung một tên là inspector mô tả sai chính thứ người dùng vừa bấm. */
+  const mtext = { ...entity({ k: "multi", t: "MTEXT", p: [0, 0] }), lines: ["GHI CHÚ"] };
+  const hatch = { ...entity({ k: "multi", t: "HATCH" }), g: [entity({ k: "line", p: [0, 0, 1, 1] })] };
+  const captured = entity({ k: "multi", t: "MULTILEADER", a: 1, aw: "worlddraw" });
+  assert.equal(shapeLabel(mtext), "Chữ nhiều dòng");
+  assert.equal(shapeLabel(hatch), "Vùng gạch");
+  assert.equal(shapeLabel(captured), "Hình do AutoCAD vẽ");
+  assert.equal(shapeLabel(entity({ k: "circle" })), kindLabel("circle"));
+  /* Và phải có điểm để phóng tới. */
+  assert.deepEqual(entityExtent(mtext), [0, 0, 0, 0]);
+});
+
+test("VIEWPORT là một hình chữ nhật thật, không phải hình bao", () => {
+  /* Cái nhìn thấy trên giấy LÀ khung của viewport. Đánh dấu gần đúng chỉ khi
+     nó bị cắt theo một hình không phải chữ nhật. */
+  const vp = entity({ k: "poly", t: "VIEWPORT", p: [0, 0, 10, 0, 10, 5, 0, 5], closed: true });
+  assert.equal(fidelityOf(vp), "exact");
+  assert.equal(fidelityOf({ ...vp, a: 1, aw: "viewport-clipped" }), "reduced");
+  assert.match(fidelityNote({ ...vp, a: 1, aw: "viewport-clipped" }), /biên ngoài/);
 });
 
 test("đường tròn thành path phải khép kín thành vòng", () => {

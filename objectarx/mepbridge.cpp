@@ -2365,6 +2365,238 @@ private:
     double                mDeviation;
 };
 
+/* --- Chu: can le va dinh dang -------------------------------------------- */
+
+/** Neo NGANG cho SVG: `start` | `middle` | `end`.
+ *
+ * AutoCAD giu can le trong `horizontalMode`, va khi no khac `kTextLeft` thi
+ * diem ve THAT nam o `alignmentPoint()`, khong phai `position()`. Xuat
+ * `position()` cho mot dong chu can phai la ve no lech di ca chieu dai dong —
+ * lech cang nhieu khi dong cang dai, nen doc len trong nhu chu bi "troi". */
+static const char* horzAnchor(AcDb::TextHorzMode mode) {
+    switch (mode) {
+        case AcDb::kTextCenter:
+        case AcDb::kTextMid:    return "middle";
+        case AcDb::kTextRight:  return "end";
+        default:                return "start";
+    }
+}
+
+/** Neo DOC theo quy uoc SVG `dominant-baseline`. */
+static const char* vertAnchor(AcDb::TextVertMode mode) {
+    switch (mode) {
+        case AcDb::kTextBottom:  return "text-after-edge";
+        case AcDb::kTextVertMid: return "central";
+        case AcDb::kTextTop:     return "text-before-edge";
+        default:                 return "alphabetic";
+    }
+}
+
+/** Mot diem ma Unicode thanh UTF-8. */
+static void appendCodePoint(std::string& out, unsigned c) {
+    if (c < 0x80) out += (char)c;
+    else if (c < 0x800) { out += (char)(0xC0 | (c >> 6)); out += (char)(0x80 | (c & 0x3F)); }
+    else if (c < 0x10000) {
+        out += (char)(0xE0 | (c >> 12)); out += (char)(0x80 | ((c >> 6) & 0x3F));
+        out += (char)(0x80 | (c & 0x3F));
+    } else {
+        out += (char)(0xF0 | (c >> 18)); out += (char)(0x80 | ((c >> 12) & 0x3F));
+        out += (char)(0x80 | ((c >> 6) & 0x3F)); out += (char)(0x80 | (c & 0x3F));
+    }
+}
+
+/** Doi ma `%%` cua AutoCAD thanh ky tu that.
+ *
+ * `%%d` `%%c` `%%p` la do, duong kinh, cong-tru — ba ky hieu co mat o gan nhu
+ * moi ban ve ky thuat. `%%u` `%%o` `%%k` chi bat/tat gach chan, gach tren,
+ * gach ngang: khong co noi dung, bo di.
+ *
+ * Khong lam thi mot nhan "%%c110" hien ra dung nhu vay tren man hinh, va ky su
+ * doc ra mot chuoi rac thay vi mot ky hieu. Da gap that trong ban ve as-built
+ * cua du an: `%%UKY HIEU`. */
+static std::string decodeTextCodes(const std::string& raw) {
+    std::string out;
+    for (size_t i = 0; i < raw.size(); ++i) {
+        if (raw[i] == '%' && i + 2 < raw.size() && raw[i + 1] == '%') {
+            const char next = raw[i + 2];
+            // Dang SO: `%%176` la ma ky tu. Nuot `%%1` roi bo lai "76" se doi
+            // tham lang mot ghi chu thanh mot con so khac han.
+            if (next >= '0' && next <= '9') {
+                unsigned value = 0;
+                size_t j = i + 2;
+                for (int k = 0; k < 3 && j < raw.size() && raw[j] >= '0' && raw[j] <= '9'; ++k, ++j) {
+                    value = value * 10u + (unsigned)(raw[j] - '0');
+                }
+                appendCodePoint(out, value);
+                i = j - 1;
+                continue;
+            }
+            const char code = (char)tolower((unsigned char)next);
+            if (code == 'd')      { appendCodePoint(out, 0x00B0); i += 2; continue; }  // do
+            if (code == 'c')      { appendCodePoint(out, 0x2300); i += 2; continue; }  // duong kinh
+            if (code == 'p')      { appendCodePoint(out, 0x00B1); i += 2; continue; }  // cong tru
+            if (code == '%')      { out += '%';                   i += 2; continue; }
+            if (code == 'u' || code == 'o' || code == 'k') { i += 2; continue; }  // bat/tat gach
+            // Ma la: GIU NGUYEN. Nuot mot thu khong hieu la xoa noi dung that
+            // ma khong ai biet da xoa gi.
+            out += raw[i];
+            continue;
+        }
+        out += raw[i];
+    }
+    return out;
+}
+
+/** Bo ma dinh dang cua MTEXT, va tach dong.
+ *
+ * MTEXT khong phai chuoi thuan: no mang ma dieu khien ngay trong noi dung —
+ * `\P` xuong dong, `{...}` nhom, `\f...;` doi font, `\H2x;` doi co,
+ * `\S1^2;` phan so xep chong, `\C1;` doi mau... Xuat nguyen chuoi ra man hinh
+ * thi nguoi dung doc duoc ca ma dieu khien lan noi dung, tron vao nhau.
+ *
+ * Bo ma chu KHONG dung lai dinh dang: mot the `<text>` khong the vua dam vua
+ * nghieng vua co phan so long nhau ma van la mot the. Doi lay: doc duoc dung
+ * chu, dung so, dung so dong. Do la thu ky su can o mot khung xem.
+ */
+static std::vector<std::string> mtextLines(const std::string& raw, size_t maxChars,
+                                           bool* cutOut = nullptr) {
+    if (cutOut) *cutOut = false;
+    std::vector<std::string> lines;
+    std::string cur;
+    size_t total = 0;
+    for (size_t i = 0; i < raw.size(); ++i) {
+        // Tran kiem O DAY, mot cho duy nhat. Truoc day chi kiem o nhanh chu
+        // thuong, nen mot phan so xep chong dai hay mot chuoi `\P` lien tiep di
+        // vong qua tran: payload phinh ra va trinh duyet phai dung hang nghin
+        // the <tspan> cho mot doi tuong.
+        //
+        // Nhung KHONG dung giua mot ky tu nhieu byte: `total` dem BYTE, ma chu
+        // tieng Viet moi ky tu 2-3 byte. Cat giua chung cho ra UTF-8 hong, va
+        // ca phan hoi JSON thanh khong doc duoc. Byte tiep theo la byte NOI
+        // (`10xxxxxx`) thi con dang giua mot ky tu — di tiep cho het.
+        if (total >= maxChars && ((unsigned char)raw[i] & 0xC0) != 0x80) {
+            if (cutOut) *cutOut = true;
+            break;
+        }
+        const char c = raw[i];
+        if (c == '\\' && i + 1 < raw.size()) {
+            const char code = raw[i + 1];
+            if (code == 'P' || code == 'p') {
+                // `\P` xuong dong. `\p...;` la dinh dang doan — cung ket thuc
+                // bang `;` nen phai phan biet bang ky tu ngay sau.
+                // Xuong dong CUNG tinh vao tran: mot dong moi la mot the
+                // <tspan> nua, va no khong he re hon mot ky tu.
+                if (code == 'P') { lines.push_back(cur); cur.clear(); total++; i++; continue; }
+                while (i + 1 < raw.size() && raw[i + 1] != ';') i++;
+                i++;
+                continue;
+            }
+            // Doc toi chi so `i + 6` (bon chu so hex cuoi cung), nen dieu kien
+            // la `i + 6 < size`. Dat `i + 7` la bo qua chinh cai ma nam o CUOI
+            // chuoi — noi ky hieu do hay dung nhat.
+            if (code == 'U' && i + 6 < raw.size() && raw[i + 2] == '+') {
+                // `\U+00B0` — ky hieu do, mu hai, mu ba... Bo qua thi tren man
+                // hinh hien ra dung chuoi "U+00B0" giua cau.
+                unsigned value = 0;
+                bool ok = true;
+                for (int k = 0; k < 4; ++k) {
+                    const char h = raw[i + 3 + k];
+                    const int digit = (h >= '0' && h <= '9') ? h - '0'
+                                    : (h >= 'a' && h <= 'f') ? h - 'a' + 10
+                                    : (h >= 'A' && h <= 'F') ? h - 'A' + 10 : -1;
+                    if (digit < 0) { ok = false; break; }
+                    value = value * 16u + (unsigned)digit;
+                }
+                if (ok) { appendCodePoint(cur, value); i += 6; total++; continue; }
+            }
+            if (code == '\\' || code == '{' || code == '}') { cur += code; i++; total++; continue; }
+            if (code == '~') { cur += ' '; i++; total++; continue; }
+            if (code == 'S') {
+                // Phan so xep chong `\S tu ^ mau ;` — giu ca hai ve, doi dau
+                // xep chong thanh `/` de con doc duoc "1/2".
+                i += 2;
+                while (i < raw.size() && raw[i] != ';' && total < maxChars) {
+                    if (raw[i] == '^' || raw[i] == '#') { cur += '/'; total++; }
+                    else { cur += raw[i]; total++; }
+                    i++;
+                }
+                // Bo not phan con lai cua ma neu da cham tran, de vong ngoai
+                // khong doc tiep noi dung phan so nhu chu thuong.
+                while (i < raw.size() && raw[i] != ';') i++;
+                continue;
+            }
+            // Con lai (`\f \H \C \T \W \Q \A \L \l \O \o \K \k`):
+            // bo den dau ket thuc. Nhom co tham so ket thuc bang `;`.
+            i++;
+            if (i < raw.size() && strchr("fFhHcCtTwWqQaA", raw[i])) {
+                while (i < raw.size() && raw[i] != ';') i++;
+            }
+            continue;
+        }
+        if (c == '{' || c == '}') continue;   // chi la nhom, khong co noi dung
+        cur += c;
+        total++;
+    }
+    lines.push_back(cur);
+    // Bo dong rong o CUOI, giu dong rong o giua: chung la khoang cach co y.
+    while (lines.size() > 1 && lines.back().empty()) lines.pop_back();
+    for (std::string& line : lines) {
+        line = decodeTextCodes(line);
+        // Hang rao thu hai, va la hang rao duy nhat sau khi giai ma: `%%176`
+        // sinh ra byte moi ma vong tren khong dem duoc.
+        const size_t before = line.size();
+        truncateUtf8(line, maxChars);
+        if (cutOut && line.size() < before) *cutOut = true;
+    }
+    return lines;
+}
+
+/** Cac doan chu bung ra tu mot MTEXT. */
+struct MTextFragments {
+    std::vector<std::string> parts;
+    size_t limit = 0;
+    size_t used = 0;
+    bool   cut = false;
+};
+
+/** Nhan tung doan chu tu `AcDbMText::explodeFragments`.
+ *
+ * `frag` thuoc ve AutoCAD — chi doc, khong giu con tro, khong giai phong.
+ * Tra 1 de di tiep, 0 de dung.
+ *
+ * `location` la chan-trai cua chinh doan do, nen khong can neo gi: `ha`/`va`
+ * mac dinh la dung. `capsHeight` la chieu cao chu, `direction` cho goc xoay,
+ * `widthFactor` cho he so be ngang. */
+static int collectMTextFragment(AcDbMTextFragment* frag, void* param) {
+    MTextFragments* out = (MTextFragments*)param;
+    if (!frag || !out) return 0;
+    std::string body = toUtf8(frag->msText.kwszPtr());
+    if (body.empty()) return 1;
+    if (out->used >= out->limit) { out->cut = true; return 0; }
+    // Doan ĐƠN dai qua tran cung la CAT BOT. Chi bat co khi con doan tiep theo
+    // se bo sot dung truong hop chi co mot doan: chu bi cat ma man hinh trinh
+    // bay no nhu chu day du.
+    const size_t room = out->limit - out->used;
+    if (body.size() > room) out->cut = true;
+    truncateUtf8(body, room);
+    // Ngan sach con lai rot vao GIUA ky tu dau tien thi cat xong khong con byte
+    // nao: `used` khong nhich, va moi doan sau lai them mot phan tu rong. Chu
+    // tieng Viet 2-3 byte moi ky tu nen day khong phai truong hop hiem.
+    if (body.empty()) { out->cut = true; return 0; }
+    out->used += body.size();
+
+    const double height = frag->capsHeight > 0.0 ? frag->capsHeight : 1.0;
+    const double width = frag->widthFactor > 0.0 ? frag->widthFactor : 1.0;
+    out->parts.push_back(
+        "\"k\":\"text\",\"p\":[" + jsonNumber(frag->location.x) + "," +
+        jsonNumber(frag->location.y) + "]" +
+        ",\"th\":" + jsonNumber(height) +
+        ",\"rot\":" + jsonNumber(atan2(frag->direction.y, frag->direction.x)) +
+        (fabs(width - 1.0) > 1e-6 ? ",\"xs\":" + jsonNumber(width) : "") +
+        ",\"txt\":" + jsonString(body));
+    return 1;
+}
+
 /** Nho AutoCAD ve doi tuong roi bat lai nguyen thuy do hoa.
  *
  * Tra ve kieu `multi` vi mot doi tuong ra nhieu hinh. Chuoi rong nghia la
@@ -2655,33 +2887,170 @@ static std::string entityGeometryJson(AcDbEntity* ent, bool& approx, long long& 
                (approx ? ",\"aw\":\"projected-transform\"" : "");
     }
     if (AcDbText* t = AcDbText::cast(ent)) {
-        std::string body = toUtf8(t->textStringConst());
+        std::string body = decodeTextCodes(toUtf8(t->textStringConst()));
         truncateUtf8(body, kGeomMaxTextChars);
         // Goc xoay do TRONG mat phang cua chu. Phap tuyen nghieng thi goc do
         // khong dung sau khi bo Z — vi tri van dung nen van xuat, nhung phai
         // danh dau gan dung.
-        if (!planarXY(t->normal())) approx = true;
+        const bool tilted = !planarXY(t->normal());
+        if (tilted) approx = true;
         // `widthFactor` la he so BE NGANG cua kieu chu. Bo qua thi mot dong chu
         // duoc nen con 0,7 be ngang se ve ra rong hon thuc te 40%, va do la thu
         // ky su nhin de doan chu co vua o khong.
         const double widthFactor = t->widthFactor();
-        return "\"k\":\"text\",\"p\":[" + xy(t->position()) + "]" +
+        const AcDb::TextHorzMode hMode = t->horizontalMode();
+        const AcDb::TextVertMode vMode = t->verticalMode();
+        // `kTextAlign` va `kTextFit` KHAC han: o hai kieu do, `alignmentPoint()`
+        // la DIEM CUOI cua doan chua chu, khong phai mot cai neo. Lay no lam neo
+        // se dat ca dong chu bat dau tu diem cuoi — dich di tron mot doan.
+        const bool spanned = hMode == AcDb::kTextAlign || hMode == AcDb::kTextFit;
+        // Con lai: can le khac trai/duong-chan thi diem ve THAT la
+        // `alignmentPoint()`; dung `position()` la ve lech ca chieu dai dong.
+        const bool aligned = !spanned && (hMode != AcDb::kTextLeft || vMode != AcDb::kTextBase);
+        // Chu "Middle" can giua ca theo CHIEU DOC, du `verticalMode` van bao la
+        // duong chan.
+        const char* va = hMode == AcDb::kTextMid ? "central" : vertAnchor(vMode);
+        // Hai kieu tren keo/nen chu cho vua doan. Khong tai lap duoc be rong do
+        // — khong biet chu rong bao nhieu trong font cua ban ve — nen danh dau.
+        if (spanned) approx = true;
+        // CHI MOT `aw`. Hai chuoi `"aw":...` trong cung mot doi tuong JSON la
+        // hai khoa trung nhau: parser giu cai SAU, nen ly do that bi thay bang
+        // ly do khac va cau giai thich cho no thanh khong bao gio hien ra.
+        // Phep chieu sai duoc uu tien vi no anh huong den ca VI TRI.
+        const char* why = tilted ? "projected-rotation"
+                        : spanned ? "text-span-not-fitted"
+                                  : nullptr;
+        return "\"k\":\"text\",\"p\":[" + xy(aligned ? t->alignmentPoint() : t->position()) + "]" +
+               ",\"ha\":\"" + (spanned ? "start" : horzAnchor(hMode)) + "\"" +
+               ",\"va\":\"" + va + "\"" +
                ",\"th\":" + jsonNumber(t->height()) +
                ",\"rot\":" + jsonNumber(t->rotation()) +
                (fabs(widthFactor - 1.0) > 1e-6
                    ? ",\"xs\":" + jsonNumber(widthFactor) : "") +
-               (approx ? ",\"aw\":\"projected-rotation\"" : "") +
+               (why ? ",\"aw\":\"" + std::string(why) + "\"" : "") +
                ",\"txt\":" + jsonString(body);
     }
     if (AcDbMText* m = AcDbMText::cast(ent)) {
-        std::string body = toUtf8(m->contents());
-        truncateUtf8(body, kGeomMaxTextChars);
-        if (!planarXY(m->normal())) approx = true;
-        return "\"k\":\"text\",\"p\":[" + xy(m->location()) + "]" +
+        // Duong CHINH: nho AutoCAD bung MTEXT thanh tung DOAN chu, moi doan kem
+        // VI TRI THE GIOI cua no. Lam vay thi khong phai tu tinh gi ca — xuong
+        // dong theo be rong cot, can le, doi co giua dong, phan so xep chong,
+        // tat ca da nam san trong vi tri cua tung doan.
+        //
+        // Tu tach dong bang `\P` la bo mat xuong dong TU DONG theo be rong cot:
+        // mot ghi chu dai se ra dung mot dong, sai ca so dong lan chieu cao khoi.
+        MTextFragments got;
+        got.limit = kGeomMaxTextChars;
+        m->explodeFragments(collectMTextFragment, &got);
+        if (!got.parts.empty()) {
+            // Giu RIENG hai co. Dung chung mot bien `approx` roi doc lai no de
+            // chon ly do thi ly do luon ra "chieu sai", va nhanh "cat bot"
+            // khong bao gio toi duoc.
+            const bool tilted = !planarXY(m->normal());
+            // Cat bot CUNG la hinh khong day du. Khong bat `approx` thi doi
+            // tuong nay khong vao so dem `approx` cua ca phan hoi, va con so
+            // tong noi mot dang con doi tuong noi mot dang khac.
+            if (tilted || got.cut) approx = true;
+            std::string parts;
+            for (size_t i = 0; i < got.parts.size(); ++i) {
+                if (i) parts += ",";
+                parts += "{" + got.parts[i] + "}";
+            }
+            // Cum `multi` phai mang theo DANH TINH cua MTEXT, khong chi mang
+            // cac doan con: thieu `p` thi khong co diem de phong toi, thieu
+            // `lines` thi inspector goi mot doi tuong chu la "Vung gach".
+            std::string ident;
+            {
+                AcString rawIdent;
+                m->contents(rawIdent);
+                const std::vector<std::string> idLines =
+                    mtextLines(toUtf8(rawIdent.kwszPtr()), kGeomMaxTextChars);
+                ident = "[";
+                for (size_t i = 0; i < idLines.size(); ++i) {
+                    if (i) ident += ",";
+                    ident += jsonString(idLines[i]);
+                }
+                ident += "]";
+            }
+            return "\"k\":\"multi\",\"p\":[" + xy(m->location()) + "]" +
+                   ",\"lines\":" + ident +
+                   (tilted    ? ",\"aw\":\"projected-rotation\""
+                    : got.cut ? ",\"aw\":\"mtext-truncated\"" : "") +
+                   ",\"g\":[" + parts + "]";
+        }
+
+        // Du phong: khong bung duoc doan nao (chu rong, hoac AutoCAD tu choi).
+        // Tu boc ma va tach dong — dung vi tri, dung noi dung, nhung xuong dong
+        // chi theo `\P`.
+        AcString raw;
+        m->contents(raw);
+        bool linesCut = false;
+        const std::vector<std::string> lines =
+            mtextLines(toUtf8(raw.kwszPtr()), kGeomMaxTextChars, &linesCut);
+        const bool tiltedFallback = !planarXY(m->normal());
+        // Duong du phong nay chi biet xuong dong o `\P`. MTEXT co be rong cot
+        // con TU xuong dong theo be rong do, ma cho nay khong tinh duoc — nen
+        // so dong va chieu cao khoi co the sai. Luon la hinh gan dung: bao la
+        // hinh that trong khi bo cuc co the lech la dung thu khung xem nay ton
+        // tai de tranh.
+        approx = true;
+
+        // `attachment` gop ca neo ngang lan neo doc vao mot so.
+        const int at = (int)m->attachment();
+        const char* ha = (at % 3 == 2) ? "middle" : (at % 3 == 0) ? "end" : "start";
+        const char* va = at <= 3 ? "text-before-edge"
+                       : at <= 6 ? "central"
+                                 : "text-after-edge";
+
+        std::string linesJson = "[";
+        for (size_t i = 0; i < lines.size(); ++i) {
+            if (i) linesJson += ",";
+            linesJson += jsonString(lines[i]);
+        }
+        linesJson += "]";
+
+        // Khoang cach dong: he so cua AutoCAD nhan voi 5/3 chieu cao chu (quy
+        // uoc cua chinh AutoCAD cho kieu "At least"/"Exactly"). Gui he so da
+        // quy ve BOI CUA CHIEU CAO de phia ve khong phai biet quy uoc do.
+        double spacing = m->lineSpacingFactor();
+        if (!(spacing > 0.0)) spacing = 1.0;
+        return "\"k\":\"mtext\",\"p\":[" + xy(m->location()) + "]" +
                ",\"th\":" + jsonNumber(m->textHeight()) +
                ",\"rot\":" + jsonNumber(m->rotation()) +
-               (approx ? ",\"aw\":\"projected-rotation\"" : "") +
-               ",\"txt\":" + jsonString(body);
+               ",\"ha\":\"" + ha + "\"" +
+               ",\"va\":\"" + va + "\"" +
+               ",\"ls\":" + jsonNumber(spacing * 5.0 / 3.0) +
+               // Mot `aw` duy nhat, va phep chieu sai duoc uu tien vi no anh
+               // huong ca VI TRI. Hai khoa trung nhau thi parser giu cai sau.
+               // Mot `aw` duy nhat, uu tien ly do anh huong nhieu nhat.
+               (tiltedFallback ? ",\"aw\":\"projected-rotation\""
+                : linesCut     ? ",\"aw\":\"mtext-truncated\""
+                               : ",\"aw\":\"mtext-not-wrapped\"") +
+               ",\"lines\":" + linesJson;
+    }
+
+    // VIEWPORT: cai nhin thay tren giay la KHUNG cua no, va khung do la mot
+    // hinh chu nhat co tam + kich thuoc doc thang tu API. `worldDraw` cua
+    // viewport di qua co che cat theo bien — thu ma bo bat noi thang la khong
+    // lam duoc — nen no chon khong ve gi, va doi tuong roi ve hinh bao.
+    //
+    // Noi dung NHIN QUA viewport la chuyen khac han: do la hinh hoc cua Model,
+    // va man hinh da co bo chon khong gian rieng cho no.
+    if (AcDbViewport* vp = AcDbViewport::cast(ent)) {
+        const AcGePoint3d c = vp->centerPoint();
+        const double w = vp->width() / 2.0, h = vp->height() / 2.0;
+        if (w > 0.0 && h > 0.0) {
+            // Khung cat khong-chu-nhat: hinh chu nhat van la BIEN NGOAI dung,
+            // nhung khong phai duong vien that. Danh dau de man hinh noi ra.
+            const bool clipped = vp->isNonRectClipOn();
+            if (clipped) approx = true;
+            return "\"k\":\"poly\",\"p\":[" +
+                   jsonNumber(c.x - w) + "," + jsonNumber(c.y - h) + "," +
+                   jsonNumber(c.x + w) + "," + jsonNumber(c.y - h) + "," +
+                   jsonNumber(c.x + w) + "," + jsonNumber(c.y + h) + "," +
+                   jsonNumber(c.x - w) + "," + jsonNumber(c.y + h) +
+                   "],\"closed\":true" +
+                   (clipped ? ",\"aw\":\"viewport-clipped\"" : "");
+        }
     }
 
     if (AcDbMline* ml = AcDbMline::cast(ent)) {

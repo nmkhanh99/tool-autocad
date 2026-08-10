@@ -18,6 +18,7 @@ import {
   fidelityNote,
   fidelityOf,
   kindLabel,
+  shapeLabel,
   type BlockDefs,
   type GeomEntity,
 } from "./model";
@@ -45,7 +46,10 @@ export function Inspector({
           <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
             <div className="eyebrow">{entity.l}</div>
             <div style={{ fontSize: 15, fontWeight: 620, marginTop: 4 }}>
-              {entity.name ?? (entity.txt ? `"${entity.txt}"` : kindLabel(entity.k))}
+              {entity.name
+                ?? (entity.txt ? `"${entity.txt}"` : null)
+                ?? (entity.lines?.[0] ? `"${entity.lines[0]}"` : null)
+                ?? shapeLabel(entity)}
             </div>
           </div>
 
@@ -56,7 +60,7 @@ export function Inspector({
             <dt>Kiểu</dt><dd>{entity.t}</dd>
             <dt>Layer</dt><dd>{entity.l}</dd>
             <dt>Không gian</dt><dd>{entity.sp}</dd>
-            <dt>Hình vẽ ra</dt><dd>{kindLabel(entity.k)} · {fidelityLabel(fidelityOf(entity, blocks))}</dd>
+            <dt>Hình vẽ ra</dt><dd>{shapeLabel(entity)} · {fidelityLabel(fidelityOf(entity, blocks))}</dd>
             {entity.name && blocks[entity.name]?.length ? (
               <><dt>Trong block</dt><dd>{blocks[entity.name].length} đối tượng</dd></>
             ) : null}
@@ -66,6 +70,9 @@ export function Inspector({
                 một con số sai mà trông vẫn hợp lệ: 90° hiện thành "1.5708°". */}
             {entity.rot ? (<><dt>Góc xoay</dt><dd>{degrees(entity.rot).toFixed(2)}°</dd></>) : null}
             {entity.th ? (<><dt>Cao chữ</dt><dd>{entity.th}</dd></>) : null}
+            {entity.lines && entity.lines.length > 1 ? (
+              <><dt>Số dòng</dt><dd>{entity.lines.length}</dd></>
+            ) : null}
             {entity.r ? (<><dt>Bán kính</dt><dd>{entity.r}</dd></>) : null}
             {entity.p && entity.k !== "poly" ? (
               <><dt>Toạ độ</dt><dd>{entity.p[0]?.toFixed(2)}, {entity.p[1]?.toFixed(2)}</dd></>

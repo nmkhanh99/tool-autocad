@@ -444,10 +444,23 @@ function Shape({
         </g>
       );
     }
+    case "mtext":
     case "text": {
       const p = entity.p ?? [];
       if (p.length < 2) return null;
       const size = entity.th && entity.th > 0 ? entity.th : marker;
+      const lines = entity.lines?.length ? entity.lines : [entity.txt ?? ""];
+      /* Khoảng cách dòng tính bằng bội chiều cao chữ. AutoCAD xếp dòng đi
+         XUỐNG, mà bên trong nhóm này trục Y đã được lật lại về hướng xuống, nên
+         `dy` dương là đúng chiều. */
+      const step = size * (entity.ls && entity.ls > 0 ? entity.ls : 1);
+      /* Neo dọc của AutoCAD ôm CẢ KHỐI chữ, còn `dominant-baseline` của SVG chỉ
+         neo dòng ĐẦU. Không bù thì khối chữ căn giữa hay căn đáy tụt xuống đúng
+         bằng tổng khoảng cách các dòng còn lại — càng nhiều dòng càng lệch. */
+      const blockShift = lines.length < 2 ? 0
+        : entity.va === "central" ? -((lines.length - 1) * step) / 2
+        : entity.va === "text-after-edge" ? -(lines.length - 1) * step
+        : 0;
       /* Lật lại lần nữa để chữ không soi gương: `scale(1,-1)` ở đây triệt tiêu
          `scale(1,-1)` của cảnh, nên phép biến đổi tổng lại thành một phép dời
          thuần. Góc đổi dấu vì trên màn hình trục Y hướng xuống, và đổi từ radian
@@ -468,10 +481,18 @@ function Shape({
             stroke="none"
             fontSize={size}
             fontFamily="var(--mono)"
-            /* Điểm chèn của AutoCAD nằm ở ĐƯỜNG CHÂN chữ, đúng mặc định của
-               SVG — không đặt `dominant-baseline`. */
+            /* Điểm chèn mặc định của AutoCAD nằm ở ĐƯỜNG CHÂN chữ, trùng mặc
+               định của SVG. Chỉ đặt khi bản vẽ nói khác. */
+            textAnchor={entity.ha && entity.ha !== "start" ? entity.ha : undefined}
+            dominantBaseline={entity.va && entity.va !== "alphabetic" ? entity.va : undefined}
           >
-            {entity.txt}
+            {lines.length === 1 ? lines[0] : lines.map((line, index) => (
+              /* `x={0}` ở MỌI dòng: thiếu nó thì mỗi `tspan` nối tiếp dòng
+                 trước theo chiều ngang và cả khối chữ chạy chéo xuống. */
+              <tspan key={index} x={0} dy={index === 0 ? blockShift : step}>
+                {line || " "}
+              </tspan>
+            ))}
           </text>
         </g>
       );

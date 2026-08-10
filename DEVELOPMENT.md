@@ -417,8 +417,15 @@ cho ra thứ ngược hẳn với ý người gọi.
 Chỉ xuất X/Y (`projection:"xy"`).
 
 **Kiểu hình (`k`).** `line`, `poly` (có `bulge`), `circle`, `arc`, `ellipse`,
-`point`, `text`, `insert`, `box` (hình bao), `multi` (nhiều hình con trong `g` —
-dùng cho HATCH: một đối tượng chọn được, nhiều hình bên trong).
+`point`, `text`, `mtext` (nhiều dòng trong `lines`), `insert`, `box` (hình bao),
+`multi` (nhiều hình con trong `g` — dùng cho HATCH và cho hình bắt qua
+`worldDraw`: một đối tượng chọn được, nhiều hình bên trong).
+
+**Chữ.** `ha`/`va` là neo theo quy ước `text-anchor`/`dominant-baseline` của
+SVG, và **đi kèm với điểm neo**: khi căn lề khác trái, `p` là điểm căn lề chứ
+không phải điểm chèn. Bỏ qua `ha` mà vẫn dùng `p` là vẽ lệch đúng bằng chiều dài
+dòng. `xs` là hệ số bề ngang (vắng mặt là 1). `ls` là khoảng cách dòng tính bằng
+**bội của chiều cao chữ**; neo dọc ôm **cả khối** chữ, không phải dòng đầu.
 
 `ellipse` xuất **gọn** bằng 7 số chứ không lấy mẫu; `a0`/`a1` của nó là **tham
 số**, không phải góc thật: `P(t) = C + rx·cos(t)·u + ry·sin(t)·v`. Đem `atan2`

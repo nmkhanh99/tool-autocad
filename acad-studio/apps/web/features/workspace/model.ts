@@ -42,7 +42,8 @@ export type GeomEntity = {
   /** Hình được vẽ ra thuộc dạng nào. `multi` = nhiều hình con trong `g`, dùng
    * cho HATCH (nhiều vòng biên + hàng nghìn đoạn gạch nhưng vẫn là MỘT đối
    * tượng chọn được). */
-  k: "line" | "poly" | "circle" | "arc" | "ellipse" | "point" | "insert" | "text" | "box" | "multi";
+  k: "line" | "poly" | "circle" | "arc" | "ellipse" | "point" | "insert" | "text" | "mtext"
+   | "box" | "multi";
   /** `1` khi hình bị phép chiếu xuống XY làm sai. Xem `aw` để biết vì sao. */
   a?: number;
   /** Vì sao hình không thật: `bounding-box`, `mline-centerline`,
@@ -80,6 +81,25 @@ export type GeomEntity = {
   xs?: number;
   /** Nội dung chữ — `text`. */
   txt?: string;
+  /** Từng dòng của `mtext`. MTEXT mang mã điều khiển ngay trong nội dung
+   * (`\P` xuống dòng, `{}` nhóm, `\H` đổi cỡ…); plugin đã bóc mã và tách dòng,
+   * nên đây là chữ đọc được. */
+  lines?: string[];
+  /** Neo NGANG theo quy ước `text-anchor` của SVG. Vắng mặt là `start`.
+   *
+   * ⚠️ Đi kèm với điểm neo: khi căn lề khác trái, `p` là **điểm căn lề** chứ
+   * không phải điểm chèn. Bỏ qua `ha` mà vẫn dùng `p` là vẽ dòng chữ lệch đi
+   * đúng bằng chiều dài của nó. */
+  ha?: "start" | "middle" | "end";
+  /** Neo DỌC theo quy ước `dominant-baseline` của SVG. Vắng mặt là
+   * `alphabetic` — điểm chèn của AutoCAD nằm ở đường chân chữ.
+   *
+   * Liệt kê đúng bốn giá trị plugin phát ra, không để `string`: một giá trị lạ
+   * lọt xuống `dominant-baseline` thì trình duyệt bỏ qua cả thuộc tính, và chữ
+   * lệch dọc mà không có lỗi nào báo. */
+  va?: "alphabetic" | "central" | "text-before-edge" | "text-after-edge";
+  /** Khoảng cách dòng, tính bằng **bội của chiều cao chữ** — `mtext`. */
+  ls?: number;
   /** Tên block — `insert`. */
   name?: string;
   /** Hệ số tỉ lệ [x,y] — `insert`. */
@@ -183,6 +203,16 @@ export function fidelityNote(entity: GeomEntity, blocks?: BlockDefs): string {
   if (entity.aw === "projected-hatch") return "Vùng gạch nằm trên mặt phẳng nghiêng, hình bị chiếu sai.";
   if (entity.aw === "curve-sampled") return "Đường cong được lấy mẫu 48 điểm, không phải đường cong thật.";
   if (entity.aw === "projected-ellipse") return "Elip nằm trên mặt phẳng nghiêng, hình bị chiếu sai.";
+  if (entity.aw === "mtext-truncated") return "Ghi chú quá dài, chỉ hiện được phần đầu.";
+  if (entity.aw === "mtext-not-wrapped") {
+    return "AutoCAD không bung được ghi chú này thành từng đoạn; chỗ xuống dòng có thể khác bản vẽ.";
+  }
+  if (entity.aw === "text-span-not-fitted") {
+    return "Chữ kiểu căn hai đầu: vị trí đúng, nhưng không kéo/nén cho vừa đoạn được.";
+  }
+  if (entity.aw === "viewport-clipped") {
+    return "Khung nhìn bị cắt theo một hình không phải chữ nhật; đây là biên ngoài của nó.";
+  }
   if (entity.aw === "worlddraw") {
     return "Hình do AutoCAD vẽ ra rồi bắt lại: đủ để nhìn, nhưng cung tròn đã thành đoạn thẳng nên đừng đo trên nó.";
   }
@@ -772,10 +802,24 @@ export function kindLabel(kind: GeomEntity["k"]): string {
     insert: "Block",
     text: "Chữ",
     ellipse: "Elip",
+    mtext: "Chữ nhiều dòng",
     box: "Hình bao",
     multi: "Vùng gạch",
   };
   return map[kind] ?? kind;
+}
+
+/** Mô tả hình VẼ RA của một đối tượng.
+ *
+ * Khác `kindLabel`: một `multi` có thể là vùng gạch, có thể là một khối chữ đã
+ * bung thành từng đoạn, có thể là hình bắt qua `worldDraw`. Gọi tất cả là "Vùng
+ * gạch" thì inspector mô tả sai chính thứ người dùng vừa bấm vào.
+ */
+export function shapeLabel(entity: GeomEntity): string {
+  if (entity.k !== "multi") return kindLabel(entity.k);
+  if (entity.lines?.length) return "Chữ nhiều dòng";
+  if (entity.aw?.startsWith("worlddraw")) return "Hình do AutoCAD vẽ";
+  return "Vùng gạch";
 }
 
 export function fidelityLabel(fidelity: Fidelity): string {

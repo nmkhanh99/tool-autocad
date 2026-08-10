@@ -1,5 +1,73 @@
 # CHANGELOG
 
+## 2026-08-11
+
+### Added — VIEWPORT có viền thật, MTEXT có căn lề và nhiều dòng
+
+**Hình bao còn 0/10.888.** Không còn đối tượng nào vẽ bằng hộp chữ nhật.
+
+- **VIEWPORT 8/8.** Cái nhìn thấy trên giấy *là* khung của viewport, và khung đó
+  đọc thẳng từ `centerPoint`/`width`/`height` — không cần `worldDraw`. Trước đó
+  1 cái không vẽ được vì `worldDraw` của nó đi qua cơ chế cắt theo biên mà bộ
+  bắt nói thẳng là không làm được, nên nó chọn không vẽ gì. Khung cắt không phải
+  chữ nhật thì đánh dấu `viewport-clipped`: hình chữ nhật vẫn là **biên ngoài**
+  đúng, nhưng không phải đường viền thật.
+- **MTEXT tách dòng và bóc mã định dạng.** MTEXT mang mã điều khiển ngay trong
+  nội dung (`\P` xuống dòng, `{}` nhóm, `\H` đổi cỡ, `\S1^2;` phân số xếp
+  chồng, `\U+00B0` ký hiệu). Trước đó xuất nguyên chuỗi nên người dùng đọc được
+  cả mã lẫn chữ trộn vào nhau. Nay bóc mã, tách dòng, giữ lại phân số dạng
+  `1/2`. Trên bản vẽ này: 60 MTEXT, 2 cái nhiều dòng.
+- **Căn lề.** `horizontalMode` khác trái thì điểm vẽ **thật** là
+  `alignmentPoint()` chứ không phải `position()`; dùng nhầm là vẽ lệch đúng bằng
+  chiều dài dòng, dòng càng dài lệch càng nhiều. **48 dòng chữ căn giữa** trên
+  bản vẽ này trước đó đều sai vị trí. Nay có `ha`/`va` cho cả TEXT lẫn MTEXT —
+  113 đối tượng có neo khác mặc định.
+- **Ký hiệu `%%`.** `%%d` `%%c` `%%p` `%%176` thành °, ⌀, ±, và ký tự theo mã;
+  `%%u` `%%o` `%%k` chỉ bật/tắt gạch nên bỏ. Gặp thật trong bản vẽ:
+  `%%UKÝ HIỆU` giờ ra `KÝ HIỆU`.
+
+### Fixed — sáu lỗi của lượt này (Codex review)
+
+- **Chữ căn hai đầu bị dời cả đoạn (P1).** Với `kTextAlign`/`kTextFit`,
+  `alignmentPoint()` là **điểm cuối** của đoạn chứa chữ chứ không phải một cái
+  neo. Lấy nó làm neo là đặt cả dòng bắt đầu từ điểm cuối.
+- **Hai khoá `aw` trong cùng một đối tượng JSON.** Parser giữ cái sau, nên lý do
+  thật bị thay bằng lý do khác và câu giải thích cho nó không bao giờ hiện ra.
+  Nay chọn đúng một lý do, ưu tiên phép chiếu sai vì nó ảnh hưởng cả **vị trí**.
+- **`%%176` bị nuốt mất chữ số đầu**, còn lại `76` — đổi thầm lặng một ghi chú
+  thành một con số khác hẳn. Mã lạ nay **giữ nguyên**: nuốt thứ không hiểu là
+  xoá nội dung thật mà không ai biết đã xoá gì.
+- **`\U+00B0` ở cuối chuỗi không được giải mã** vì điều kiện biên chặt hơn một
+  ký tự — đúng chỗ ký hiệu độ hay nằm nhất.
+- **Khối MTEXT nhiều dòng căn giữa/căn đáy bị tụt xuống.** Neo dọc của AutoCAD
+  ôm **cả khối**, còn `dominant-baseline` của SVG chỉ neo dòng đầu.
+- **MTEXT mất xuống dòng tự động (P1).** MTEXT có bề rộng cột thì AutoCAD tự
+  xuống dòng khi vẽ, mà `contents()` chỉ mang `\P` — tách tay thì một ghi chú
+  dài ra đúng một dòng, sai cả số dòng lẫn chiều cao khối. Nay đi qua
+  `explodeFragments`: AutoCAD trả về từng **đoạn chữ kèm vị trí thế giới**, nên
+  xuống dòng, căn lề và đổi cỡ giữa dòng đều do nó tính. 60/60 MTEXT trên bản vẽ
+  này bung được; khối ghi chú dài ra 20 đoạn. Đường tự tách dòng chỉ còn là dự
+  phòng, và nay **luôn** đánh dấu `mtext-not-wrapped`.
+- **MTEXT mất danh tính khi bung đoạn.** Ra `k:"multi"` giống HATCH nên inspector
+  gọi một khối chữ là "Vùng gạch" và không có điểm để phóng tới. Nay cụm mang
+  theo `p` + `lines`, và `shapeLabel()` phân biệt ba loại `multi`.
+- **Cắt chữ giữa ký tự nhiều byte.** `total` đếm byte mà chữ tiếng Việt 2-3 byte
+  mỗi ký tự — cắt giữa cho ra UTF-8 hỏng và cả phản hồi JSON thành không đọc
+  được. Thêm một lỗi nữa cùng họ: ngân sách còn lại rơi vào giữa ký tự đầu của
+  một đoạn thì cắt xong không còn byte nào, `used` không nhích, và **mọi đoạn sau
+  lại thêm một phần tử rỗng** — vòng lặp không có điểm dừng.
+- **Mã điều khiển đi vòng qua trần độ dài.** Phân số xếp chồng dài hay chuỗi
+  `\P` liên tiếp không bị tính, nên một đối tượng có thể sinh hàng nghìn thẻ
+  `<tspan>`.
+
+### Known — chữ mã hoá phông Việt cũ
+
+Bản vẽ as-built dùng phông TCVN3/VNI đời cũ: DWG lưu byte theo bảng mã riêng của
+phông, nên chuỗi đọc ra là `èng tho¸t n\xadíc xÝ` thay vì `ống thoát nước xí`.
+Đây là dữ liệu trong bản vẽ, không phải lỗi đọc — muốn hiện đúng phải nhận diện
+phông rồi giải mã theo bảng, và đoán sai bảng sẽ làm hỏng cả chữ vốn đang đúng.
+Chưa làm.
+
 ## 2026-08-10
 
 ### Added — bộ bắt hình `worldDraw`: hình bao còn 0,01%

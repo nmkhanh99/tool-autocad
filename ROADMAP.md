@@ -260,9 +260,15 @@ route, như `blocks.module.css` vừa làm.
   **Đã làm nốt `worldDraw` (2026-08-10).** Hình bao còn **0,01%** (1/10.888 —
   đúng một VIEWPORT). MULTILEADER, HATCH tô đặc và VIEWPORT đều qua đường này.
 
-  Chưa làm ở plugin: chữ trong `worldDraw` bắt ở lời gọi cấp cao nên không có
-  căn lề và không có định dạng MTEXT (đậm, nhiều dòng, phân số). Nếu cần đọc
-  đúng bố cục ghi chú thì phải đi đường `AcDbMText` riêng.
+  **Đã làm nốt (2026-08-11): VIEWPORT, MTEXT, căn lề.** Hình bao còn **0/10.888**.
+
+  Chưa làm ở plugin:
+  - **Chữ mã hoá phông Việt cũ** (TCVN3/VNI) đọc ra là chuỗi rác. Xem
+    `CHANGELOG.md` 2026-08-11 — cần nhận diện phông rồi giải mã theo bảng.
+  - **Định dạng bên trong MTEXT** (đậm, nghiêng, đổi cỡ giữa dòng) bị bóc đi;
+    giữ lại đòi tách một MTEXT thành nhiều thẻ có kiểu riêng.
+  - Chữ bắt qua `worldDraw` vẫn không có căn lề — nó đến từ lời gọi cấp thấp
+    không mang thông tin đó.
 - **Giai đoạn 6** — `/drawing-info`, tách `/review` và `/standards`.
 - **Giai đoạn 7** — `/changes` (trục xoay), `/takeoff`, `/settings`.
 - **Giai đoạn 8** — `/publish`, `/batch`, `/cadweb`, `/` Tổng quan. Phạm vi đã
