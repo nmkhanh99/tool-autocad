@@ -343,6 +343,56 @@ hiện được đầy đủ mà không cần ký gì.
 
 ---
 
+### Hình học bản vẽ: `geometry.req` → `geometry.json`
+
+Kênh riêng, **tách khỏi `drawing-info`** — snapshot đó đã 350 KB khi chưa có toạ
+độ nào. Daemon: `GET /api/acad/geometry?target&space&layer&maxEntities`.
+
+Request nhiều dòng: `requestId` · `target` · rồi từng `key=value`. Vì có nhiều
+dòng nên `buildGeometryRequest()` **chặn tiêm dòng** — một `space` chứa `\n` có
+thể chèn thêm `maxEntities=99999` vào chính request mà người gọi cố ý giới hạn.
+
+Ba điều mọi nơi tiêu thụ dữ liệu này phải mang theo:
+
+1. **`a:1` = hình vẽ ra không phải hình thật của đối tượng**, và `aw` nói vì
+   sao: `bounding-box` (DIMENSION, HATCH, MULTILEADER, VIEWPORT…) hay
+   `mline-centerline` (MLINE — tức là ống — chỉ có tim, không có hai đường
+   thành). Trên bản vẽ as-built của dự án, đó là **103/258** đối tượng.
+2. **`truncated`** — vẽ 3.000/47.000 đối tượng mà im lặng thì người dùng tin đó
+   là cả bản vẽ.
+3. **`bounds` là map theo từng space**, không phải một khung. Toạ độ giấy tính
+   bằng mm trên tờ giấy; model có thể ở toạ độ trác địa cách gốc hàng triệu đơn
+   vị. Gộp lại cho ra một khung vô nghĩa.
+
+Giới hạn **ba** phía, vì có ba cách khác nhau để làm treo AutoCAD:
+
+| Trần | Giá trị | Chặn điều gì |
+| --- | --- | --- |
+| `maxEntities` (xuất) | mặc định 20.000, cắt cứng 100.000 | payload quá lớn → `truncated` |
+| `kGeomMaxScanned` (quét) | 200.000 | bộ lọc layer **không khớp gì** vẫn duyệt cả bản vẽ → `geometry_scan_cap_reached` |
+| tổng byte | 24 MB | nhiều polyline 4.000 đỉnh cộng lại |
+
+Trần xuất và trần quét phải tách nhau: `maxEntities` chỉ đếm thứ đã xuất, nên
+một tên layer gõ sai không bao giờ chạm tới nó — plugin vẫn mở và soi từng đối
+tượng của cả bản vẽ dù người gọi xin đúng 1. Hai cảnh báo cũng khác nghĩa: chạm
+trần xuất là *còn đối tượng khớp chưa gửi*; chạm trần quét là *còn phần bản vẽ
+chưa nhìn tới*.
+
+Thêm 4.000 đỉnh mỗi polyline. Plugin chạy trên **main thread** của AutoCAD.
+
+`maxEntities` được **kẹp về [1, 100.000] trước khi tuần tự hoá**, không phải chỉ
+làm tròn: `0.5` xuống 0 thì plugin coi là "không có giới hạn" rồi dùng mặc định
+20.000, còn `1e21` ra chuỗi `"1e+21"` mà `atoll` chỉ đọc được `1`. Cả hai đều
+cho ra thứ ngược hẳn với ý người gọi.
+
+Chỉ xuất X/Y (`projection:"xy"`).
+
+**Sửa plugin thì phải khởi động lại AutoCAD** — ghi đè bundle không ảnh hưởng
+tiến trình đang chạy. Sao lưu bản cũ trước khi `./build.sh` (có `--build-only`
+để chỉ biên dịch).
+
+---
+
 ## 8. Hạn chế kỹ thuật đã biết
 
 - **Không in được tệp DWG đóng trên macOS** — `-PLOT` headless crash. Đây là giới

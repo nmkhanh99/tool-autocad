@@ -219,8 +219,8 @@ route, như `blocks.module.css` vừa làm.
 
 ## Later
 
-- **Giai đoạn 5** — `/workspace`. **BỊ CHẶN, không phải vì khó mà vì thiếu dữ
-  liệu.** Đã kiểm ngày 2026-08-10 trên snapshot thật (`~/Acad-Bridge/drawing-info.json`,
+- **Giai đoạn 5** — `/workspace`. Phần backend **đã xong (2026-08-10)**; phần
+  giao diện chưa dựng. Ghi lại vì sao nó từng bị chặn: Đã kiểm ngày 2026-08-10 trên snapshot thật (`~/Acad-Bridge/drawing-info.json`,
   350 KB) và trên mã nguồn: **không chỗ nào trong daemon hay plugin trả toạ độ
   của bất kỳ đối tượng nào.** `drawing-info` có số đếm theo type/layer/space,
   bảng layer/block/layout/style, và **một** bounding box của cả bản vẽ;
@@ -233,10 +233,23 @@ route, như `blocks.module.css` vừa làm.
   chú "hit-test trên canvas WebGL2" trong kế hoạch cũng lệch với bộ mẫu: mẫu
   `workspace.html` dùng **SVG inline** với `data-entity`/`data-handle` viết cứng.
 
-  Muốn làm thật thì phải mở rộng plugin ObjectARX để xuất hình học (và quyết
-  định xuất bao nhiêu, dạng gì, ngưỡng bao nhiêu đối tượng) — đó là việc
-  backend/plugin, không phải việc migrate giao diện. **Đề nghị nhảy sang giai
-  đoạn 6 và đưa việc xuất hình học vào danh sách backend.**
+  **Đã gỡ chặn (2026-08-10): plugin xuất hình học.** `geometry.req` →
+  `geometry.json`, và `GET /api/acad/geometry`. Đã chạy thật trên bản vẽ
+  as-built của dự án: 258 đối tượng, dưới 1 giây, `bounds` theo từng space.
+
+  **Phần giao diện của giai đoạn 5 giờ làm được**, nhưng phải mang theo ba sự
+  thật của dữ liệu, nếu không sẽ ra đúng một `PreconstructionPanel` thứ hai:
+
+  - **62/258 đối tượng chỉ có hình bao** (`a:1`, `aw:"bounding-box"`) —
+    DIMENSION, MULTILEADER, HATCH, VIEWPORT. Canvas phải vẽ chúng khác đi và
+    màn hình phải nói ra, không được để người dùng tưởng đó là hình thật.
+  - **41 MLINE là TIM ỐNG**, không phải hai đường thành ống
+    (`aw:"mline-centerline"`).
+  - **`truncated`** phải hiện lên. Vẽ 3.000/47.000 đối tượng mà im lặng thì
+    người dùng tin đó là cả bản vẽ.
+
+  Chưa làm ở plugin: hình học bên trong định nghĩa block (INSERT mới chỉ có vị
+  trí + phép biến đổi), và tessellate các kiểu còn lại qua `worldDraw`.
 - **Giai đoạn 6** — `/drawing-info`, tách `/review` và `/standards`.
 - **Giai đoạn 7** — `/changes` (trục xoay), `/takeoff`, `/settings`.
 - **Giai đoạn 8** — `/publish`, `/batch`, `/cadweb`, `/` Tổng quan. Phạm vi đã

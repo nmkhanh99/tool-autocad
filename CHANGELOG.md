@@ -1,5 +1,175 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 5 (backend): plugin xuất hình học 2D
+
+Việc backend gỡ chặn cho `/workspace`. **Đã chạy thật trên bản vẽ as-built của
+dự án**, không phải chỉ biên dịch được.
+
+### Added — `geometry.req` → `geometry.json`
+
+`objectarx/mepbridge.cpp`: `writeGeometry()` + `entityGeometryJson()`.
+`apps/daemon`: `buildGeometryRequest()`, `requestGeometry()`,
+`GET /api/acad/geometry?target&space&layer&maxEntities`.
+
+Tách khỏi `drawing-info` vì snapshot đó đã 350 KB khi **chưa có toạ độ nào**;
+nhét hình học vào là bắt mọi màn hình chỉ cần số đếm phải kéo theo cả bản vẽ.
+
+Xuất toạ độ thật cho `LINE`, `LWPOLYLINE` (**kèm `bulge`**, không thì ống cong
+thành ống thẳng), `CIRCLE`, `ARC`, `POINT`, `INSERT` (vị trí + xoay + tỉ lệ +
+tên block), `TEXT`/`MTEXT`. Kiểu khác lùi về hình bao.
+
+**Mọi đối tượng gần đúng đều mang cờ `a:1` kèm `aw` nói rõ vì sao** —
+`bounding-box` hay `mline-centerline`. Không có cờ đó thì canvas vẽ một dãy hình
+hộp và người dùng tin đó là bản vẽ.
+
+### Fixed — ba lỗi chỉ lộ ra khi chạy thật
+
+- **TEXT đè mất handle.** Chiều cao chữ dùng khoá `"h"`, trùng khoá handle ở cấp
+  trên; `JSON.parse` lấy cái sau nên đối tượng **mất danh tính** — hỏng đúng chỗ
+  hit-test phải chạy. Đổi thành `th`/`txt`, và `s` của INSERT thành `sc`.
+- **MLINE — tức là ỐNG — ra hình hộp.** Bản vẽ thật có 41 MLINE trên layer
+  `P-ThoatRua`. Hình bao cho ra một dãy chữ nhật đúng chỗ ống chạy: vô dụng để
+  nhìn, vô dụng để bắt điểm. Nay xuất **tim ống** (`aw:"mline-centerline"`).
+  Số đối tượng chỉ có hình bao giảm 103 → 62.
+- **`bounds` trộn Model với layout giấy.** Toạ độ giấy tính bằng mm trên tờ
+  giấy, model ở toạ độ cách gốc hàng triệu đơn vị — gộp lại cho ra một khung vô
+  nghĩa. Nay `bounds` là **map theo từng space**, kèm `spaces` đếm đối tượng mỗi
+  space để giao diện dựng bộ chọn space mà không cần gọi thêm lần nữa.
+
+### Fixed — hai lỗi nghiêm trọng từ Codex review (P1 ×2)
+
+- **Quét hình học không khoá tài liệu.** `writeDrawingInfo()` lấy `AcAp::kRead`
+  trước khi đọc database; `writeGeometry()` thì không. Đọc database của một tài
+  liệu không phải tài liệu hiện hành mà không khoá là đúng thứ ObjectARX cấm —
+  một lệnh chạy song song có thể làm lượt quét hỏng, hoặc làm **AutoCAD mất ổn
+  định**. Nay khoá trước khi quét và mở khoá ở mọi đường ra.
+- **Query xấu có thể giết daemon.** `buildGeometryRequest()` ném khi tham số
+  chứa xuống dòng — đó là chặn tiêm dòng, làm đúng. Nhưng Express 4 **không**
+  bắt lỗi của handler async, nên nó thoát ra thành unhandled rejection: một
+  query xấu hạ được cả dịch vụ. Nay trả 400. Đã thử thật: `space` chứa xuống
+  dòng → HTTP 400, `/api/health` vẫn 200.
+
+  Vòng review sau chỉ ra bản vá đầu bắt **quá rộng**: một thư mục bridge không
+  ghi được cũng thành "client gửi sai" — giấu sự cố hạ tầng dưới nhãn lỗi người
+  dùng, và giám sát không thấy gì. Nay `GeometryRequestError` tách riêng: đầu vào
+  sai → 400, sự cố vận hành → 500.
+
+### Fixed — polyline khép kín bị mở toác khi bulge bị chiếu phẳng (Codex review)
+
+Cờ `approx` gánh hai lý do khác nhau — cắt bớt đỉnh, và bulge không tả được sau
+khi chiếu — nhưng chỉ **cắt đỉnh** mới phá tính khép kín. Một polyline khép kín
+có bulge trên mặt phẳng nghiêng vẫn còn **đủ mọi đỉnh**, nên bỏ `closed` ở đó là
+tự tay xoá mất một cạnh có thật (cạnh cuối về đỉnh đầu). Nay điều kiện là
+`truncated`, không phải `approx`.
+
+### Fixed — bộ lọc layer không khớp gì vẫn quét cả bản vẽ (Codex review, P1)
+
+`maxEntities` chỉ đếm thứ **đã xuất**. Một bộ lọc layer không khớp gì — gõ sai
+tên chẳng hạn — sẽ không bao giờ chạm trần đó, nên plugin duyệt **toàn bộ** bản
+vẽ trên main thread dù người gọi xin đúng 1 đối tượng. Nay có trần **quét** riêng
+(200.000) kèm cảnh báo `geometry_scan_cap_reached` — tách khỏi
+`geometry_truncated` vì hai nguyên nhân rất khác nhau: chạm trần xuất nghĩa là
+còn đối tượng khớp chưa gửi; chạm trần quét nghĩa là còn phần bản vẽ chưa nhìn tới.
+
+### Fixed — thiếu trần tổng cho payload (Codex review, P1)
+
+Trần số đối tượng (100.000) và trần đỉnh mỗi polyline (4.000) nhân với nhau ra
+**400 triệu toạ độ** nối chuỗi trên **main thread** của AutoCAD — đủ để ngốn vài
+GB và làm đông cứng hoặc giết AutoCAD. Trần số đối tượng một mình không chặn
+được bản vẽ ít đối tượng nhưng mỗi đối tượng cực dày. Nay có thêm trần tổng
+24 MB; chạm trần thì dừng và bật `truncated` như mọi đường cắt khác.
+
+### Fixed — polyline nghiêng trả sai toạ độ (Codex review)
+
+Overload `getPointAt(i, AcGePoint2d&)` trả về toạ độ **OCS của polyline**.
+Polyline có pháp tuyến khác mặc định sẽ được vẽ **sai vị trí**, mà lại không mang
+cờ `a:1` vì mọi thứ khác trong phản hồi đều là toạ độ thế giới. Nay dùng overload
+3D (trả WCS) rồi bỏ Z.
+
+### Fixed — cả một HỌ lỗi "chiếu xuống XY" (Codex review, 3 vòng)
+
+Cùng một sai lầm lặp ở bốn chỗ, và Codex bắt từng cái một qua ba vòng trước khi
+tôi nhận ra nó là một họ: **mọi đại lượng đo TRONG mặt phẳng của đối tượng đều
+sai sau khi bỏ Z** nếu pháp tuyến không phải `+Z`.
+
+- **Vòng tròn / cung** → hình chiếu là elip; `-Z` còn đảo chiều cung.
+- **`bulge` của polyline** → mỗi cung thành elip mà không bulge nào tả được. Đỉnh
+  vẫn là WCS nên vị trí đúng; chỉ độ cong là không tả được, nên bỏ `bulge` và
+  đánh dấu `aw:"projected-bulge"`.
+- **Góc xoay của TEXT/MTEXT** → `aw:"projected-rotation"`.
+- **Phép biến đổi của INSERT** (`rotation`, `scaleFactors` đo trong mặt phẳng
+  chèn) → `aw:"projected-transform"`.
+
+Một lỗi quy trình của tôi lộ ra giữa loạt này: bản vá bulge vòng đầu **không vào
+file** vì tôi thay chuỗi mà không assert, và tôi báo đã sửa. Codex bắt lại ở vòng
+sau. Nay mọi lần thay đều có assert.
+
+Nay có một phép kiểm dùng chung `planarXY()` thay vì bốn bản kiểm rời.
+
+Chi tiết vòng tròn/cung: chỉ giữ được hình khi mặt phẳng của nó song song XY. Pháp tuyến nghiêng thì hình
+chiếu xuống XY là một **elip**, và góc đầu/cuối đo trong mặt phẳng riêng của đối
+tượng — xuất `center`+`radius` cho ra một hình **sai** mà lại **không** mang cờ
+`a:1`. Nay chỉ xuất chính xác khi pháp tuyến song song trục Z; còn lại rơi xuống
+hình bao. Riêng CUNG còn phải đúng chiều: pháp tuyến `-Z` vẫn song song nhưng góc
+đo ngược, cung sẽ vẽ sai phía.
+
+### Fixed — hai lỗi về giới hạn và cờ cắt bớt (Codex review)
+
+- **`maxEntities: 1e21` biến thành quét 1 đối tượng.** `String(1e21)` cho ra
+  `"1e+21"`, mà plugin đọc bằng `atoll` nên chỉ lấy được `1` — xin cả bản vẽ lại
+  nhận đúng một đối tượng. Nay kẹp về trần 100.000 **trước khi** tuần tự hoá.
+- **`maxEntities: 0.5` biến thành quét 20.000.** Làm tròn xuống cho ra `0`, mà
+  plugin coi giá trị không dương là "không có giới hạn hợp lệ" rồi dùng mặc định
+  — một yêu cầu cố ý giới hạn thật chặt lại kích hoạt một lượt quét lớn. Nay sàn
+  xuống ít nhất 1.
+- **Báo `truncated` khi không bỏ sót gì.** Kiểm trần **trước** khi lọc layer,
+  nên chạm trần rồi thì mọi đối tượng còn lại đều làm cờ bật lên — kể cả khi
+  chúng thuộc layer khác và đằng nào cũng không được xuất. Giao diện được yêu
+  cầu hiện cờ này lên, nên báo nhầm là nói dối người dùng. Nay chỉ bật khi thật
+  sự có đối tượng **đáng lẽ được xuất** bị bỏ.
+
+### Fixed — ba lỗi nữa từ Codex review
+
+Không lỗi nào kịp gây hại trong lượt kiểm (text dài nhất 67 byte, polyline nhiều
+đỉnh nhất 97, không có truncation), nên số liệu xác minh bên dưới vẫn đứng.
+
+- **Cắt text giữa một ký tự UTF-8.** Cắt đúng 120 byte có thể rơi vào giữa ký tự
+  nhiều byte và sinh UTF-8 hỏng. Bản vẽ Việt Nam đầy nhãn tiếng Việt, nên đây là
+  đường chắc chắn gặp. Nay lùi về ranh giới ký tự.
+- **Polyline bị cắt bớt đỉnh vẫn báo `closed:true`.** Renderer sẽ kẻ một đoạn giả
+  từ đỉnh cuối về đỉnh đầu, có thể cắt ngang cả bản vẽ. (Vòng review sau bắt
+  đúng lỗi ấy ở nhánh **MLINE** — nơi tôi đã bỏ sót vì `approx` ở đó luôn bật
+  nên không tái dùng được phép kiểm cũ.)
+- **Chạm trần `maxEntities` là mất luôn các layout sau.** Vòng lặp dừng hẳn nên
+  `spaces`/`bounds` thiếu mọi layout chưa quét — mà giao diện lại dùng đúng nó để
+  dựng bộ chọn space. Nay thêm `layouts`: tên **mọi** layout, kể cả chưa quét.
+  Đọc tên layout thì rẻ; quét đối tượng mới đắt.
+
+### Verified — trên `ABD_He thong thoat nuoc tang 1`
+
+| | |
+|---|---|
+| quét / xuất | 259 / 258 đối tượng, 1 bỏ qua (không có hình học) |
+| gần đúng | 62 hình bao + 41 tim ống |
+| `bounds` Model | 98.545 × 92.400 đơn vị |
+| `bounds` layout `01` | 420 × 297 — đúng khổ A3 |
+| thời gian | dưới 1 giây |
+
+### Technical
+
+- Giới hạn hai phía: `maxEntities` mặc định 20.000, plugin cắt cứng 100.000;
+  4.000 đỉnh mỗi polyline; 120 ký tự mỗi chuỗi text. Plugin chạy trên **main
+  thread** của AutoCAD — không chặn thì người dùng thấy AutoCAD đơ.
+- Chỉ xuất X/Y (`projection:"xy"`). Bản vẽ MEP mặt bằng là 2D; giữ Z nhân đôi
+  payload mà không ai dùng.
+- 11 assertion mới ở `test-bridge-contract.mjs`: request nhiều dòng nên phải
+  chặn tiêm dòng — một `space` chứa `\n` có thể chèn thêm `maxEntities=99999`
+  vào chính request mà người gọi cố ý giới hạn.
+- Bản plugin cũ đã sao lưu trước khi ghi đè
+  (`Acad-Bridge.bundle.bak-20260810-154936`).
+
+---
+
 ## 2026-08-10 — Giai đoạn 4 XONG: duyệt manifest ngay trên `/library/lisp`
 
 Mảnh cuối của giai đoạn 4. `/library/lisp` nay duyệt được, và **không cần agent**.

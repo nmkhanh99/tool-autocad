@@ -255,6 +255,25 @@ export const guards: Record<string, Guard> = {
     fix: "Dùng màn hình tương ứng cho thao tác này.",
   },
 
+  /* ---- Hình học ----
+     Ba mã này ĐỌC, không ghi, nên bước tiếp theo luôn là "thử lại" — khác hẳn
+     họ mã in ấn, nơi thử lại có thể tạo ra tệp thứ hai. */
+  invalid_geometry_request: {
+    title: "Yêu cầu lấy hình học không hợp lệ",
+    why: "Bộ lọc gửi lên có ký tự xuống dòng, thứ mà kênh nối với plugin không mang được.",
+    fix: "Bỏ ký tự xuống dòng khỏi tên không gian hoặc tên layer rồi lấy lại.",
+  },
+  geometry_request_failed: {
+    title: "Plugin không đọc được hình học của bản vẽ",
+    why: "Plugin nhận yêu cầu nhưng trả về lỗi. Bản vẽ không bị thay đổi gì.",
+    fix: "Xem cửa sổ AutoCAD có hộp thoại nào đang chờ không, rồi lấy lại.",
+  },
+  geometry_timeout: {
+    title: "AutoCAD không trả hình học kịp",
+    why: "Bản vẽ lớn hoặc AutoCAD đang bận. Đây là thao tác chỉ đọc nên không có gì dở dang.",
+    fix: "Lấy lại, hoặc lọc theo layer để giảm khối lượng phải quét.",
+  },
+
   /* ---- Thư viện LISP ---- */
   user_review_challenge_required: {
     title: "Cần duyệt script trước khi nạp",

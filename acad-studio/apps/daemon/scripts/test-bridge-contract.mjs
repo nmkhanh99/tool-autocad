@@ -972,6 +972,73 @@ assert(buildSh.includes('PKG_NAME="Acad-Bridge"'), "build.sh package Acad-Bridge
 assert(buildSh.includes('MOD_NAME="AcadBridge"'), "build.sh binary AcadBridge");
 
 // ── No hard plumbing identity required in control helpers ──
+// ── geometry.req: request nhiều dòng nên PHẢI chặn tiêm dòng ──────────────
+// Plugin đọc từng dòng `key=value`. Một target hay một giá trị chứa xuống dòng
+// sẽ chèn thêm tuỳ chọn giả — ví dụ nâng `maxEntities` lên 100k trên một bản vẽ
+// mà người gọi cố ý giới hạn. Chặn ở nơi dựng chuỗi, không tin đầu vào.
+const geomBasic = bridge.buildGeometryRequest("geom-1", "Drawing1.dwg");
+assert(geomBasic === "geom-1\nDrawing1.dwg", "geometry request: 2 dòng khi không có tuỳ chọn");
+
+const geomFull = bridge.buildGeometryRequest("geom-2", "", {
+  space: "Model",
+  layer: "P-ThoatRua",
+  maxEntities: 500,
+});
+assert(
+  geomFull === "geom-2\n\nspace=Model\nlayer=P-ThoatRua\nmaxEntities=500",
+  "geometry request: mỗi tuỳ chọn một dòng key=value",
+);
+
+assert(
+  bridge.buildGeometryRequest("geom-3", "", { maxEntities: 12.9 })
+    === "geom-3\n\nmaxEntities=12",
+  "geometry request: maxEntities làm tròn xuống số nguyên",
+);
+
+// Phân số nhỏ hơn 1 làm tròn xuống 0, mà plugin coi giá trị không dương là
+// "không có giới hạn hợp lệ" rồi dùng mặc định 20.000 — một yêu cầu cố ý giới
+// hạn thật chặt lại kích hoạt một lượt quét lớn. Sàn xuống ít nhất 1.
+assert(
+  bridge.buildGeometryRequest("geom-4", "", { maxEntities: 0.5 })
+    === "geom-4\n\nmaxEntities=1",
+  "geometry request: maxEntities phân số nhỏ vẫn phải là giới hạn thật",
+);
+
+// Số rất lớn ra ký hiệu mũ (`1e+21`), mà plugin đọc bằng `atoll` nên chỉ lấy
+// được `1` — xin cả bản vẽ lại nhận đúng một đối tượng. Kẹp về trần của plugin.
+assert(
+  bridge.buildGeometryRequest("geom-5", "", { maxEntities: 1e21 })
+    === `geom-5\n\nmaxEntities=${bridge.GEOMETRY_MAX_ENTITIES_CAP}`,
+  "geometry request: maxEntities quá lớn phải kẹp về trần, không ra ký hiệu mũ",
+);
+for (const value of [1e21, 999999999]) {
+  assert(
+    !/e\+/i.test(bridge.buildGeometryRequest("geom", "", { maxEntities: value })),
+    `geometry request không được sinh ký hiệu mũ: ${value}`,
+  );
+}
+
+for (const [label, run] of [
+  ["requestId nhiều dòng", () => bridge.buildGeometryRequest("a\nb", "")],
+  ["target nhiều dòng", () => bridge.buildGeometryRequest("geom", "a\nb")],
+  ["space có xuống dòng", () => bridge.buildGeometryRequest("geom", "", { space: "a\nmaxEntities=99999" })],
+  ["layer có dấu bằng", () => bridge.buildGeometryRequest("geom", "", { layer: "a=b" })],
+]) {
+  let threw = false;
+  try { run(); } catch { threw = true; }
+  assert(threw, `geometry request phải từ chối: ${label}`);
+}
+
+// maxEntities không hợp lệ thì bỏ hẳn dòng đó, để plugin dùng mặc định của nó —
+// gửi `maxEntities=0` sẽ bị plugin hiểu là "không giới hạn hợp lệ" và bỏ qua,
+// nhưng gửi rác thì tệ hơn: nó nằm lại trong request mà không ai đọc.
+for (const bad of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+  assert(
+    !bridge.buildGeometryRequest("geom", "", { maxEntities: bad }).includes("maxEntities"),
+    `geometry request bỏ maxEntities không hợp lệ: ${bad}`,
+  );
+}
+
 const ctrlSrc = readFileSync(join(__dirname, "../src/acadControl.ts"), "utf8");
 assert(!ctrlSrc.includes('join(homedir(), "MEP-Bridge")'), "acadControl no hard default MEP-Bridge path");
 assert(ctrlSrc.includes("resolveBridgeDir"), "acadControl uses resolveBridgeDir");

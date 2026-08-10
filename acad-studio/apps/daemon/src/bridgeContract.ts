@@ -27,6 +27,11 @@ export const RAW_JOB_NAME = "raw.job";
 export const RAW_DONE_NAME = "raw.done";
 export const DRAWING_INFO_REQUEST_NAME = "drawing-info.req";
 export const DRAWING_INFO_RESPONSE_NAME = "drawing-info.json";
+/** Hình học 2D để vẽ lên canvas. Tách khỏi `drawing-info` vì snapshot đó đã
+ * 350 KB khi chưa có toạ độ nào — nhét hình học vào sẽ bắt mọi màn hình chỉ cần
+ * số đếm phải kéo theo cả bản vẽ. */
+export const GEOMETRY_REQUEST_NAME = "geometry.req";
+export const GEOMETRY_RESPONSE_NAME = "geometry.json";
 export const RESULTS_DIR_NAME = "results";
 
 /** Autoloader package name (outer .bundle). */
@@ -83,6 +88,14 @@ export function drawingInfoRequestPath(bridgeDir: string): string {
 
 export function drawingInfoResponsePath(bridgeDir: string): string {
   return join(bridgeDir, DRAWING_INFO_RESPONSE_NAME);
+}
+
+export function geometryRequestPath(bridgeDir: string): string {
+  return join(bridgeDir, GEOMETRY_REQUEST_NAME);
+}
+
+export function geometryResponsePath(bridgeDir: string): string {
+  return join(bridgeDir, GEOMETRY_RESPONSE_NAME);
 }
 
 export function resultsDir(bridgeDir: string): string {

@@ -46,6 +46,8 @@ import {
   atomicWriteFile,
   drawingInfoRequestPath,
   drawingInfoResponsePath,
+  geometryRequestPath,
+  geometryResponsePath,
   ensureBridgeLayout,
   jobLspPath,
   resolveBridgeDir,
@@ -423,6 +425,122 @@ export async function requestDrawingInfo(target: string, timeoutMs = 8000):
         requestStartedAt,
       );
       if (snapshot) return snapshot;
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    return null;
+  });
+}
+
+/** Hình học 2D của một bản vẽ đang mở.
+ *
+ * Vì sao có `maxEntities`: một bản vẽ MEP thật dễ vượt 100k đối tượng, và plugin
+ * chạy trên **main thread** của AutoCAD — không chặn được thì người dùng thấy
+ * AutoCAD đơ. Giới hạn nằm ở cả hai phía; plugin còn cắt cứng ở 100k.
+ *
+ * Phản hồi luôn nói rõ `truncated` và `counts.approx` — số đối tượng chỉ có hình
+ * bao chứ không có hình thật. Nơi gọi PHẢI chuyển hai thông tin đó lên giao diện:
+ * một canvas vẽ 3000/47000 đối tượng mà không nói gì thì người dùng tin đó là cả
+ * bản vẽ.
+ */
+/** Trần cứng của plugin (`kGeomMaxEntitiesCap` trong `mepbridge.cpp`). Giữ ở
+ * đây để kẹp trước khi tuần tự hoá — plugin đọc bằng `atoll`, không hiểu ký hiệu
+ * mũ. */
+export const GEOMETRY_MAX_ENTITIES_CAP = 100_000;
+
+export type GeometryRequestOptions = {
+  space?: string;
+  layer?: string;
+  maxEntities?: number;
+};
+
+/** Đầu vào của NGƯỜI GỌI sai — khác hẳn lỗi vận hành (không ghi được thư mục
+ * bridge, plugin không trả lời). Gộp hai loại vào một mã sẽ giấu mất sự cố hạ
+ * tầng dưới nhãn "client gửi sai", và giám sát không thấy gì. */
+export class GeometryRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GeometryRequestError";
+  }
+}
+
+export function buildGeometryRequest(
+  requestId: string,
+  target = "",
+  options: GeometryRequestOptions = {},
+): string {
+  if (!requestId || /[\r\n]/.test(requestId)) {
+    throw new GeometryRequestError("geometry requestId must be one non-empty line");
+  }
+  if (/[\r\n]/.test(target)) {
+    throw new GeometryRequestError("geometry target must be one line");
+  }
+  const lines = [requestId, target];
+  /* Giá trị chứa xuống dòng sẽ chèn thêm một tuỳ chọn giả vào request — plugin
+     đọc từng dòng `key=value`. Chặn ở đây thay vì tin đầu vào. */
+  const option = (key: string, value: string) => {
+    if (/[\r\n=]/.test(value)) {
+      throw new GeometryRequestError(`geometry ${key} must not contain = or newline`);
+    }
+    lines.push(`${key}=${value}`);
+  };
+  if (options.space) option("space", options.space);
+  if (options.layer) option("layer", options.layer);
+  if (Number.isFinite(options.maxEntities) && (options.maxEntities as number) > 0) {
+    /* Kẹp vào [1, cap] TRƯỚC khi đổi sang chuỗi, vì hai lý do khác nhau:
+       · `0.5` làm tròn xuống 0, mà plugin coi giá trị không dương là "không có
+         giới hạn hợp lệ" rồi dùng mặc định 20.000 — một yêu cầu cố ý giới hạn
+         thật chặt lại kích hoạt một lượt quét lớn;
+       · `1e21` cho ra `"1e+21"`, mà plugin đọc bằng `atoll` nên chỉ lấy được
+         `1` — xin cả bản vẽ lại nhận đúng một đối tượng. */
+    const clamped = Math.min(
+      GEOMETRY_MAX_ENTITIES_CAP,
+      Math.max(1, Math.floor(options.maxEntities as number)),
+    );
+    option("maxEntities", String(clamped));
+  }
+  return lines.join("\n");
+}
+
+let geometryQueue: Promise<void> = Promise.resolve();
+
+async function withGeometryLock<T>(run: () => Promise<T>): Promise<T> {
+  const previous = geometryQueue;
+  let release!: () => void;
+  geometryQueue = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+  }
+}
+
+export async function requestGeometry(
+  target: string,
+  options: GeometryRequestOptions = {},
+  timeoutMs = 20_000,
+): Promise<Record<string, unknown> | null> {
+  return withGeometryLock(async () => {
+    ensureBridgeDirs();
+    const bridgeDir = getBridgeDir();
+    const requestId = randomUUID();
+    const requestStartedAt = Date.now();
+    atomicWrite(
+      geometryRequestPath(bridgeDir),
+      buildGeometryRequest(requestId, target, options),
+    );
+    const responsePath = geometryResponsePath(bridgeDir);
+    while (Date.now() - requestStartedAt < timeoutMs) {
+      try {
+        const st = statSync(responsePath);
+        if (isDrawingInfoResponseFresh(st.mtimeMs, requestStartedAt)) {
+          const value: unknown = JSON.parse(readFileSync(responsePath, "utf8"));
+          if (value && typeof value === "object" && !Array.isArray(value)) {
+            const snapshot = value as Record<string, unknown>;
+            if (snapshot.requestId === requestId) return snapshot;
+          }
+        }
+      } catch { /* chưa có phản hồi, hoặc ghi dở */ }
       await new Promise((resolve) => setTimeout(resolve, 120));
     }
     return null;
@@ -1007,6 +1125,58 @@ async function waitForPlotJob(
 
 export function acadBridgeRouter(): Router {
   const r = express.Router();
+
+  /* Hình học 2D để vẽ canvas. GET vì nó chỉ đọc — không job nào ghi vào bản vẽ.
+     Chờ tới 20 giây: plugin quét trên main thread của AutoCAD và một bản vẽ lớn
+     mất vài giây thật. */
+  r.get("/geometry", async (req, res) => {
+    if (!(await acadRunning())) {
+      return res.status(503).json({
+        ok: false, code: "autocad_not_running", error: "AutoCAD chưa chạy",
+      });
+    }
+    const maxEntities = Number(req.query.maxEntities);
+    let snapshot: Record<string, unknown> | null;
+    try {
+      snapshot = await requestGeometry(
+        typeof req.query.target === "string" ? req.query.target : "",
+        {
+          space: typeof req.query.space === "string" ? req.query.space : undefined,
+          layer: typeof req.query.layer === "string" ? req.query.layer : undefined,
+          maxEntities: Number.isFinite(maxEntities) ? maxEntities : undefined,
+        },
+      );
+    } catch (error) {
+      /* Express 4 KHÔNG bắt lỗi của handler async, nên để lỗi thoát ra là một
+         unhandled rejection có thể giết cả daemon — một query xấu hạ được dịch
+         vụ. Nhưng phải phân biệt hai loại: đầu vào sai là 400, còn sự cố vận
+         hành (thư mục bridge không ghi được…) là 5xx, nếu không thì hỏng hạ tầng
+         bị giấu dưới nhãn "client gửi sai". */
+      if (error instanceof GeometryRequestError) {
+        return res.status(400).json({
+          ok: false,
+          code: "invalid_geometry_request",
+          error: error.message,
+        });
+      }
+      return res.status(500).json({
+        ok: false,
+        code: "geometry_request_failed",
+        error: error instanceof Error ? error.message : "không gửi được yêu cầu hình học",
+      });
+    }
+    if (!snapshot) {
+      return res.status(504).json({
+        ok: false,
+        code: "geometry_timeout",
+        error: "Plugin chưa trả hình học. Bản vẽ có thể quá lớn, hoặc AutoCAD đang bận một lệnh.",
+      });
+    }
+    if (snapshot.ok === false) {
+      return res.status(snapshot.code === "not_found" ? 404 : 502).json(snapshot);
+    }
+    return res.json(snapshot);
+  });
 
   r.get("/status", async (_req, res) => {
     const app = findAcadApp();

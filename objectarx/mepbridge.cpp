@@ -36,6 +36,7 @@
 #include <dbmain.h>
 #include <dbents.h>
 #include <dbmline.h>
+#include <dbpl.h>
 #include <dbsymtb.h>
 #include <dbdict.h>
 #include <dbxrecrd.h>
@@ -63,9 +64,11 @@ std::string             gBridgeDir;               // /Users/<x>/Acad-Bridge (sha
 static std::string      gJobPath, gReqPath, gDocsPath, gTargetPath;
 static std::string      gBomReqPath, gBomPath, gTblReqPath, gNativePath, gNativeDonePath, gSelReqPath;
 static std::string      gDrawingInfoReqPath, gDrawingInfoPath;
+static std::string      gGeomReqPath, gGeomPath;
 static struct timespec  gNativeMtime = {0, 0};
 static struct timespec  gSelReqMtime = {0, 0};
 static struct timespec  gDrawingInfoReqMtime = {0, 0};
+static struct timespec  gGeomReqMtime = {0, 0};
 static std::string      gHiLayer;   // layer dang duoc highlight (de unhighlight khi doi)
 
 static const ACHAR* kGroup = L"ACAD_BRIDGE";
@@ -265,6 +268,8 @@ static void initPaths() {
     gNativeDonePath = gBridgeDir + "/native.done";   // plugin ghi so entity da tao
     gSelReqPath     = gBridgeDir + "/select.req";     // "<target>|<layer>" -> highlight + zoom
     gDrawingInfoReqPath = gBridgeDir + "/drawing-info.req";
+    gGeomReqPath        = gBridgeDir + "/geometry.req";
+    gGeomPath           = gBridgeDir + "/geometry.json";
     gDrawingInfoPath    = gBridgeDir + "/drawing-info.json";
 }
 
@@ -1727,6 +1732,476 @@ static void writeDrawingInfo() {
     writeAtomicJson(gDrawingInfoPath, json);
 }
 
+// ============================ geometry: hinh hoc 2D de ve len canvas ============================
+// Protocol:
+//   geometry.req   dong 1 = requestId
+//                  dong 2 = target (title/duong dan day du; rong = ban ve dang active)
+//                  cac dong sau = tuy chon "key=value": space, layer, maxEntities
+//   geometry.json  phan hoi atomic, luon echo requestId.
+//
+// Vi sao TACH khoi drawing-info thay vi them truong vao do: drawing-info tren mot
+// ban ve that da 350 KB ma chua co toa do nao. Nhet hinh hoc vao se lam moi lan
+// doc trang thai deu keo theo ca ban ve — trong khi phan lon man hinh chi can so
+// dem va bang layer.
+//
+// PHEP CHIEU: chi xuat X/Y. Ban ve MEP mat bang la 2D; giu Z se nhan doi payload
+// ma khong ai dung. Truong "z" cua tung doi tuong KHONG duoc suy ra tu day.
+//
+// TRUNG THUC VE DO CHINH XAC: moi doi tuong deu mang co "a" (approx). `a:1` nghia
+// la thu ve duoc chi la HINH BAO, khong phai hinh that — kieu doi tuong do chua
+// duoc xuat toa do. Khong co co nay thi canvas ve mot dong hop chu nhat va nguoi
+// dung tin do la ban ve.
+static const size_t kGeomMaxEntitiesDefault = 20000;
+static const size_t kGeomMaxEntitiesCap     = 100000;
+static const size_t kGeomMaxVertices        = 4000;   // moi polyline
+static const size_t kGeomMaxTextChars       = 120;
+// Tran TONG, ngoai tran so doi tuong va tran dinh moi polyline. 100.000 doi tuong
+// x 4.000 dinh la 400 trieu toa do noi chuoi tren MAIN THREAD cua AutoCAD — du de
+// ngon vai GB va lam dong cung hoac giet AutoCAD. Tran so doi tuong mot minh
+// khong chan duoc ban ve it doi tuong nhung moi doi tuong cuc day.
+static const size_t kGeomMaxTotalBytes      = 24 * 1024 * 1024;
+// Tran QUET, tach khoi tran XUAT. `maxEntities` chi dem thu da xuat, nen mot bo
+// loc layer khong khop gi (go sai ten chang han) se khong bao gio cham no — va
+// ta duyet ca ban ve tren MAIN THREAD du nguoi goi xin dung 1 doi tuong.
+static const size_t kGeomMaxScanned         = 200000;
+
+static std::string geomErrorJson(const std::string& requestId,
+                                 const std::string& code,
+                                 const std::string& message) {
+    return "{\"ok\":false,\"requestId\":" + jsonString(requestId) +
+           ",\"collectedAt\":" + std::to_string((long long)time(nullptr)) +
+           ",\"source\":{\"channel\":\"objectarx\",\"protocol\":1,\"pluginVersion\":\"" +
+           std::string(kPluginVersion) + "\"},\"status\":" + jsonString(code) +
+           ",\"code\":" + jsonString(code) +
+           ",\"error\":" + jsonString(message) + "}";
+}
+
+// Khoa JSON cua hinh hoc KHONG duoc trung khoa cap tren ("h" handle, "t" type,
+// "l" layer, "sp" space, "a" approx). Trung thi JSON.parse lay cai sau va doi
+// tuong mat danh tinh — TEXT tung ghi de "h" cua handle bang chieu cao chu, va
+// hit-test hong dung o cho no phai chay.
+// Cat chuoi UTF-8 ma khong xe doi mot ky tu. Ban ve Viet Nam day nhan tieng
+// Viet; cat dung 120 byte co the roi vao giua mot ky tu nhieu byte va sinh ra
+// UTF-8 hong — trinh doc se tu choi hoac thay bang o vuong.
+static void truncateUtf8(std::string& text, size_t maxBytes) {
+    if (text.size() <= maxBytes) return;
+    size_t cut = maxBytes;
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) cut--;
+    text.resize(cut);
+}
+
+static std::string xy(const AcGePoint3d& p) {
+    return jsonNumber(p.x) + "," + jsonNumber(p.y);
+}
+
+/** Hinh hoc cua mot doi tuong, hoac chuoi rong neu khong lay duoc gi. */
+// Mot doi tuong "phang theo XY" khi phap tuyen cua no la +Z. Chi khi do thi cac
+// dai luong do TRONG MAT PHANG cua doi tuong — bulge, goc cung, goc xoay chu —
+// moi con dung sau khi bo Z. Phap tuyen nghieng bien cung tron thanh elip; phap
+// tuyen -Z van song song nhung dao chieu goc.
+static bool planarXY(const AcGeVector3d& n) {
+    return fabs(n.x) < 1e-9 && fabs(n.y) < 1e-9 && n.z > 0.0;
+}
+
+static std::string entityGeometryJson(AcDbEntity* ent, bool& approx, long long& vertexOverflow) {
+    approx = false;
+
+    if (AcDbLine* line = AcDbLine::cast(ent)) {
+        return "\"k\":\"line\",\"p\":[" + xy(line->startPoint()) + "," +
+               xy(line->endPoint()) + "]";
+    }
+    if (AcDbPolyline* pl = AcDbPolyline::cast(ent)) {
+        const unsigned int n = pl->numVerts();
+        std::string pts, bulges;
+        bool anyBulge = false;
+        bool truncated = false;
+        unsigned int emitted = 0;
+        for (unsigned int i = 0; i < n; ++i) {
+            if (emitted >= kGeomMaxVertices) {
+                vertexOverflow++;
+                approx = true;
+                truncated = true;
+                break;
+            }
+            // Overload AcGePoint2d tra ve toa do OCS cua polyline. Polyline co
+            // phap tuyen khac mac dinh se ra sai vi tri, ma van khong co co `a:1`
+            // vi moi thu khac trong phan hoi deu la toa do the gioi. Overload 3D
+            // tra ve WCS.
+            AcGePoint3d v;
+            if (pl->getPointAt(i, v) != Acad::eOk) continue;
+            if (emitted) { pts += ","; bulges += ","; }
+            pts += jsonNumber(v.x) + "," + jsonNumber(v.y);
+            double b = 0.0;
+            pl->getBulgeAt(i, b);
+            if (b != 0.0) anyBulge = true;
+            bulges += jsonNumber(b);
+            emitted++;
+        }
+        // `bulge` giu lai cung tron cua polyline. Bo no di thi ong cong thanh ong
+        // thang — sai hinh ma trong van "hop ly", kieu sai te nhat.
+        //
+        // Nhung bulge chi con dung khi polyline phang theo XY: phap tuyen nghieng
+        // bien moi cung thanh elip ma khong bulge nao ta duoc, va -Z dao chieu
+        // cung. Dinh la WCS nen vi tri van dung; rieng do cong thi khong ta duoc.
+        //
+        // Cat bot dinh thi KHONG con la duong khep kin: renderer se ke mot doan
+        // gia tu dinh cuoi ve dinh dau, co the cat ngang ca ban ve.
+        //
+        // Chi RIENG viec cat dinh moi pha tinh khep kin. Bulge bi chieu phang
+        // cung bat `approx`, nhung moi dinh van con du — bo `closed` o truong hop
+        // do la tu tay xoa mat mot canh co that (canh cuoi ve dinh dau), doi lay
+        // khong duoc gi. Nen dieu kien la `truncated`, khong phai `approx`.
+        const bool flatPoly = planarXY(pl->normal());
+        if (anyBulge && !flatPoly) approx = true;
+        std::string out = "\"k\":\"poly\",\"p\":[" + pts + "]" +
+                          ",\"closed\":" + jsonBool(pl->isClosed() && !truncated);
+        if (anyBulge && flatPoly) out += ",\"bulge\":[" + bulges + "]";
+        else if (anyBulge) out += ",\"aw\":\"projected-bulge\"";
+        return out;
+    }
+    // Vong tron/cung chi giu duoc hinh khi mat phang cua no song song mat phang
+    // XY. Pháp tuyen nghieng thi hinh chieu xuong XY la mot ELIP, va goc dau/cuoi
+    // do trong mat phang rieng cua doi tuong — xuat center+radius se la mot hinh
+    // SAI ma lai khong co co `a:1`. Truong hop do roi xuong hinh bao.
+    static const double kNormalEps = 1e-9;
+    if (AcDbCircle* c = AcDbCircle::cast(ent)) {
+        const AcGeVector3d n = c->normal();
+        // Vong tron doi xung nen phap tuyen -Z van cho ra dung hinh.
+        if (fabs(n.x) < kNormalEps && fabs(n.y) < kNormalEps) {
+            return "\"k\":\"circle\",\"c\":[" + xy(c->center()) + "]" +
+                   ",\"r\":" + jsonNumber(c->radius());
+        }
+    }
+    if (AcDbArc* a = AcDbArc::cast(ent)) {
+        // Voi CUNG con phai dung chieu: phap tuyen nguoc (-Z) van song song
+        // nhung goc do nguoc chieu, nen cung se ve sai phia.
+        if (planarXY(a->normal())) {
+            return "\"k\":\"arc\",\"c\":[" + xy(a->center()) + "]" +
+                   ",\"r\":" + jsonNumber(a->radius()) +
+                   ",\"a0\":" + jsonNumber(a->startAngle()) +
+                   ",\"a1\":" + jsonNumber(a->endAngle());
+        }
+    }
+    if (AcDbPoint* pt = AcDbPoint::cast(ent)) {
+        return "\"k\":\"point\",\"p\":[" + xy(pt->position()) + "]";
+    }
+    if (AcDbBlockReference* br = AcDbBlockReference::cast(ent)) {
+        std::string name;
+        AcDbBlockTableRecord* btr = nullptr;
+        if (acdbOpenObject(btr, br->blockTableRecord(), AcDb::kForRead) == Acad::eOk && btr) {
+            AcString n;
+            btr->getName(n);
+            name = toUtf8(n.kwszPtr());
+            btr->close();
+        }
+        const AcGeScale3d sc = br->scaleFactors();
+        // `rotation()` va `scaleFactors()` mo ta phep bien doi TRONG mat phang
+        // chen cua block. Phap tuyen khac +Z thi vi tri XY van dung nhung huong
+        // va ti le chieu xuong XY khong con dung — block se ve sai huong hoac
+        // sai kich thuoc.
+        if (!planarXY(br->normal())) approx = true;
+        // Chi vi tri + phep bien doi. Hinh cua block nam trong dinh nghia cua no;
+        // xuat ca noi dung block o day se nhan ban hinh hoc cho MOI the hien.
+        return "\"k\":\"insert\",\"p\":[" + xy(br->position()) + "]" +
+               ",\"rot\":" + jsonNumber(br->rotation()) +
+               ",\"sc\":[" + jsonNumber(sc.sx) + "," + jsonNumber(sc.sy) + "]" +
+               ",\"name\":" + jsonString(name) +
+               (approx ? ",\"aw\":\"projected-transform\"" : "");
+    }
+    if (AcDbText* t = AcDbText::cast(ent)) {
+        std::string body = toUtf8(t->textStringConst());
+        truncateUtf8(body, kGeomMaxTextChars);
+        // Goc xoay do TRONG mat phang cua chu. Phap tuyen nghieng thi goc do
+        // khong dung sau khi bo Z — vi tri van dung nen van xuat, nhung phai
+        // danh dau gan dung.
+        if (!planarXY(t->normal())) approx = true;
+        return "\"k\":\"text\",\"p\":[" + xy(t->position()) + "]" +
+               ",\"th\":" + jsonNumber(t->height()) +
+               ",\"rot\":" + jsonNumber(t->rotation()) +
+               (approx ? ",\"aw\":\"projected-rotation\"" : "") +
+               ",\"txt\":" + jsonString(body);
+    }
+    if (AcDbMText* m = AcDbMText::cast(ent)) {
+        std::string body = toUtf8(m->contents());
+        truncateUtf8(body, kGeomMaxTextChars);
+        if (!planarXY(m->normal())) approx = true;
+        return "\"k\":\"text\",\"p\":[" + xy(m->location()) + "]" +
+               ",\"th\":" + jsonNumber(m->textHeight()) +
+               ",\"rot\":" + jsonNumber(m->rotation()) +
+               (approx ? ",\"aw\":\"projected-rotation\"" : "") +
+               ",\"txt\":" + jsonString(body);
+    }
+
+    if (AcDbMline* ml = AcDbMline::cast(ent)) {
+        // MLINE la cach ban ve MEP ve ONG (hai duong song song). Tra ve hinh bao
+        // se cho ra mot day hop chu nhat dung cho cho ong chay — vo dung de nhin
+        // va vo dung de bat diem. Xuat TIM ONG: mot duong, dung vi tri, dung
+        // huong. Van la `a:1` vi day khong phai hinh that duoc ve tren ban ve.
+        const int n = (int)ml->numVertices();
+        std::string pts;
+        int emittedVerts = 0;
+        bool overflowed = false;
+        for (int i = 0; i < n; ++i) {
+            if ((size_t)emittedVerts >= kGeomMaxVertices) {
+                vertexOverflow++;
+                overflowed = true;
+                break;
+            }
+            const AcGePoint3d v = ml->vertexAt(i);
+            if (emittedVerts) pts += ",";
+            pts += jsonNumber(v.x) + "," + jsonNumber(v.y);
+            emittedVerts++;
+        }
+        if (emittedVerts >= 2) {
+            approx = true;
+            // Cat bot dinh thi khong con khep kin — giong LWPOLYLINE. Bao
+            // `closed` se ke mot doan gia tu dinh cuoi ve dinh dau.
+            return "\"k\":\"poly\",\"p\":[" + pts + "]" +
+                   ",\"closed\":" + jsonBool(ml->closedMline() && !overflowed) +
+                   ",\"aw\":\"mline-centerline\"";
+        }
+    }
+
+    // Con lai: chi co hinh bao. Danh dau `a:1` de canvas ve khac di va man hinh
+    // noi ro day khong phai hinh that.
+    AcDbExtents ext;
+    if (ent->getGeomExtents(ext) == Acad::eOk && ext.isValid()) {
+        approx = true;
+        return "\"k\":\"box\",\"b\":[" + jsonNumber(ext.minPoint().x) + "," +
+               jsonNumber(ext.minPoint().y) + "," +
+               jsonNumber(ext.maxPoint().x) + "," +
+               jsonNumber(ext.maxPoint().y) + "],\"aw\":\"bounding-box\"";
+    }
+    return "";
+}
+
+static void writeGeometry() {
+    const std::string raw = readAll(gGeomReqPath);
+    std::vector<std::string> lines;
+    {
+        std::string cur;
+        for (char ch : raw) {
+            if (ch == '\n') { lines.push_back(cur); cur.clear(); }
+            else if (ch != '\r') cur += ch;
+        }
+        lines.push_back(cur);
+    }
+    const std::string requestId = lines.empty() ? "" : lines[0];
+    const std::string target = lines.size() > 1 ? lines[1] : "";
+
+    std::string wantSpace, wantLayer;
+    size_t maxEntities = kGeomMaxEntitiesDefault;
+    for (size_t i = 2; i < lines.size(); ++i) {
+        const size_t eq = lines[i].find('=');
+        if (eq == std::string::npos) continue;
+        const std::string key = lines[i].substr(0, eq);
+        const std::string value = lines[i].substr(eq + 1);
+        if (key == "space") wantSpace = value;
+        else if (key == "layer") wantLayer = value;
+        else if (key == "maxEntities") {
+            const long long parsed = atoll(value.c_str());
+            if (parsed > 0)
+                maxEntities = (size_t)parsed < kGeomMaxEntitiesCap
+                    ? (size_t)parsed : kGeomMaxEntitiesCap;
+        }
+    }
+
+    if (requestId.empty()) {
+        writeAtomicJson(gGeomPath,
+                        geomErrorJson(requestId, "invalid_request", "requestId is required"));
+        return;
+    }
+    if (!acDocManager) {
+        writeAtomicJson(gGeomPath,
+                        geomErrorJson(requestId, "bridge_unavailable", "document manager unavailable"));
+        return;
+    }
+    AcApDocument* doc = findDocExact(target);
+    if (!doc) {
+        writeAtomicJson(gGeomPath,
+                        geomErrorJson(requestId, "not_found",
+                                      target.empty() ? "no active document" : "exact target not open"));
+        return;
+    }
+    AcDbDatabase* db = doc->database();
+    if (!db) {
+        writeAtomicJson(gGeomPath,
+                        geomErrorJson(requestId, "database_unavailable", "document has no database"));
+        return;
+    }
+
+    // ObjectARX doi khoa doc truoc khi doc database cua mot tai lieu khong phai
+    // tai lieu hien hanh. `writeDrawingInfo()` da lam dung; thieu no thi mot lenh
+    // dang chay song song co the lam lan quet hong — hoac lam AutoCAD mat on dinh.
+    const Acad::ErrorStatus geomLock = acDocManager->lockDocument(doc, AcAp::kRead);
+    if (geomLock != Acad::eOk) {
+        writeAtomicJson(gGeomPath,
+                        geomErrorJson(requestId, "busy",
+                                      "read lock failed: " + std::to_string((int)geomLock)));
+        return;
+    }
+
+    std::vector<std::string> warnings;
+    std::string rows;
+    long long emitted = 0, scanned = 0, approxCount = 0, skipped = 0, vertexOverflow = 0;
+    bool truncated = false;
+    bool scanCapped = false;
+    // Bounds phai theo TUNG SPACE. Gop Model voi cac layout giay vao mot con so
+    // cho ra mot khung vo nghia: toa do giay tinh bang mm tren to giay, con model
+    // co the o toa do trac dia cach goc hang trieu don vi. Canvas cung chi ve mot
+    // space mot luc.
+    std::map<std::string, AcDbExtents> spaceExtents;
+    std::map<std::string, long long> spaceCounts;
+    // Ten MOI layout, ke ca layout chua kip quet. Cham tran `maxEntities` o
+    // Model space ma dung han vong lap thi cac layout sau bien mat khoi phan
+    // hoi — giao dien khong dung bo chon space duoc, va nguoi dung khong biet
+    // ban ve co nhung layout do. Doc ten layout thi re; quet doi tuong moi dat.
+    std::vector<std::string> allLayouts;
+
+    AcDbBlockTable* table = nullptr;
+    if (db->getBlockTable(table, AcDb::kForRead) != Acad::eOk || !table) {
+        acDocManager->unlockDocument(doc);
+        writeAtomicJson(gGeomPath,
+                        geomErrorJson(requestId, "database_unavailable", "block table unavailable"));
+        return;
+    }
+    AcDbBlockTableIterator* btIt = nullptr;
+    if (table->newIterator(btIt) == Acad::eOk && btIt) {
+        for (; !btIt->done(); btIt->step()) {
+            AcDbBlockTableRecord* space = nullptr;
+            if (btIt->getRecord(space, AcDb::kForRead) != Acad::eOk || !space) continue;
+            if (!space->isLayout()) { space->close(); continue; }
+            const std::string spaceName = layoutNameFor(space);
+            allLayouts.push_back(spaceName);
+            if (truncated) { space->close(); continue; }
+            if (!wantSpace.empty() && spaceName != wantSpace) { space->close(); continue; }
+
+            AcDbBlockTableRecordIterator* entIt = nullptr;
+            if (space->newIterator(entIt) == Acad::eOk && entIt) {
+                for (; !entIt->done(); entIt->step()) {
+                    if ((size_t)scanned >= kGeomMaxScanned) {
+                        truncated = true;
+                        scanCapped = true;
+                        break;
+                    }
+                    AcDbEntity* ent = nullptr;
+                    if (entIt->getEntity(ent, AcDb::kForRead) != Acad::eOk || !ent) continue;
+                    scanned++;
+                    const std::string layer = entityLayer(ent);
+                    if (!wantLayer.empty() && layer != wantLayer) { ent->close(); continue; }
+
+                    bool approx = false;
+                    const std::string geom = entityGeometryJson(ent, approx, vertexOverflow);
+                    if (geom.empty()) { skipped++; ent->close(); continue; }
+
+                    // Chi bao `truncated` khi that su BO SOT mot doi tuong dang le
+                    // duoc xuat. Kiem tran truoc khi loc layer se bao thieu du moi
+                    // doi tuong con lai deu thuoc layer khac — giao dien duoc yeu
+                    // cau hien co nay len, nen bao nham la noi doi voi nguoi dung.
+                    if ((size_t)emitted >= maxEntities || rows.size() >= kGeomMaxTotalBytes) {
+                        truncated = true;
+                        ent->close();
+                        break;
+                    }
+                    if (approx) approxCount++;
+
+                    AcDbExtents ext;
+                    if (ent->getGeomExtents(ext) == Acad::eOk && ext.isValid()) {
+                        auto found = spaceExtents.find(spaceName);
+                        if (found == spaceExtents.end()) spaceExtents[spaceName] = ext;
+                        else found->second.addExt(ext);
+                    }
+                    spaceCounts[spaceName]++;
+
+                    if (emitted) rows += ",";
+                    rows += "{\"h\":" + jsonString(objectHandle(ent)) +
+                            ",\"t\":" + jsonString(objectType(ent)) +
+                            ",\"l\":" + jsonString(layer) +
+                            ",\"sp\":" + jsonString(spaceName) +
+                            (approx ? ",\"a\":1" : "") +
+                            "," + geom + "}";
+                    emitted++;
+                    ent->close();
+                }
+                delete entIt;
+            }
+            space->close();
+        }
+        delete btIt;
+    } else {
+        addWarning(warnings, "entity_iterator_unavailable");
+    }
+    table->close();
+
+    if (truncated) addWarning(warnings, "geometry_truncated");
+    // Hai nguyen nhan cat bot rat khac nhau: cham tran XUAT nghia la con doi
+    // tuong khop chua gui; cham tran QUET nghia la con phan ban ve chua nhin toi.
+    if (scanCapped) addWarning(warnings, "geometry_scan_cap_reached");
+    if (vertexOverflow) addWarning(warnings, "polyline_vertices_truncated");
+    if (skipped) addWarning(warnings, "entities_without_geometry_skipped");
+
+    std::string warningsJson = "[";
+    for (size_t i = 0; i < warnings.size(); ++i) {
+        if (i) warningsJson += ",";
+        warningsJson += jsonString(warnings[i]);
+    }
+    warningsJson += "]";
+
+    std::string bounds = "{";
+    bool firstBound = true;
+    for (const auto& entry : spaceExtents) {
+        if (!firstBound) bounds += ",";
+        firstBound = false;
+        bounds += jsonString(entry.first) + ":[" +
+                  jsonNumber(entry.second.minPoint().x) + "," +
+                  jsonNumber(entry.second.minPoint().y) + "," +
+                  jsonNumber(entry.second.maxPoint().x) + "," +
+                  jsonNumber(entry.second.maxPoint().y) + "]";
+    }
+    bounds += "}";
+
+    std::string spacesJson = "{";
+    bool firstSpace = true;
+    for (const auto& entry : spaceCounts) {
+        if (!firstSpace) spacesJson += ",";
+        firstSpace = false;
+        spacesJson += jsonString(entry.first) + ":" + std::to_string(entry.second);
+    }
+    spacesJson += "}";
+
+    std::string layoutsJson = "[";
+    for (size_t i = 0; i < allLayouts.size(); ++i) {
+        if (i) layoutsJson += ",";
+        layoutsJson += jsonString(allLayouts[i]);
+    }
+    layoutsJson += "]";
+
+    const std::string json =
+        "{\"ok\":true,\"requestId\":" + jsonString(requestId) +
+        ",\"collectedAt\":" + std::to_string((long long)time(nullptr)) +
+        ",\"source\":{\"channel\":\"objectarx\",\"protocol\":1,\"pluginVersion\":\"" +
+        std::string(kPluginVersion) + "\"}" +
+        ",\"document\":{\"title\":" + jsonString(toUtf8(doc->docTitle())) +
+        ",\"file\":" + jsonString(toUtf8(doc->fileName())) +
+        ",\"revision\":" + std::to_string((long long)acadDatabaseRevision(db)) + "}" +
+        ",\"projection\":\"xy\"" +
+        ",\"filter\":{\"space\":" + jsonString(wantSpace) +
+        ",\"layer\":" + jsonString(wantLayer) +
+        ",\"maxEntities\":" + std::to_string((long long)maxEntities) + "}" +
+        ",\"counts\":{\"scanned\":" + std::to_string(scanned) +
+        ",\"emitted\":" + std::to_string(emitted) +
+        ",\"approx\":" + std::to_string(approxCount) +
+        ",\"skipped\":" + std::to_string(skipped) + "}" +
+        ",\"truncated\":" + jsonBool(truncated) +
+        ",\"bounds\":" + bounds +
+        ",\"spaces\":" + spacesJson +
+        ",\"layouts\":" + layoutsJson +
+        ",\"warnings\":" + warningsJson +
+        ",\"entities\":[" + rows + "]}";
+    acDocManager->unlockDocument(doc);
+    writeAtomicJson(gGeomPath, json);
+}
+
 // ============================ chay job ============================
 // AutoCAD executes sendStringToExecute asynchronously. Snapshot the watched
 // transport first so a later daemon write can never change the bytes of a job
@@ -1819,6 +2294,11 @@ static void fsCallback(ConstFSEventStreamRef, void*, size_t, void*,
         gDrawingInfoReqMtime = st.st_mtimespec;
         writeDrawingInfo();
     }
+    if (stat(gGeomReqPath.c_str(), &st) == 0 &&
+        tsChanged(st.st_mtimespec, gGeomReqMtime)) {
+        gGeomReqMtime = st.st_mtimespec;
+        writeGeometry();
+    }
     if (stat(gReqPath.c_str(), &st) == 0 && tsChanged(st.st_mtimespec, gReqMtime)) {
         gReqMtime = st.st_mtimespec;
         writeDocs();                         // app hoi danh sach ban ve (heartbeat)
@@ -1900,6 +2380,8 @@ static void startWatch() {
     if (stat(gSelReqPath.c_str(), &st) == 0) gSelReqMtime = st.st_mtimespec;
     if (stat(gDrawingInfoReqPath.c_str(), &st) == 0)
         gDrawingInfoReqMtime = st.st_mtimespec;   // khong xu ly lai request cu
+    if (stat(gGeomReqPath.c_str(), &st) == 0)
+        gGeomReqMtime = st.st_mtimespec;
     mepRawOnStartWatch();
 
     CFStringRef dir = CFStringCreateWithCString(nullptr, gBridgeDir.c_str(), kCFStringEncodingUTF8);
