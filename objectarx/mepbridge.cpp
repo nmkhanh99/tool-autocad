@@ -40,6 +40,8 @@
 #include <dbdim.h>
 #include <dbelipse.h>
 #include <dbcurve.h>
+#include <acgi.h>
+#include <gearc3d.h>
 #include <dbpl.h>
 #include <dbsymtb.h>
 #include <dbdict.h>
@@ -175,10 +177,24 @@ static void forgetDocumentState(const AcApDocument* document) {
 }
 
 // ============================ UTF-8 <-> wchar_t (UTF-32 tren Mac) ============================
-std::string toUtf8(const wchar_t* w) {
+/** Doi chuoi rong sang UTF-8, dung LAI sau `maxChars` ky tu.
+ *
+ * `maxChars < 0` nghia la "chay den ky tu NUL". Ban co gioi han ton tai vi
+ * `AcGiGeometry::text` co the dua vao mot bo dem KHONG ket thuc NUL kem do dai
+ * rieng — quet den NUL o do la doc qua vung nho, ngay trong long AutoCAD.
+ *
+ * Cat theo KY TU chu khong theo byte: `length` dem ky tu rong, con cat mot
+ * std::string la cat byte, nen chu co dau se bi cat gay doi mot ky tu UTF-8. */
+std::string toUtf8Bounded(const wchar_t* w, long maxChars) {
     std::string out;
     if (!w) return out;
-    for (const wchar_t* p = w; *p; ++p) {
+    long taken = 0;
+    // Tran phai nam TRONG dieu kien vong lap, khong phai trong than.
+    // `for (p = w; *p; ++p)` roi kiem tran o dong dau than se doc `*p` MOT LAN
+    // nua sau ky tu hop le cuoi cung — dung cai ma ham nay sinh ra de tranh.
+    // `&&` chan ngan mach: cham tran thi khong bao gio cham vao `*p`.
+    for (const wchar_t* p = w; (maxChars < 0 || taken < maxChars) && *p; ++p) {
+        taken++;
         unsigned c = (unsigned)*p;
         if (c < 0x80) out += (char)c;
         else if (c < 0x800) { out += (char)(0xC0 | (c >> 6)); out += (char)(0x80 | (c & 0x3F)); }
@@ -186,6 +202,10 @@ std::string toUtf8(const wchar_t* w) {
         else { out += (char)(0xF0 | (c >> 18)); out += (char)(0x80 | ((c >> 12) & 0x3F)); out += (char)(0x80 | ((c >> 6) & 0x3F)); out += (char)(0x80 | (c & 0x3F)); }
     }
     return out;
+}
+
+std::string toUtf8(const wchar_t* w) {
+    return toUtf8Bounded(w, -1);
 }
 std::wstring toWide(const std::string& s) {
     std::wstring out;
@@ -1784,6 +1804,15 @@ static const size_t kGeomMaxHatchSegments   = 1200;
 // o moi muc thu phong hop ly, ma van khong lam phinh payload: mot ban ve vai
 // chuc spline la vai nghin so, khong phai vai tram nghin.
 static const int    kCurveSamples           = 48;
+// Tran cho hinh bat qua `worldDraw`. Mot MULTILEADER vai chuc doan; mot HATCH
+// to dac co the ra hang nghin mat. Tran nay chan mot doi tuong lam phinh ca
+// payload.
+static const size_t kGeomMaxWorldDrawSegments = 3000;
+// Do sau long khi `draw()` goi de quy. Mui ten MULTILEADER la mot block, va
+// block long block la chuyen binh thuong; vong lap thi khong.
+static const int    kWorldDrawMaxDepth      = 6;
+// So diem lay mau tren MOT doan cong cua polyline bat qua `worldDraw`.
+static const int    kPlineArcSamples        = 8;
 
 static std::string geomErrorJson(const std::string& requestId,
                                  const std::string& code,
@@ -1821,6 +1850,569 @@ static std::string xy(const AcGePoint3d& p) {
 // tuyen -Z van song song nhung dao chieu goc.
 static bool planarXY(const AcGeVector3d& n) {
     return fabs(n.x) < 1e-9 && fabs(n.y) < 1e-9 && n.z > 0.0;
+}
+
+/* --- Bat hinh qua `worldDraw` --------------------------------------------
+ *
+ * AutoCAD ve moi doi tuong bang cach goi `worldDraw()` cua no voi mot bo
+ * "ngu canh ve". Dua vao do mot bo ngu canh TU VIET thi thay vi ve len man
+ * hinh, ta nhan duoc chinh cac nguyen thuy do hoa ma AutoCAD dinh ve.
+ *
+ * Vi sao chon duong nay cho MULTILEADER thay vi API rieng cua `AcDbMLeader`:
+ * mot bo bat dung duoc cho MOI kieu doi tuong. Xong MULTILEADER la xong luon
+ * ca HATCH to dac (bien dang canh roi) va VIEWPORT — ba nhom cuoi cung con
+ * phai ve bang hinh bao.
+ *
+ * ⚠️ Vi sao duong nay AN TOAN, khac han lan truoc:
+ * `worldDraw` chi ĐƯA du lieu vao ham cua ta, khong giao quyen so huu gi ca.
+ * Moi con tro nhan duoc deu thuoc ve AutoCAD; ta chi doc va sao chep, khong
+ * `delete` gi. Lan truoc di duong `AcGeCurve2d*` cua hatch — noi tai lieu bao
+ * NGUOI GOI phai giai phong — va AutoCAD chet sau khi doc xong dung mot luot.
+ *
+ * Nhung gi khong hien thuc deu tra ve gia tri vo hai chu khong bao gio nem hay
+ * cham vao con tro: doi tuong nay nam TRONG loi goi cua AutoCAD, nen mot cu no
+ * o day la sap ca AutoCAD chu khong phai sap mot lenh.
+ */
+class GeomCapture;
+
+class CaptureTraits : public AcGiSubEntityTraits {
+public:
+    void setColor(const Adesk::UInt16) override {}
+    void setTrueColor(const AcCmEntityColor&) override {}
+    void setLayer(const AcDbObjectId) override {}
+    void setLineType(const AcDbObjectId) override {}
+    void setSelectionMarker(const Adesk::LongPtr) override {}
+    void setFillType(const AcGiFillType t) override { mFill = t; }
+    void setLineWeight(const AcDb::LineWeight) override {}
+    void setLineTypeScale(double) override {}
+    void setThickness(double) override {}
+    Adesk::UInt16 color() const override { return 256; }          // ByLayer
+    AcCmEntityColor trueColor() const override { return AcCmEntityColor(); }
+    AcDbObjectId layerId() const override { return AcDbObjectId::kNull; }
+    AcDbObjectId lineTypeId() const override { return AcDbObjectId::kNull; }
+    AcGiFillType fillType() const override { return mFill; }
+    AcDb::LineWeight lineWeight() const override { return AcDb::kLnWtByLayer; }
+    double lineTypeScale() const override { return 1.0; }
+    double thickness() const override { return 0.0; }
+private:
+    AcGiFillType mFill = kAcGiFillNever;
+};
+
+class CaptureContext : public AcGiContext {
+public:
+    explicit CaptureContext(AcDbDatabase* db) : mDb(db) {}
+    bool isPlotGeneration() const override { return false; }
+    AcDbDatabase* database() const override { return mDb; }
+    bool isBoundaryClipping() const override { return false; }
+private:
+    AcDbDatabase* mDb;
+};
+
+/** Hinh hoc bat duoc, da o TOA DO THE GIOI.
+ *
+ * Moi nguyen thuy deu di qua ngan xep phep bien doi truoc khi ghi lai: AutoCAD
+ * day/bo phep bien doi khi ve mui ten va noi dung block cua MULTILEADER, nen bo
+ * qua ngan xep la mui ten roi ve goc toa do. */
+class GeomCapture : public AcGiWorldGeometry {
+public:
+    /** Cac duong gap khuc bat duoc, moi phan tu la mot chuoi "x,y,x,y,...". */
+    mutable std::vector<std::string> polys;
+    /** Duong khep kin (polygon/shell/mesh) — ve rieng de con khep vong. */
+    mutable std::vector<std::string> loops;
+    mutable size_t segments = 0;
+    mutable bool cut = false;
+    /** Chu bat duoc, moi phan tu la than mot doi tuong `text`. */
+    mutable std::vector<std::string> texts;
+
+    GeomCapture() { mStack.push_back(AcGeMatrix3d::kIdentity); }
+
+    // ---- phep bien doi ----
+    void getModelToWorldTransform(AcGeMatrix3d& m) const override { m = mStack.back(); }
+    void getWorldToModelTransform(AcGeMatrix3d& m) const override { m = mStack.back().inverse(); }
+    Adesk::Boolean pushModelTransform(const AcGeVector3d& normal) override {
+        AcGeMatrix3d m;
+        // Thuat toan truc tuy y cua AutoCAD: dung mot he truc on dinh tu phap
+        // tuyen. `setToPlaneToWorld` lam dung viec do.
+        m.setToPlaneToWorld(normal);
+        mStack.push_back(mStack.back() * m);
+        return Adesk::kTrue;
+    }
+    Adesk::Boolean pushModelTransform(const AcGeMatrix3d& m) override {
+        mStack.push_back(mStack.back() * m);
+        return Adesk::kTrue;
+    }
+    Adesk::Boolean popModelTransform() override {
+        // Giu lai phan tu goc: bo het roi thi `back()` la hanh vi khong xac dinh
+        // — mot loi khong no o day ma no o lan ve tiep theo.
+        if (mStack.size() > 1) mStack.pop_back();
+        return Adesk::kTrue;
+    }
+    /* Ba nhom `push*Transform` duoi day danh cho do hoa "chu thich" — thu tu
+     * dinh vi hoac tu co gian theo khung nhin. Bo qua chung, chi day mot ban
+     * sao, la vut di dung phep bien doi ma doi tuong dang yeu cau: ghi chu se
+     * roi sai cho hoac sai co.
+     *
+     * Nhung chi tinh duoc nhung behavior thuoc VE THE GIOI. Cac behavior
+     * `Viewport*`/`Screen*` can mot camera va mot khung nhin — o day khong co
+     * cai nao, va bia ra mot khung nhin gia se cho ra hinh sai o mot muc thu
+     * phong tuy tien. Voi chung: giu nguyen (đon vi), tuc la ve o ti le cua ban
+     * ve. Do la lua chon co y, khong phai bo sot. */
+    AcGeMatrix3d pushPositionTransform(AcGiPositionTransformBehavior behavior,
+                                       const AcGePoint3d& offset) override {
+        AcGeMatrix3d m;
+        if (behavior == kAcGiWorldPosition || behavior == kAcGiWorldWithScreenOffsetPosition) {
+            m.setToTranslation(AcGeVector3d(offset.x, offset.y, offset.z));
+        }
+        mStack.push_back(mStack.back() * m);
+        return m;
+    }
+    AcGeMatrix3d pushPositionTransform(AcGiPositionTransformBehavior behavior,
+                                       const AcGePoint2d& offset) override {
+        return pushPositionTransform(behavior, AcGePoint3d(offset.x, offset.y, 0.0));
+    }
+    AcGeMatrix3d pushScaleTransform(AcGiScaleTransformBehavior behavior,
+                                    const AcGePoint3d& extents) override {
+        AcGeMatrix3d m;
+        if (behavior == kAcGiWorldScale) {
+            // He so 0 lam ma tran suy bien: moi diem sau do sup ve mot duong
+            // hoac mot diem, va ca cum hinh bien mat khong dau vet.
+            const double sx = extents.x != 0.0 ? extents.x : 1.0;
+            const double sy = extents.y != 0.0 ? extents.y : 1.0;
+            const double sz = extents.z != 0.0 ? extents.z : 1.0;
+            m.setCoordSystem(AcGePoint3d::kOrigin,
+                             AcGeVector3d::kXAxis * sx,
+                             AcGeVector3d::kYAxis * sy,
+                             AcGeVector3d::kZAxis * sz);
+        }
+        mStack.push_back(mStack.back() * m);
+        return m;
+    }
+    AcGeMatrix3d pushScaleTransform(AcGiScaleTransformBehavior behavior,
+                                    const AcGePoint2d& extents) override {
+        return pushScaleTransform(behavior, AcGePoint3d(extents.x, extents.y, 1.0));
+    }
+    AcGeMatrix3d pushOrientationTransform(AcGiOrientationTransformBehavior) override {
+        // Ca ba behavior huong deu can mot camera de biet "quay ve phia nao".
+        // Khong co camera thi giu nguyen huong cua ban ve.
+        mStack.push_back(mStack.back());
+        return AcGeMatrix3d::kIdentity;
+    }
+    /** Tra `kFalse`: **khong cat theo bien**.
+     *
+     * Tra `kTrue` la hua se cat roi khong cat — nguyen thuy nam ngoai bien van
+     * bi ghi lai thanh hinh nhin thay duoc, ma doi tuong lai tin la da duoc cat
+     * nen khong tim duong khac. VIEWPORT chinh la thu dung co che nay. Noi
+     * khong ngay tu dau de no tu chon cach ve khac. */
+    Adesk::Boolean pushClipBoundary(AcGiClipBoundary*) override { return Adesk::kFalse; }
+    void popClipBoundary() override {}
+
+    // ---- nguyen thuy giu lai ----
+    Adesk::Boolean polyline(const Adesk::UInt32 n, const AcGePoint3d* pts,
+                            const AcGeVector3d*, Adesk::LongPtr) const override {
+        return addRun(n, pts, false);
+    }
+    Adesk::Boolean polygon(const Adesk::UInt32 n, const AcGePoint3d* pts) const override {
+        return addRun(n, pts, true);
+    }
+    Adesk::Boolean polylineEye(const Adesk::UInt32 n, const AcGePoint3d* pts) const {
+        return addRun(n, pts, false);
+    }
+    // `AcGiPolyline` goi hinh hoc qua giao dien rieng cua no. Khong doc ra
+    // duoc bang API cong khai o day nen bo qua — day la duong ve toi uu ma
+    // AutoCAD dung cho polyline nang, va no luon co duong thuong thay the.
+    Adesk::Boolean polyline(const AcGiPolyline&) const override { return Adesk::kTrue; }
+    Adesk::Boolean circle(const AcGePoint3d& c, const double r, const AcGeVector3d& normal) const override {
+        AcGeVector3d u, v;
+        planeBasis(normal, u, v);
+        return addEllipse(c, u, v, r, r, 0.0, 6.283185307179586, true);
+    }
+    Adesk::Boolean circle(const AcGePoint3d& a, const AcGePoint3d& b, const AcGePoint3d& c) const override {
+        // Ba diem xac dinh mot vong tron. Ve tam giac qua ba diem la SAI hinh
+        // hoan toan — mot vong tron thanh mot tam giac. `AcGeCircArc3d` la doi
+        // tuong tren NGAN XEP, khong cap phat gi cho ai.
+        const AcGeCircArc3d arc(a, b, c);
+        AcGeVector3d u, v;
+        planeBasis(arc.normal(), u, v);
+        return addEllipse(arc.center(), u, v, arc.radius(), arc.radius(),
+                          0.0, 6.283185307179586, true);
+    }
+    Adesk::Boolean circularArc(const AcGePoint3d& c, const double r, const AcGeVector3d& normal,
+                               const AcGeVector3d& startVec, const double sweep,
+                               const AcGiArcType) const override {
+        // Truc U lay tu chinh vecto dau: goc 0 cua cung nam o do. Lay `atan2`
+        // tren x,y cua no la gia dinh cung nam trong mat phang XY.
+        AcGeVector3d u(startVec), v;
+        if (u.length() < 1e-12) { planeBasis(normal, u, v); }
+        else {
+            u.normalize();
+            AcGeVector3d n(normal);
+            if (n.length() < 1e-12) n = AcGeVector3d::kZAxis; else n.normalize();
+            v = n.crossProduct(u);
+            if (v.length() < 1e-12) { planeBasis(normal, u, v); } else v.normalize();
+        }
+        // `sweep` cua AutoCAD CO DAU. Giu nguyen dau.
+        return addEllipse(c, u, v, r, r, 0.0, sweep, false);
+    }
+    Adesk::Boolean circularArc(const AcGePoint3d& s, const AcGePoint3d& m,
+                               const AcGePoint3d& e, const AcGiArcType) const override {
+        const AcGeCircArc3d arc(s, m, e);
+        AcGeVector3d u, v;
+        planeBasis(arc.normal(), u, v);
+        // Goc cua diem dau/cuoi TRONG he truc vua dung.
+        const double TAU = 6.283185307179586;
+        const double a0 = angleIn(u, v, arc.center(), s);
+        const double am = angleIn(u, v, arc.center(), m);
+        const double a1 = angleIn(u, v, arc.center(), e);
+        auto wrap = [TAU](double a) { while (a < 0.0) a += TAU; while (a >= TAU) a -= TAU; return a; };
+        const double ccwEnd = wrap(a1 - a0);
+        const double ccwMid = wrap(am - a0);
+        // Cung phai di QUA diem giua. Neu di nguoc chieu kim dong ho ma chua gap
+        // diem giua thi cung that di theo chieu kim dong ho — sweep am.
+        const double sweep = ccwMid < ccwEnd ? ccwEnd : ccwEnd - TAU;
+        return addEllipse(arc.center(), u, v, arc.radius(), arc.radius(), a0, sweep, false);
+    }
+    Adesk::Boolean ellipticalArc(const AcGePoint3d& c, const AcGeVector3d& normal,
+                                 double major, double minor, double t0, double t1,
+                                 double tilt, AcGiArcType) const override {
+        AcGeVector3d u, v;
+        planeBasis(normal, u, v);
+        // `tilt` xoay truc lon TRONG mat phang cua elip, khong phai trong XY.
+        const AcGeVector3d uu = u * cos(tilt) + v * sin(tilt);
+        const AcGeVector3d vv = v * cos(tilt) - u * sin(tilt);
+        // Hai goc, khong co dau: quy uoc cua AutoCAD la di nguoc chieu kim dong
+        // ho tu dau den cuoi, nen goc cuoi nho hon nghia la da vong qua 0.
+        double sweep = t1 - t0;
+        while (sweep <= 0.0) sweep += 6.283185307179586;
+        return addEllipse(c, uu, vv, major, minor, t0, sweep, false);
+    }
+    Adesk::Boolean pline(const AcDbPolyline& pl, Adesk::UInt32 from, Adesk::UInt32 count) const override {
+        const unsigned int n = pl.numVerts();
+        if (n < 2) return Adesk::kTrue;
+        const bool closed = pl.isClosed();
+        const unsigned int allSegs = closed ? n : n - 1;
+        // Duong MO khong vong lai: bat dau tu dinh 3 cua mot duong 5 dinh thi
+        // chi con 1 doan, khong phai 4. Lay `% n` ma khong ke den dieu do se
+        // quet vong qua dinh 0 va nhat ve nhung doan khong lien quan.
+        const unsigned int available = closed ? allSegs
+                                              : (from < allSegs ? allSegs - from : 0);
+        const unsigned int segs = count ? (count < available ? count : available) : available;
+        if (!segs) return Adesk::kTrue;
+        // Chi khep kin khi bat TRON ca duong. Bat mot khuc ma van bao khep kin
+        // se ke mot doan GIA tu dinh cuoi cua khuc ve dinh dau cua no.
+        const bool whole = (from == 0 && segs == allSegs);
+
+        std::vector<AcGePoint3d> pts;
+        AcGePoint3d v;
+        for (unsigned int seg = 0; seg < segs; ++seg) {
+            const unsigned int i = closed ? (from + seg) % n : from + seg;
+            if (pl.getPointAt(i, v) == Acad::eOk) pts.push_back(v);
+            double bulge = 0.0;
+            pl.getBulgeAt(i, bulge);
+            if (bulge == 0.0) continue;
+            // Doan CONG. Chi giu hai dinh la bien no thanh day cung: ong cong ve
+            // ra thang — sai hinh ma trong van "hop ly", kieu sai te nhat. Lay
+            // mau qua `getPointAtParam` (tham so cua doan i la [i, i+1]); ham
+            // nay ghi vao mot diem cua nguoi goi, khong cap phat gi.
+            for (int k = 1; k < kPlineArcSamples; ++k) {
+                AcGePoint3d q;
+                const double t = (double)i + (double)k / (double)kPlineArcSamples;
+                if (pl.getPointAtParam(t, q) == Acad::eOk) pts.push_back(q);
+            }
+        }
+        // Dinh cuoi: bo qua khi duong khep kin va bat tron, vi luc do no trung
+        // dinh dau va `closed` da lo phan noi lai.
+        if (!(closed && whole)) {
+            const unsigned int last = closed ? (from + segs) % n : from + segs;
+            if (pl.getPointAt(last, v) == Acad::eOk) pts.push_back(v);
+        }
+        return pts.size() >= 2
+            ? addRun((Adesk::UInt32)pts.size(), pts.data(), closed && whole)
+            : Adesk::kTrue;
+    }
+    Adesk::Boolean polyPolyline(Adesk::UInt32, const AcGiPolyline*) const override { return Adesk::kTrue; }
+    Adesk::Boolean polyPolygon(const Adesk::UInt32, const Adesk::UInt32*, const AcGePoint3d*,
+                               const Adesk::UInt32*, const AcGePoint3d*, const AcCmEntityColor*,
+                               const AcGiLineType*, const AcCmEntityColor*,
+                               const AcCmTransparency*) const override { return Adesk::kTrue; }
+    Adesk::Boolean mesh(const Adesk::UInt32, const Adesk::UInt32, const AcGePoint3d*,
+                        const AcGiEdgeData*, const AcGiFaceData*, const AcGiVertexData*,
+                        const bool) const override { return Adesk::kTrue; }
+    Adesk::Boolean shell(const Adesk::UInt32 nbVertex, const AcGePoint3d* verts,
+                         const Adesk::UInt32 faceListSize, const Adesk::Int32* faces,
+                         const AcGiEdgeData*, const AcGiFaceData*, const AcGiVertexData*,
+                         const struct resbuf*, const bool) const override {
+        // HATCH to dac ve bang `shell`: mot mang dinh cong mot danh sach mat,
+        // moi mat la [so dinh, chi so...]. Lay VIEN cua tung mat — day chinh la
+        // duong bien ma duong `AcGeCurve2d` khong lay duoc.
+        if (!verts || !faces) return Adesk::kTrue;
+        Adesk::UInt32 i = 0;
+        while (i < faceListSize) {
+            const Adesk::Int32 count = faces[i];
+            // So am nghia la mat co lo hong; lay tri tuyet doi de van ve duoc vien.
+            const Adesk::Int32 k = count < 0 ? -count : count;
+            if (k < 2 || i + 1 + (Adesk::UInt32)k > faceListSize) break;
+            std::vector<AcGePoint3d> pts;
+            for (Adesk::Int32 j = 0; j < k; ++j) {
+                const Adesk::Int32 raw = faces[i + 1 + j];
+                // Chi so AM danh dau canh vo hinh. Ma hoa la `-(i + 1)`, khong
+                // phai `-i` — va suy ra duoc chu khong phai doan: voi `-i` thi
+                // dinh so 0 khong bao gio danh dau duoc (`-0 == 0`), nen mot
+                // ma hoa dung phai lech di mot.
+                //
+                // Doc `-raw` se lay nham dinh KE TIEP, va `-nbVertex` (tuc dinh
+                // cuoi) bi coi la ngoai khoang roi bo mat.
+                //
+                // Do hien cua canh thi di theo `pEdgeData`; o day ve het moi
+                // canh — mot tap cha, va ca cum da danh dau la hinh gan dung.
+                const Adesk::Int32 idx = raw < 0 ? -raw - 1 : raw;
+                // Bo RIENG dinh sai, khong bo ca mat: mat mot mat cua vung to
+                // dac la mat mot mang hinh ma khong co dau vet gi.
+                if (idx < 0 || (Adesk::UInt32)idx >= nbVertex) continue;
+                pts.push_back(verts[idx]);
+            }
+            if (pts.size() >= 2) addRun((Adesk::UInt32)pts.size(), pts.data(), true);
+            i += 1 + (Adesk::UInt32)k;
+        }
+        return Adesk::kTrue;
+    }
+    Adesk::Boolean text(const AcGePoint3d& pos, const AcGeVector3d& normal, const AcGeVector3d& dir,
+                        const double height, const double width, const double,
+                        const ACHAR* msg) const override {
+        // Bat CHU, khong bat duong bao glyph. `worldDraw` co the ve chu bang
+        // duong bao — mot dong chu thanh hang tram duong, nang gap boi ma doc ra
+        // thi te hon han mot the <text>. Chu day la loi goi cap cao: vi tri,
+        // chieu cao, huong va noi dung.
+        return addTextBody(pos, normal, dir, height, width,
+                           msg ? toUtf8(msg) : std::string());
+    }
+    Adesk::Boolean text(const AcGePoint3d& pos, const AcGeVector3d& normal, const AcGeVector3d& dir,
+                        const ACHAR* msg, const Adesk::Int32 length, const Adesk::Boolean,
+                        const AcGiTextStyle& style) const override {
+        // `length` dem KY TU RONG va bo dem co the KHONG ket thuc bang NUL.
+        // Doi ca chuoi roi cat theo byte se vua doc qua vung nho, vua cat gay
+        // doi mot ky tu UTF-8 nhieu byte.
+        return addTextBody(pos, normal, dir, style.textSize(), style.xScale(),
+                           msg ? toUtf8Bounded(msg, (long)length) : std::string());
+    }
+    Adesk::Boolean xline(const AcGePoint3d&, const AcGePoint3d&) const override { return Adesk::kTrue; }
+    Adesk::Boolean ray(const AcGePoint3d&, const AcGePoint3d&) const override { return Adesk::kTrue; }
+    Adesk::Boolean image(const AcGiImageBGRA32&, const AcGePoint3d&, const AcGeVector3d&,
+                         const AcGeVector3d&, TransparencyMode) const override { return Adesk::kTrue; }
+    Adesk::Boolean rowOfDots(int, const AcGePoint3d&, const AcGeVector3d&) const override { return Adesk::kTrue; }
+    Adesk::Boolean edge(const AcArray<AcGeCurve2d*>&) const override {
+        // Con tro trong mang nay thuoc ve NGUOI GOI. Khong dung, khong xoa —
+        // xem chu thich dau muc.
+        return Adesk::kTrue;
+    }
+    Adesk::Boolean draw(AcGiDrawable* drawable) const override {
+        // PHAI de quy: mui ten cua MULTILEADER la mot block, va AutoCAD ve no
+        // qua chinh loi goi nay. Khong de quy thi multileader chi con may doan
+        // thang, khong co mui ten.
+        //
+        // Co tran do sau vi mot ban ve hong co the tao vong. `mDepth` la trang
+        // thai cua chinh bo bat, khong phai cua doi tuong, nen vong lap kieu
+        // A ve B ve A cung bi chan.
+        if (!drawable || mDepth >= kWorldDrawMaxDepth || cut) return Adesk::kTrue;
+        mDepth++;
+        drawable->worldDraw(mOwner);
+        mDepth--;
+        return Adesk::kTrue;
+    }
+    /** Bo ve so huu — can de `draw()` goi de quy dung ngu canh. */
+    void setOwner(AcGiWorldDraw* owner) { mOwner = owner; }
+    void setExtents(AcGePoint3d*) const override {}
+
+private:
+    mutable std::vector<AcGeMatrix3d> mStack;
+    mutable int mDepth = 0;
+    AcGiWorldDraw* mOwner = nullptr;
+
+    /** `styleWidth` la he so be ngang cua KIEU CHU (`xScale`, hay tham so
+     * `width` cua overload kia). No nhan voi ti le be ngang do phep bien doi
+     * mang lai — hai nguon doc lap nhau: mot cai la thiet ke cua kieu chu, mot
+     * cai la do block bi co gian khong deu. Bo qua cai dau thi chu chu thich
+     * "nen" ve ra rong hon thuc te. */
+    Adesk::Boolean addTextBody(const AcGePoint3d& pos, const AcGeVector3d& normal,
+                               const AcGeVector3d& dir, double height, double styleWidth,
+                               std::string body) const {
+        if (cut || body.empty() || height <= 0.0) return Adesk::kTrue;
+        if (segments >= kGeomMaxWorldDrawSegments) { cut = true; return Adesk::kTrue; }
+        truncateUtf8(body, kGeomMaxTextChars);
+        const AcGePoint3d w = toWorld(pos);
+        // Huong chu la mot VECTO trong he dang co phep bien doi. Doi sang goc
+        // sau khi bien doi, khong phai truoc: phep bien doi co the xoay.
+        AcGeVector3d d(dir);
+        d.transformBy(mStack.back());
+        // Chieu cao do doc TRUC DUNG CUA CHU, khong phai truc Y the gioi. Truc
+        // do la `normal × direction` — API text dua ca hai vao. Lay (0,1,0) rồi
+        // bien doi se ra sai chieu cao ngay khi block bi xoay hoac co gian
+        // khong deu: ghi chu cao gap doi hoac lun mot nua ma van dung cho.
+        AcGeVector3d up = normal.crossProduct(dir);
+        if (up.length() < 1e-12) up = AcGeVector3d::kYAxis; else up.normalize();
+        up.transformBy(mStack.back());
+        const double scale = up.length();
+        // Be ngang co the co gian KHAC be doc (block co gian khong deu). Chieu
+        // cao di theo truc dung, con be rong chu trong SVG di theo font — lech
+        // nhau thi ghi chu beo ra hoac gay lai so voi hinh cung nguon.
+        AcGeVector3d across(dir);
+        if (across.length() < 1e-12) across = AcGeVector3d::kXAxis; else across.normalize();
+        across.transformBy(mStack.back());
+        const double transformRatio = scale > 1e-12 ? across.length() / scale : 1.0;
+        const double widthRatio = transformRatio * (styleWidth > 0.0 ? styleWidth : 1.0);
+        texts.push_back("\"k\":\"text\",\"p\":[" + jsonNumber(w.x) + "," + jsonNumber(w.y) + "]" +
+                        ",\"th\":" + jsonNumber(height * (scale > 0.0 ? scale : 1.0)) +
+                        ",\"rot\":" + jsonNumber(atan2(d.y, d.x)) +
+                        (fabs(widthRatio - 1.0) > 1e-6
+                            ? ",\"xs\":" + jsonNumber(widthRatio) : "") +
+                        ",\"txt\":" + jsonString(body));
+        segments++;
+        return Adesk::kTrue;
+    }
+
+    AcGePoint3d toWorld(const AcGePoint3d& p) const {
+        AcGePoint3d out(p);
+        out.transformBy(mStack.back());
+        return out;
+    }
+
+    Adesk::Boolean addRun(Adesk::UInt32 n, const AcGePoint3d* pts, bool closed) const {
+        if (!pts || n < 2 || cut) return Adesk::kTrue;
+        if (segments + n > kGeomMaxWorldDrawSegments) { cut = true; return Adesk::kTrue; }
+        std::string body;
+        for (Adesk::UInt32 i = 0; i < n; ++i) {
+            const AcGePoint3d w = toWorld(pts[i]);
+            if (i) body += ",";
+            body += jsonNumber(w.x) + "," + jsonNumber(w.y);
+        }
+        segments += n;
+        (closed ? loops : polys).push_back(body);
+        return Adesk::kTrue;
+    }
+
+    /** Hai truc vuong goc NAM TRONG mat phang co phap tuyen `n`.
+     *
+     * Thuat toan truc tuy y cua AutoCAD. Can no vi moi nguyen thuy cung tron
+     * deu mo ta trong mat phang RIENG cua no; dung thang x,y la ngam gia dinh
+     * mat phang do song song XY, va moi cung nghieng se ve sai hinh. */
+    static void planeBasis(const AcGeVector3d& n, AcGeVector3d& u, AcGeVector3d& v) {
+        AcGeVector3d nn(n);
+        if (nn.length() < 1e-12) nn = AcGeVector3d::kZAxis; else nn.normalize();
+        const AcGeVector3d up = (fabs(nn.x) < 1.0 / 64.0 && fabs(nn.y) < 1.0 / 64.0)
+            ? AcGeVector3d::kYAxis : AcGeVector3d::kZAxis;
+        u = up.crossProduct(nn);
+        if (u.length() < 1e-12) u = AcGeVector3d::kXAxis; else u.normalize();
+        v = nn.crossProduct(u);
+        if (v.length() < 1e-12) v = AcGeVector3d::kYAxis; else v.normalize();
+    }
+
+    /** Goc cua mot diem quanh tam, do TRONG he truc (u, v). */
+    static double angleIn(const AcGeVector3d& u, const AcGeVector3d& v,
+                          const AcGePoint3d& center, const AcGePoint3d& p) {
+        const AcGeVector3d d = p - center;
+        return atan2(d.dotProduct(v), d.dotProduct(u));
+    }
+
+    /** `sweep` CO DAU: am la cung di theo chieu kim dong ho.
+     *
+     * Chuan hoa moi sweep khong duong thanh duong (`+= 2π`) se bien mot cung
+     * 1/4 vong theo chieu kim dong ho thanh cung 3/4 vong nguoc lai — dung phan
+     * bu cua no. Noi goi nao chi co goc dau/goc cuoi (khong co dau) thi tu
+     * chuan hoa TRUOC khi goi. */
+    Adesk::Boolean addEllipse(const AcGePoint3d& c, const AcGeVector3d& u, const AcGeVector3d& v,
+                              double major, double minor, double t0, double sweep,
+                              bool closed) const {
+        if (cut || major <= 0.0 || sweep == 0.0) return Adesk::kTrue;
+        // Lay mau: nguyen thuy cung nam trong he toa do dang co phep bien doi,
+        // ma phep bien doi co the lam nghieng/deo. Xuat tam+ban kinh se sai;
+        // lay mau roi bien doi tung diem thi luon dung.
+        const double span = sweep < 0.0 ? -sweep : sweep;
+        const int n = span >= 6.28 ? 32 : 16;
+        if (segments + (size_t)n > kGeomMaxWorldDrawSegments) { cut = true; return Adesk::kTrue; }
+        std::string body;
+        for (int i = 0; i < n; ++i) {
+            const double t = t0 + sweep * (double)i / (double)(n - 1);
+            const AcGePoint3d p = c + u * (major * cos(t)) + v * (minor * sin(t));
+            const AcGePoint3d w = toWorld(p);
+            if (i) body += ",";
+            body += jsonNumber(w.x) + "," + jsonNumber(w.y);
+        }
+        segments += (size_t)n;
+        (closed ? loops : polys).push_back(body);
+        return Adesk::kTrue;
+    }
+};
+
+class CaptureDraw : public AcGiWorldDraw {
+public:
+    CaptureDraw(AcDbDatabase* db, double deviation)
+        : mContext(db), mDeviation(deviation > 0.0 ? deviation : 1.0) {}
+    AcGiRegenType regenType() const override { return kAcGiStandardDisplay; }
+    Adesk::Boolean regenAbort() const override { return Adesk::kFalse; }
+    AcGiSubEntityTraits& subEntityTraits() const override { return mTraits; }
+    AcGiGeometry* rawGeometry() const override { return &mGeometry; }
+    Adesk::Boolean isDragging() const override { return Adesk::kFalse; }
+    double deviation(const AcGiDeviationType, const AcGePoint3d&) const override { return mDeviation; }
+    Adesk::UInt32 numberOfIsolines() const override { return 4; }
+    AcGiContext* context() override { return &mContext; }
+    AcGiWorldGeometry& geometry() const override { return mGeometry; }
+
+    GeomCapture& capture() const { return mGeometry; }
+
+private:
+    mutable GeomCapture   mGeometry;
+    mutable CaptureTraits mTraits;
+    CaptureContext        mContext;
+    double                mDeviation;
+};
+
+/** Nho AutoCAD ve doi tuong roi bat lai nguyen thuy do hoa.
+ *
+ * Tra ve kieu `multi` vi mot doi tuong ra nhieu hinh. Chuoi rong nghia la
+ * khong bat duoc gi — noi goi roi ve hinh bao.
+ *
+ * `deviation` quyet dinh do min khi AutoCAD chia nho cung tron. Lay theo kich
+ * thuoc doi tuong chu khong lay hang so: mot mui ten dai 2 don vi va mot vung
+ * gach rong 50.000 don vi can hai muc chia rat khac nhau, va mot hang so se
+ * hoac lam mui ten thanh hinh vuong, hoac lam vung gach ra hang van doan.
+ */
+static std::string worldDrawGeometryJson(AcDbEntity* ent, bool& approx) {
+    double deviation = 1.0;
+    AcDbExtents ext;
+    if (ent->getGeomExtents(ext) == Acad::eOk && ext.isValid()) {
+        const double w = ext.maxPoint().x - ext.minPoint().x;
+        const double h = ext.maxPoint().y - ext.minPoint().y;
+        const double size = w > h ? w : h;
+        if (size > 0.0) deviation = size / 400.0;
+    }
+
+    CaptureDraw draw(ent->database(), deviation);
+    draw.capture().setOwner(&draw);
+    // `worldDraw` cua doi tuong co the tra false khi no muon ve theo viewport;
+    // luc do van co the da bat duoc mot phan, nen cu doc ket qua.
+    AcGiWorldDraw* pDraw = &draw;
+    ent->worldDraw(pDraw);
+    GeomCapture& got = draw.capture();
+    if (got.polys.empty() && got.loops.empty() && got.texts.empty()) return "";
+
+    std::string parts;
+    auto add = [&](const std::string& pts, bool closed) {
+        if (!parts.empty()) parts += ",";
+        parts += "{\"k\":\"poly\",\"p\":[" + pts + "],\"closed\":" + jsonBool(closed) + "}";
+    };
+    for (const std::string& run : got.polys) add(run, false);
+    for (const std::string& run : got.loops) add(run, true);
+    for (const std::string& body : got.texts) {
+        if (!parts.empty()) parts += ",";
+        parts += "{" + body + "}";
+    }
+
+    // LUON `a:1`. Day la hinh AutoCAD ve ra, khong phai hinh hoc goc: cung tron
+    // da bi chia thanh doan thang, chu bi bo han, va do min phu thuoc
+    // `deviation` ta tu chon. Ve thi giong, do thi khong duoc.
+    approx = true;
+    std::string out = "\"k\":\"multi\",\"g\":[" + parts + "]";
+    out += got.cut ? ",\"aw\":\"worlddraw-truncated\"" : ",\"aw\":\"worlddraw\"";
+    return out;
 }
 
 /* --- HATCH -----------------------------------------------------------------
@@ -2069,9 +2661,15 @@ static std::string entityGeometryJson(AcDbEntity* ent, bool& approx, long long& 
         // khong dung sau khi bo Z — vi tri van dung nen van xuat, nhung phai
         // danh dau gan dung.
         if (!planarXY(t->normal())) approx = true;
+        // `widthFactor` la he so BE NGANG cua kieu chu. Bo qua thi mot dong chu
+        // duoc nen con 0,7 be ngang se ve ra rong hon thuc te 40%, va do la thu
+        // ky su nhin de doan chu co vua o khong.
+        const double widthFactor = t->widthFactor();
         return "\"k\":\"text\",\"p\":[" + xy(t->position()) + "]" +
                ",\"th\":" + jsonNumber(t->height()) +
                ",\"rot\":" + jsonNumber(t->rotation()) +
+               (fabs(widthFactor - 1.0) > 1e-6
+                   ? ",\"xs\":" + jsonNumber(widthFactor) : "") +
                (approx ? ",\"aw\":\"projected-rotation\"" : "") +
                ",\"txt\":" + jsonString(body);
     }
@@ -2200,6 +2798,14 @@ static std::string entityGeometryJson(AcDbEntity* ent, bool& approx, long long& 
                        ",\"aw\":\"curve-sampled\"";
             }
         }
+    }
+
+    // Chua co duong rieng nao: nho chinh AutoCAD ve ra roi bat lai. Day la
+    // duong cuoi cung truoc hinh bao, va la duong duy nhat con lai cho
+    // MULTILEADER, HATCH to dac va VIEWPORT.
+    {
+        const std::string geom = worldDrawGeometryJson(ent, approx);
+        if (!geom.empty()) return geom;
     }
 
     // Con lai: chi co hinh bao. Danh dau `a:1` de canvas ve khac di va man hinh

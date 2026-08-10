@@ -2,6 +2,86 @@
 
 ## 2026-08-10
 
+### Added — bộ bắt hình `worldDraw`: hình bao còn 0,01%
+
+AutoCAD vẽ mọi đối tượng bằng cách gọi `worldDraw()` của nó với một bộ ngữ cảnh
+vẽ. Đưa vào đó một bộ ngữ cảnh **tự viết** thì thay vì vẽ lên màn hình, ta nhận
+được chính các nguyên thuỷ đồ hoạ AutoCAD định vẽ. Một bộ bắt dùng được cho mọi
+kiểu đối tượng — nên xong MULTILEADER là xong luôn cả HATCH tô đặc và VIEWPORT.
+
+Kết quả trên bản vẽ as-built: **1 hình bao trên 10.888 đối tượng (0,01%)**. Đầu
+phiên là 18,1%.
+
+- **MULTILEADER** 23/23 — trung bình 5,3 hình con, gồm đường dẫn, mũi tên và
+  **ghi chú**: `WP-uPVC-D90;I=1%`, `SP-uPVC-D110;I=1%`. Bắt được mũi tên là nhờ
+  `draw()` **gọi đệ quy** (mũi tên là một block, AutoCAD vẽ nó qua chính lời gọi
+  đó) — có trần độ sâu 6 để chặn vòng lặp.
+- **HATCH tô đặc** 43/43 — qua `shell()`, lấy viền từng mặt. Đây chính là đường
+  biên mà đường `AcGeCurve2d` không lấy được.
+- **VIEWPORT** 7/8.
+
+Chữ bắt ở **lời gọi cấp cao** (`text()` với vị trí, chiều cao, hướng, nội dung),
+không bắt đường bao glyph: một dòng chữ vẽ bằng đường bao là hàng trăm đường,
+nặng gấp bội mà đọc ra thì tệ hơn hẳn một thẻ `<text>`.
+
+Mọi hình bắt kiểu này đều `a:1` (`aw:"worlddraw"`). Đó là hình AutoCAD **vẽ ra**,
+không phải hình học gốc: cung tròn đã bị chia thành đoạn thẳng, độ mịn phụ thuộc
+`deviation` mình tự chọn (lấy theo kích thước đối tượng — một mũi tên dài 2 đơn
+vị và một vùng gạch rộng 50.000 cần hai mức chia rất khác nhau). Nhìn thì giống,
+**đo thì không được**, và inspector nói đúng câu đó.
+
+### Fixed — bốn lỗi của bộ bắt hình (Codex review)
+
+- **Đọc quá bộ đệm chữ, ngay trong lòng AutoCAD (P1).** `AcGiGeometry::text` có
+  thể đưa vào một bộ đệm **không kết thúc bằng NUL** kèm độ dài riêng. Bản đầu
+  đổi cả chuỗi rồi mới cắt — quét thẳng qua vùng nhớ. Bản sửa thứ nhất vẫn sai
+  tinh vi hơn: `for (p = w; *p; ++p)` rồi kiểm trần ở dòng đầu thân vẫn **đọc
+  `*p` một lần nữa** sau ký tự hợp lệ cuối. Nay trần nằm trong chính điều kiện
+  vòng lặp, `&&` chặn ngắn mạch. Cũng cắt theo **ký tự** chứ không theo byte:
+  `length` đếm ký tự rộng, cắt `std::string` là cắt byte nên chữ có dấu bị gãy
+  đôi.
+- **Vòng tròn mất mặt phẳng của nó.** Bản đầu bỏ qua pháp tuyến và lấy mẫu một
+  vòng tròn trong mặt phẳng XY; nạp ba điểm thì vẽ ra một **tam giác**. Nay dựng
+  hệ trục nằm trong đúng mặt phẳng của cung (thuật toán trục tuỳ ý của AutoCAD),
+  và ba điểm đi qua `AcGeCircArc3d` — đối tượng trên ngăn xếp, không cấp phát
+  cho ai.
+- **Chiều cao chữ đo sai trục.** Lấy `(0,1,0)` của thế giới rồi biến đổi là sai
+  ngay khi block bị xoay hoặc co giãn không đều. Trục đứng của chữ là
+  `normal × direction`, và API text đưa vào cả hai.
+- **Chữ trong cụm gần đúng lại hiện như hình thật.** Nó đến từ cùng một lượt bắt
+  với các nét quanh nó; để nó ra màu khác là nói rằng chữ đáng tin hơn hình.
+- **Vứt mất phép biến đổi mà đối tượng đang yêu cầu (P1).**
+  `pushPositionTransform` / `pushScaleTransform` / `pushOrientationTransform`
+  chỉ đẩy một bản sao rồi trả ma trận đơn vị, nên đồ hoạ chú thích rơi sai chỗ
+  hoặc sai cỡ. Nay tính đúng cho các behavior **thuộc về thế giới**; các
+  behavior `Viewport*`/`Screen*` cần một camera mà ở đây không có, nên giữ
+  nguyên tỉ lệ bản vẽ — lựa chọn có ý, ghi rõ tại chỗ.
+- **Cung theo chiều kim đồng hồ bị lật thành phần bù của nó.** Chuẩn hoá mọi góc
+  quét không dương thành dương biến một cung 1/4 vòng thuận chiều thành cung 3/4
+  vòng ngược lại. Nay giữ dấu; nơi nào chỉ có góc đầu/góc cuối thì tự chuẩn hoá
+  trước khi gọi, và cung ba điểm suy ra chiều từ điểm giữa.
+- **Mặt của vùng tô đặc hỏng vì chỉ số âm (P1).** Danh sách mặt của `shell()`
+  đánh dấu cạnh vô hình bằng chỉ số âm, mã hoá `-(i+1)`. Bản đầu bỏ **cả mặt**
+  khi gặp; bản sửa thứ nhất đọc `-raw` nên lấy nhầm đỉnh kế tiếp và bỏ mất đỉnh
+  cuối. Suy ra được mã hoá đúng chứ không phải đoán: với `-i` thì đỉnh số 0
+  không bao giờ đánh dấu được. Nay giải mã đúng, và đỉnh sai thì bỏ **riêng đỉnh
+  đó** — mất một mặt của vùng tô đặc là mất một mảng hình không dấu vết.
+- **Hứa cắt theo biên rồi không cắt.** `pushClipBoundary` trả `kTrue` khiến đối
+  tượng tin là đã được cắt và không tìm đường khác, trong khi nguyên thuỷ ngoài
+  biên vẫn bị ghi lại thành hình nhìn thấy được — VIEWPORT chính là thứ dùng cơ
+  chế này. Nay trả `kFalse`, nói không ngay từ đầu.
+- **Chữ mất hệ số bề ngang.** Chiều cao đi theo trục đứng còn bề rộng glyph đi
+  theo font, nên chữ trong block co giãn không đều vẽ ra sai tỉ lệ. Thêm trường
+  `xs`. Ba nguồn độc lập phải nhân với nhau: `widthFactor` của `AcDbText`,
+  `xScale` của kiểu chữ trong `worldDraw`, và tỉ lệ do phép biến đổi mang lại.
+  Trên bản vẽ này có **98 dòng chữ** hệ số 0,5–0,8, tức trước đó vẽ rộng hơn
+  thực tế tới gấp đôi.
+
+**Vì sao đường này an toàn**, khác hẳn đường `AcGeCurve2d` đã làm AutoCAD chết:
+`worldDraw` chỉ **đưa** dữ liệu vào hàm của ta, không giao quyền sở hữu gì cả.
+Mọi con trỏ nhận được đều thuộc về AutoCAD; ta chỉ đọc và sao chép, không
+`delete` gì. Đã chạy 6 lượt đọc liên tiếp, AutoCAD sống.
+
 ### Added — plugin dựng hình HATCH, DIMENSION, ELLIPSE, SPLINE
 
 Hình bao còn **0,7%** số đối tượng (74/10.888), trước là 18,1%.

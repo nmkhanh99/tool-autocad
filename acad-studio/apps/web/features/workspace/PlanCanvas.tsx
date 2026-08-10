@@ -409,10 +409,40 @@ function Shape({
       );
     }
     case "multi": {
-      /* HATCH: nhiều vòng biên + đường gạch, nhưng vẫn là MỘT đối tượng chọn
-         được. Gộp hết vào một `d` — chúng không có gì phân biệt nhau. */
-      const d = pathDataOf(entity, marker);
-      return d ? <path {...common} d={d} strokeLinejoin="round" /> : null;
+      /* HATCH và hình bắt qua `worldDraw`: nhiều hình con nhưng vẫn là MỘT đối
+         tượng chọn được. Nét gộp hết vào một `d`; chữ phải giữ phần tử riêng —
+         `<path>` không mang được glyph. */
+      const strokes = pathDataOf(entity, marker);
+      const labels = (entity.g ?? []).filter((child) => child.k === "text");
+      if (!strokes && !labels.length) return null;
+      return (
+        <g {...(top ? { "data-entity": entity.h } : {})} data-fidelity={fidelity}>
+          {strokes ? (
+            <path
+              d={strokes}
+              stroke={style.color}
+              strokeDasharray={style.dash}
+              strokeWidth={1.4}
+              strokeLinejoin="round"
+              fill="none"
+              vectorEffect="non-scaling-stroke"
+            />
+          ) : null}
+          {/* Chữ phải THỪA HƯỞNG độ trung thực của cụm cha: nó đến từ cùng một
+              lượt bắt gần đúng. Không truyền xuống thì nhãn hiện màu "hình
+              thật" ngay cạnh những nét cùng nguồn đang là "hình thiếu" — người
+              dùng đọc ra là chữ đáng tin hơn hình, mà không phải. */}
+          {labels.map((child, index) => (
+            <Shape
+              key={`${entity.h}t${index}`}
+              entity={{ ...child, h: `${entity.h}t${index}`, a: entity.a, aw: entity.aw }}
+              blocks={blocks}
+              marker={marker}
+              top={false}
+            />
+          ))}
+        </g>
+      );
     }
     case "text": {
       const p = entity.p ?? [];
@@ -426,7 +456,12 @@ function Shape({
         <g
           {...(top ? { "data-entity": entity.h } : {})}
           data-fidelity={fidelity}
-          transform={`translate(${p[0]} ${p[1]}) scale(1,-1) rotate(${-degrees(entity.rot)})`}
+          transform={
+            `translate(${p[0]} ${p[1]}) scale(1,-1) rotate(${-degrees(entity.rot)})` +
+            /* Bề ngang co giãn riêng: `scale(xs,1)` SAU khi xoay, vì hệ số này
+               đo dọc theo hướng đọc của chữ chứ không dọc theo trục X. */
+            (entity.xs && entity.xs > 0 && entity.xs !== 1 ? ` scale(${entity.xs},1)` : "")
+          }
         >
           <text
             fill={style.color}

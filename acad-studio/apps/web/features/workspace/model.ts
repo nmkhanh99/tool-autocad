@@ -73,6 +73,11 @@ export type GeomEntity = {
   rot?: number;
   /** Chiều cao chữ theo đơn vị bản vẽ — `text`. */
   th?: number;
+  /** Hệ số **bề ngang** của chữ. Vắng mặt nghĩa là 1. Chiều cao đi theo `th`,
+   * còn bề rộng của glyph trong SVG đi theo font — lệch nhau thì một dòng chữ
+   * nén còn 0,7 sẽ vẽ ra rộng hơn thực tế 40%, đúng thứ kỹ sư nhìn để đoán chữ
+   * có vừa ô không. */
+  xs?: number;
   /** Nội dung chữ — `text`. */
   txt?: string;
   /** Tên block — `insert`. */
@@ -178,6 +183,12 @@ export function fidelityNote(entity: GeomEntity, blocks?: BlockDefs): string {
   if (entity.aw === "projected-hatch") return "Vùng gạch nằm trên mặt phẳng nghiêng, hình bị chiếu sai.";
   if (entity.aw === "curve-sampled") return "Đường cong được lấy mẫu 48 điểm, không phải đường cong thật.";
   if (entity.aw === "projected-ellipse") return "Elip nằm trên mặt phẳng nghiêng, hình bị chiếu sai.";
+  if (entity.aw === "worlddraw") {
+    return "Hình do AutoCAD vẽ ra rồi bắt lại: đủ để nhìn, nhưng cung tròn đã thành đoạn thẳng nên đừng đo trên nó.";
+  }
+  if (entity.aw === "worlddraw-truncated") {
+    return "Hình do AutoCAD vẽ ra, và quá nhiều nên chỉ bắt được một phần.";
+  }
   if (entity.aw === "hatch-boundary-partial") {
     return "Vùng gạch có đường viền plugin chưa đọc được; chỉ vẽ các đường gạch bên trong.";
   }
@@ -612,6 +623,8 @@ export function pathDataOf(entity: GeomEntity, marker: number): string {
       return `M${b[0]} ${b[1]}H${b[2]}V${b[3]}H${b[0]}Z`;
     }
     case "multi":
+      /* Con nao khong ra path (chu) tra chuoi rong va bi loc di — noi goi phai
+         tu dung phan tu rieng cho chung. */
       return (entity.g ?? []).map((child) => pathDataOf(child, marker)).filter(Boolean).join("");
     default:
       /* `insert` và `text` không gộp được: một cái là phép biến đổi, một cái là

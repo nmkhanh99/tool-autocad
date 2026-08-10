@@ -403,6 +403,35 @@ test("khung bao của HATCH lấy từ các hình con", () => {
   assert.deepEqual(entityExtent(hatch), [0, 0, 10, 20]);
 });
 
+test("multi trộn nét với chữ: chữ không lọt vào path, nét không mất", () => {
+  /* MULTILEADER bắt qua `worldDraw` ra cả đường dẫn lẫn ghi chú
+     ("WP-uPVC-D90;I=1%"). Nếu `pathDataOf` nuốt luôn chữ thì mất chữ; nếu nó bỏ
+     cả cụm vì có chữ thì mất đường dẫn. */
+  const leader = { ...entity({ k: "multi" }), g: [
+    entity({ k: "poly", p: [0, 0, 10, 10] }),
+    { ...entity({ k: "text", p: [10, 10] }), th: 2, txt: "WP-uPVC-D90;I=1%" },
+  ] };
+  assert.equal(pathDataOf(leader, 1), "M0 0L10 10");
+  assert.deepEqual(entityExtent(leader), [0, 0, 10, 10]);
+});
+
+test("chữ trong cụm gần đúng cũng phải là gần đúng", () => {
+  /* Chữ đến từ cùng một lượt bắt với các nét quanh nó. Để nó ra màu "hình
+     thật" cạnh những nét "hình thiếu" là nói rằng chữ đáng tin hơn hình. */
+  const child = entity({ k: "text", p: [0, 0], txt: "WP-uPVC-D90" });
+  assert.equal(fidelityOf(child), "exact");
+  assert.equal(fidelityOf({ ...child, a: 1, aw: "worlddraw" }), "reduced");
+});
+
+test("hình bắt qua worldDraw luôn là hình thiếu, không phải hình thật", () => {
+  /* Đó là hình AutoCAD VẼ RA: cung tròn đã thành đoạn thẳng, độ mịn do mình
+     chọn. Nhìn thì giống, đo thì không được — màn hình phải nói ra. */
+  const captured = { ...entity({ k: "multi", a: 1, aw: "worlddraw" }), g: [] };
+  assert.equal(fidelityOf(captured), "reduced");
+  assert.match(fidelityNote(captured), /đừng đo/);
+  assert.match(fidelityNote({ ...captured, aw: "worlddraw-truncated" }), /một phần/);
+});
+
 test("khung bao elip dùng bán trục lớn hơn — khung phải CHỨA hình", () => {
   const el = entity({ k: "ellipse", c: [0, 0], rx: 10, ry: 3 });
   assert.deepEqual(entityExtent(el), [-10, -10, 10, 10]);

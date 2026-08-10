@@ -424,6 +424,17 @@ dùng cho HATCH: một đối tượng chọn được, nhiều hình bên trong
 số**, không phải góc thật: `P(t) = C + rx·cos(t)·u + ry·sin(t)·v`. Đem `atan2`
 ra tính lại là sai ở mọi elip không tròn.
 
+**Thứ tự thử khi dựng hình một đối tượng** (`entityGeometryJson`): kiểu riêng đã
+biết (line, polyline, circle, arc, ellipse, MLINE, HATCH, DIMENSION) → `AcDbCurve`
+lấy mẫu (SPLINE…) → **`worldDraw`** → hình bao. Mỗi bậc là một mức trung thực
+thấp hơn, và `aw` nói rõ đang ở bậc nào.
+
+⚠️ **Chỉ dùng API KHÔNG giao quyền sở hữu.** `AcDbHatch::getLoopAt` dạng mảng
+`AcGeCurve2d*` giao việc giải phóng cho người gọi — đã thử làm đúng theo tài
+liệu và AutoCAD chết sau đúng một lượt đọc (hỏng heap). `worldDraw`,
+`AcDbCurve::getPointAtParam`, `getHatchLinesData` đều chỉ đưa dữ liệu vào, không
+cấp phát cho ai. Giữ nguyên tắc đó.
+
 **Hiệu năng — ba con số đã đo, đừng đoán lại:**
 
 | | |
