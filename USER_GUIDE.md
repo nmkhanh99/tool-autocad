@@ -107,10 +107,43 @@ Duyệt và tra cứu định nghĩa block dùng chung.
 - **Không có ảnh xem trước.** Máy chủ không render hình block, nên ô đó hiện tên
   định nghĩa thay vì một hình vẽ ngụ ý máy chủ biết block trông thế nào.
 
-**Màn hình này chỉ đọc.** Tạo block từ bộ chọn, chèn vào bản vẽ, đồng bộ định
-nghĩa và sửa metadata vẫn ở màn hình cũ — chúng là lệnh ghi và cần bước xác nhận
-chưa dựng lại ở đây. Nút **Mở màn hình cũ để sửa** mở thẳng thư viện ở màn hình
-cũ.
+#### Chèn vào bản vẽ
+
+Ghi **một pha**: bấm xác nhận là AutoCAD chèn ngay, thao tác **không** xuất hiện
+ở màn Thay đổi chờ duyệt và **không hoàn tác được** từ app.
+
+Sau khi xác nhận, hộp thoại đóng ngay và bạn phải **chuyển sang AutoCAD để chỉ
+điểm chèn**. Máy chủ chờ tối đa **2 phút**; quá hạn là lệnh bị bỏ. Trong lúc chờ,
+nút đổi thành "Đang chờ AutoCAD…" nên không xếp được hai lệnh chồng nhau.
+
+#### Đồng bộ metadata
+
+Ghi thông tin mô tả (tên hiển thị, layer, nhóm, thẻ) của định nghĩa **đã có sẵn**
+trong bản vẽ. **Hình học của block không đổi** — lệnh này không nhập lại và không
+thay hình vẽ. Nếu bản vẽ chưa có định nghĩa đó, máy chủ từ chối và trang báo lý
+do; hãy chèn trước rồi đồng bộ sau.
+
+Cột trạng thái đồng bộ là kết quả **lần quét gần nhất của thư viện**, không phải
+trạng thái so với bản vẽ bạn đang mở — đừng dựa vào nó để đoán lệnh sẽ thành công.
+
+#### Sửa metadata
+
+Form dưới pane chi tiết ghi vào **thư viện**, không chạm bản vẽ nào. Vì thế nó
+không có hộp xác nhận: sửa sai thì sửa lại.
+
+- Nút **Lưu metadata** chỉ bật khi bạn đã đổi gì đó *và* dữ liệu hợp lệ; để chuột
+  lên nút bị khoá sẽ thấy lý do.
+- **Tên kỹ thuật** đi thẳng vào AutoCAD nên chỉ nhận ASCII không dấu, gồm chữ,
+  số, dấu chấm, `_` và `-`. Gõ "Van cổng DN80" là không hợp lệ.
+- **Hoàn tác** trả form về bản đang lưu trên máy chủ.
+- Nếu người khác vừa sửa thư viện, máy chủ từ chối lượt lưu thay vì ghi đè im
+  lặng; tải lại trang rồi sửa trên bản mới.
+- **Lưu metadata cho block đang "Đã sync" sẽ đổi trạng thái thành "Cần cập
+  nhật".** Đúng như vậy: bản vẽ vẫn giữ thông tin cũ. Thông báo sẽ nhắc bạn chạy
+  **Đồng bộ metadata** để ghi bản mới xuống bản vẽ.
+
+**Vẫn còn ở màn hình cũ:** tạo block từ bộ chọn và quản lý thư mục nguồn. Nút
+**Mở màn hình cũ để sửa** mở thẳng thư viện ở màn hình cũ.
 
 ### Các màn hình còn lại
 

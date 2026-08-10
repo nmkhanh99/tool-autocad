@@ -49,4 +49,7 @@ export const endpoints = {
    * bước chuẩn bị và không đi qua hàng chờ Thay đổi. */
   blockAction: (base: string, action: "insert" | "sync") =>
     `${trim(base)}/api/acad/blocks/${action}`,
+  /** Sửa metadata một định nghĩa. Ghi vào THƯ VIỆN, không vào bản vẽ. */
+  block: (base: string, id: string) =>
+    `${trim(base)}/api/acad/blocks/${encodeURIComponent(id)}`,
 } as const;

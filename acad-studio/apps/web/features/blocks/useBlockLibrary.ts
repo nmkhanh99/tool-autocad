@@ -59,8 +59,13 @@ export function useBlockLibrary(daemon: string): BlockCatalog {
       const rawBlocks = Array.isArray(catalog.blocks) ? catalog.blocks : [];
       setBlocks(rawBlocks.map(normalizeBlock).filter((b): b is BlockDefinition => b !== null));
     } catch (failure) {
+      /* GIỮ danh mục cũ. Xoá nó nghĩa là một lần tải lại hỏng — daemon tắt, mạng
+         chớp — sẽ làm `selected` thành null, form sửa metadata unmount, và người
+         dùng mất trắng phần đang gõ. Lần tải lại ngay sau một lượt lưu là lúc dễ
+         hỏng nhất, cũng là lúc có nhiều thứ để mất nhất. Lần tải đầu tiên vốn đã
+         rỗng nên không cần xoá gì; nơi gọi phân biệt "hỏng mà chưa có gì" với
+         "hỏng nhưng còn bản cũ" qua `error` + `blocks.length`. */
       setError(daemonFailureText(failure));
-      setBlocks([]);
     } finally {
       setLoading(false);
     }

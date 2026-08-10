@@ -279,6 +279,84 @@ assert.doesNotMatch(
   "blocks/insert và blocks/sync không được đưa vào hàng chờ",
 );
 
+/* Sửa metadata ghi vào THƯ VIỆN, không vào bản vẽ — nên nó không được mượn hộp
+ * xác nhận không-hoàn-tác. Cảnh báo dùng cho việc sửa lại được sẽ làm nhẹ đi
+ * cảnh báo ở hai lệnh thật sự không rút lại được. */
+assert.doesNotMatch(
+  stripComments(sourceAt("blocks/BlockMetadataForm.tsx")),
+  /ConfirmSheet|không hoàn tác/,
+  "form sửa metadata không được dùng cảnh báo không-hoàn-tác",
+);
+/* Bản nháp phải đặt lại theo `block.id`, KHÔNG theo cả object `block`. Danh mục
+ * được tải lại sau mỗi lệnh insert/sync và sinh object mới mỗi lần; bám theo
+ * object nghĩa là xoá sạch thứ người dùng đang gõ dở vì một việc họ không làm. */
+assert.match(
+  stripComments(sourceAt("blocks/BlockMetadataForm.tsx")),
+  /\},\s*\[block\.id\]\)/,
+  "form metadata chỉ được đặt lại khi đổi định nghĩa, không phải mỗi lần tải lại",
+);
+/* `PUT /:id` đẩy một block đang `synced` về `outdated` khi metadata đổi
+ * (`blockMetadataPayload(...).revision` khác nhau): bản vẽ nay giữ thông tin cũ.
+ * Báo "đã lưu" rồi để thẻ trạng thái tự đổi là một bất ngờ im lặng. */
+assert.match(
+  stripComments(sourceAt("blocks/page.tsx")),
+  /result\.saved\?\.block\.syncStatus === "outdated"/,
+  "phải đọc syncStatus từ phản hồi PUT, không đoán phía client",
+);
+/* Lượt lưu phải mang revision mà BẢN NHÁP dựa trên, không phải revision mới
+ * nhất của danh mục. Danh mục được tải lại sau mỗi lệnh insert/sync; nếu người
+ * khác vừa sửa block này thì gửi revision mới nghĩa là máy chủ chấp nhận và xoá
+ * im lặng thay đổi của họ — đúng thứ `expectedRevision` sinh ra để chặn. */
+assert.match(
+  stripComments(sourceAt("blocks/page.tsx")),
+  /onSaveMetadata=\{\(draft, expectedRevision\)/,
+  "lưu metadata phải dùng revision do form giữ",
+);
+assert.doesNotMatch(
+  stripComments(sourceAt("blocks/page.tsx")),
+  /saveBlockMetadata\([^)]*library\.revision/,
+  "không được gửi revision mới nhất của danh mục khi lưu metadata",
+);
+/* Ghim revision đổi 409 từ "một lần hỏng" thành "hỏng mãi" nếu không tải lại:
+ * form ngồi trên phiên bản không còn tồn tại và mọi lần lưu sau đều 409 y hệt.
+ * Tải lại kể cả khi hỏng, và Hoàn tác phải dẫn tới bản đang có thật. */
+assert.match(
+  stripComments(sourceAt("blocks/page.tsx")),
+  /\}\s*library\.reload\(\);/,
+  "phải tải lại danh mục cả khi lưu metadata hỏng — lời gọi nằm NGOÀI nhánh ok",
+);
+assert.match(
+  sourceAt("blocks/page.tsx"),
+  /bấm Hoàn tác để lấy bản mới nhất/,
+  "lưu hỏng phải chỉ đường ra, không chỉ báo lỗi",
+);
+assert.match(
+  stripComments(sourceAt("blocks/BlockMetadataForm.tsx")),
+  /adopt\(block, revision\);\s*onCancel\(\)/,
+  "Hoàn tác phải lấy bản mới nhất của máy chủ, không phải mốc đã cũ",
+);
+/* Tải lại hỏng KHÔNG được xoá danh mục đang có: `selected` thành null thì form
+ * unmount và phần đang gõ dở biến mất. Lần tải lại ngay sau một lượt lưu vừa là
+ * lúc dễ hỏng nhất vừa là lúc có nhiều thứ để mất nhất. */
+assert.doesNotMatch(
+  stripComments(sourceAt("blocks/useBlockLibrary.ts")),
+  /catch[\s\S]{0,160}?setBlocks\(\[\]\)/,
+  "đọc danh mục hỏng thì không được xoá bản đang hiển thị",
+);
+/* Block đang chọn phải tra trong TOÀN danh mục. Chính lượt lưu đẩy nó từ
+ * `synced` sang `outdated`, nên tra trong danh sách đã lọc nghĩa là bật bộ lọc
+ * "Khớp thư viện" rồi lưu sẽ làm pane chi tiết biến mất ngay sau khi lưu. */
+assert.match(
+  stripComments(sourceAt("blocks/page.tsx")),
+  /const selected = library\.blocks\.find/,
+  "block đang chọn tra trong toàn danh mục, không phải danh sách đã lọc",
+);
+assert.match(
+  sourceAt("blocks/page.tsx"),
+  /Định nghĩa trong bản vẽ nay là bản cũ/,
+  "lưu metadata làm mất đồng bộ thì phải nói ra và chỉ việc tiếp theo",
+);
+
 /* Một EventSource duy nhất, và ở đúng chỗ. Chỉ đếm "= 1" thì không đủ: hôm
  * trước nó đã bằng 1 khi còn nằm trong page.tsx, nên tiêu chí đó pass mà không
  * đo được gì. Nhiều instance nghĩa là mỗi panel tự mở một kết nối SSE riêng. */

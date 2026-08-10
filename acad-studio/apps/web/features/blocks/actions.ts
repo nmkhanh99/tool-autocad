@@ -18,6 +18,7 @@
  */
 import { daemonFailureText, daemonRecord } from "../../lib/daemon/client";
 import { endpoints } from "../../lib/daemon/endpoints";
+import { normalizeBlock, validateBlockDraft, type BlockDefinition } from "./model";
 
 export type BlockActionResult = { ok: true; hint: string } | { ok: false; error: string };
 
@@ -42,6 +43,47 @@ export async function runBlockAction(
         ? "Đã bắt đầu chèn trong AutoCAD — chuyển sang cửa sổ AutoCAD để chỉ điểm chèn."
         : "Đã ghi metadata lên định nghĩa block trong bản vẽ.";
     return { ok: true, hint };
+  } catch (failure) {
+    return { ok: false, error: daemonFailureText(failure) };
+  }
+}
+
+/** Lưu metadata một định nghĩa.
+ *
+ * Khác hai lệnh trên: đây ghi vào **thư viện**, không vào bản vẽ. Không có
+ * AutoCAD nào bị chạm, không có gì để `UNDO`, và sửa lại là được — nên nó không
+ * cần `ConfirmSheet` với cảnh báo không-hoàn-tác. Đánh đồng nó với một lệnh ghi
+ * vào bản vẽ sẽ làm loãng cảnh báo ở chỗ cảnh báo thật sự quan trọng.
+ *
+ * Trả kèm `saved` — bản định nghĩa **máy chủ vừa ghi** cùng revision mới, không
+ * phải bản nháp đã gửi. Chúng khác nhau ở đúng những chỗ quan trọng: máy chủ tự
+ * đặt lại `syncStatus` (`PUT /:id` không tin `syncStatus` từ form), đẩy một
+ * block đang `synced` về `outdated` khi metadata đổi, và chuẩn hoá đầu vào
+ * (cắt khoảng trắng…). Nơi gọi cần cả ba để dội form về đúng thứ đã lưu; đoán ở
+ * phía client sẽ sai ở đúng những ca đó.
+ */
+export async function saveBlockMetadata(
+  base: string,
+  block: BlockDefinition,
+  expectedRevision: string,
+): Promise<BlockActionResult & { saved?: { block: BlockDefinition; revision: string } }> {
+  const invalid = validateBlockDraft(block);
+  if (invalid) return { ok: false, error: invalid };
+  try {
+    const body = await daemonRecord(await fetch(endpoints.block(base, block.id), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ block, expectedRevision }),
+    }));
+    const hint = typeof body.hint === "string" ? body.hint : "Đã lưu metadata block.";
+    const blocks = Array.isArray(body.blocks) ? body.blocks : [];
+    const savedBlock = blocks
+      .map(normalizeBlock)
+      .find((candidate): candidate is BlockDefinition => candidate?.id === block.id);
+    const revision = typeof body.revision === "string" ? body.revision : "";
+    return savedBlock && revision
+      ? { ok: true, hint, saved: { block: savedBlock, revision } }
+      : { ok: true, hint };
   } catch (failure) {
     return { ok: false, error: daemonFailureText(failure) };
   }

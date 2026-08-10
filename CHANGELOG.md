@@ -1,5 +1,196 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 4 (phần 4): sửa metadata block
+
+### Added
+
+- `features/blocks/BlockMetadataForm.tsx` — form sửa metadata một định nghĩa:
+  tên kỹ thuật, tên hiển thị, mô tả, layer mặc định, đơn vị, nhóm, thẻ, không
+  gian cho phép. Nút Lưu chỉ bật khi **có thay đổi và dữ liệu hợp lệ**; nút bị
+  khoá nói lý do qua `title`; có đường Hoàn tác về bản đang lưu.
+- `saveBlockMetadata()` + `endpoints.block(base, id)` → `PUT /api/acad/blocks/:id`
+  kèm `expectedRevision`.
+
+### Changed — form này KHÔNG dùng `ConfirmSheet`
+
+Nó ghi vào **thư viện**, không vào bản vẽ: không có AutoCAD nào bị chạm, không
+có gì để `UNDO`, sửa lại là được. Mượn hộp cảnh báo không-hoàn-tác cho một việc
+rút lại được sẽ làm nhẹ đi cảnh báo ở đúng hai chỗ thật sự không rút lại được
+(`insert`, `sync`). Đã khoá bằng bất biến: `BlockMetadataForm.tsx` không được
+chứa `ConfirmSheet` hay chữ "không hoàn tác".
+
+### Changed — validate dùng chung với panel cũ
+
+`TECHNICAL_NAME_PATTERN` và `validateBlockDraft()` chuyển từ
+`app/BlockLibraryPanel.tsx` sang `features/blocks/model.ts`; panel cũ nay import
+lại (3 call site). Hai màn hình chấp nhận **cùng một tập tên** thay vì hai bản
+regex song song trôi dần ra khỏi nhau.
+
+### Fixed — lưu metadata làm mất đồng bộ mà không nói
+
+Đọc `blockLibraryRouter.ts` mới thấy: `PUT /:id` đẩy một block đang `synced` về
+`outdated` khi metadata đổi — đúng, vì định nghĩa trong bản vẽ nay giữ thông tin
+cũ. Nhưng người dùng nhận thông báo "đã lưu" rồi thấy thẻ trạng thái tự đổi từ
+"Đã sync" sang "Cần cập nhật" mà không có lời giải thích nào.
+
+Nay thông báo nói thẳng và chỉ việc tiếp theo: *"Định nghĩa trong bản vẽ nay là
+bản cũ — chạy Đồng bộ metadata để ghi bản mới."*
+
+Trạng thái được **đọc từ phản hồi PUT**, không đoán phía client: máy chủ tự đặt
+lại `syncStatus` (nó không tin `syncStatus` gửi từ form), và một sửa đổi bị
+`sanitizeBlockDefinition` chuẩn hoá về y như cũ sẽ giữ nguyên `synced` — đoán
+theo cờ `dirty` sẽ báo sai ở đúng ca đó.
+
+### Fixed — `USER_GUIDE.md` còn ghi màn hình là "chỉ đọc"
+
+Bỏ sót ở commit trước: phần 3 đã thêm hai nút ghi vào `/library/blocks` nhưng
+hướng dẫn vẫn nói mọi lệnh ghi "vẫn ở màn hình cũ". Nay viết lại đủ ba việc
+(chèn · đồng bộ metadata · sửa metadata) kèm giới hạn 2 phút của `insert`, câu
+"hình học không đổi" của `sync`, và cảnh báo trạng thái đồng bộ là kết quả lần
+quét gần nhất chứ không phải trạng thái so với bản vẽ đang mở.
+
+### Fixed — lưu xong thì pane chi tiết biến mất (Codex review, P2)
+
+Block đang chọn được tra trong danh sách **đã lọc**. Mà chính lượt lưu metadata
+đẩy block từ `synced` sang `outdated` — nên đang bật bộ lọc "Khớp thư viện" rồi
+lưu là block vừa sửa rơi khỏi danh sách, pane chi tiết unmount và phần đang gõ
+dở biến mất. Đổi tên cho nó không còn khớp ô tìm kiếm cũng ra kết quả y hệt.
+
+Nay tra trong toàn danh mục; danh sách đã lọc chỉ dùng để vẽ lưới.
+
+### Fixed — tải lại hỏng thì xoá luôn bản nháp (Codex review, P1)
+
+`useBlockLibrary` gọi `setBlocks([])` ở nhánh lỗi. Nghĩa là daemon tắt hay mạng
+chớp trong một lần tải lại sẽ làm `selected` thành null, form sửa metadata
+unmount, và người dùng mất trắng phần đang gõ. Lần tải lại ngay sau một lượt lưu
+vừa là lúc dễ hỏng nhất, vừa là lúc có nhiều thứ để mất nhất — và bản sửa 409 ở
+trên còn làm nó chạy cả khi lưu hỏng.
+
+Nay hỏng thì **giữ danh mục cũ**. Trang phân biệt hai ca: chưa có gì thì hiện
+hộp lỗi như cũ; đã có dữ liệu thì hiện dải "Danh mục có thể đã cũ" phía trên và
+giữ nguyên danh sách lẫn pane chi tiết.
+
+### Fixed — 409 là ngõ cụt không có đường ra (Codex review, P2)
+
+Ghim revision đổi xung đột từ "một lần hỏng" thành "hỏng mãi": form ngồi trên
+phiên bản không còn tồn tại, mọi lần lưu sau đều 409 y hệt, và trang không có
+nút tải lại nào. Nay:
+
+- tải lại danh mục **kể cả khi lưu hỏng**, không chỉ khi thành công;
+- thông báo lỗi nói luôn việc phải làm thay vì chỉ báo lỗi;
+- **Hoàn tác** lấy bản **mới nhất của máy chủ** chứ không phải mốc đã cũ — bình
+  thường hai cái là một, khác nhau đúng ở ca này, và đây là đường ra duy nhất
+  trên trang nên nó phải dẫn tới bản đang có thật.
+
+Đã kiểm bằng stub ép trả 409: thông báo hiện đúng hướng dẫn, chữ đã gõ vẫn còn,
+bấm Hoàn tác thì form về bản máy chủ và sạch trở lại.
+
+### Fixed — hai ca hiếm còn sót của form (Codex review, P2)
+
+- **Ảnh chụp lượt lưu cũ sống quá lâu.** Lưu block A → danh mục về bản A mới hơn
+  → chọn block khác → quay lại A: form vừa mount nuốt phải ảnh chụp cũ và hiện
+  metadata lỗi thời kèm revision lỗi thời. Nay đổi block là xoá luôn ảnh chụp.
+- **Gõ tiếp trong lúc chờ máy chủ thì mất chữ.** Ô nhập không khoá khi đang lưu
+  — và không khoá được, vì cờ bận dùng chung với `insert`, mà `insert` chờ tới 2
+  phút. Nay khi phản hồi về, **mốc và revision** luôn cập nhật theo máy chủ,
+  nhưng **nội dung form** chỉ bị dội nếu người dùng chưa gõ thêm kể từ lúc bấm.
+
+### Fixed — lưu metadata ghi đè im lặng thay đổi của người khác (Codex review, P1)
+
+Nghiêm trọng nhất trong loạt này, và là hệ quả không lường của việc giữ bản nháp
+qua các lần tải lại. Kịch bản: form đang mở block B → người khác sửa B → một lệnh
+`insert`/`sync` làm danh mục tải lại → `library.revision` thành bản mới trong khi
+bản nháp vẫn là các giá trị **cũ**. Bấm Lưu lúc đó gửi giá trị cũ kèm revision
+mới, máy chủ **chấp nhận** và xoá sạch thay đổi của người kia. Đúng loại hỏng mà
+`expectedRevision` tồn tại để chặn, bị chính bản sửa trước đó mở ra.
+
+Nay vá hai vế:
+
+- Bản nháp **sạch** thì nhận bản mới khi danh mục tải lại — không có gì để mất,
+  và ngồi trên dữ liệu cũ mới là nguồn của lỗi trên.
+- Bản nháp **đang sửa dở** thì giữ nguyên, kèm luôn **revision mà nó dựa trên**.
+  Lượt lưu gửi revision đó, nên máy chủ từ chối và người dùng phải tải lại — thay
+  vì ghi đè trong im lặng.
+
+Khoá bằng hai bất biến: `onSaveMetadata` phải nhận `expectedRevision` từ form, và
+`saveBlockMetadata(...)` không được nhận `library.revision`.
+
+### Fixed — nút Lưu sáng lại sau khi đã lưu (Codex review, P2)
+
+Hệ quả của bản sửa ngay dưới, Codex bắt ở vòng review tiếp theo. Máy chủ chuẩn
+hoá đầu vào (`sanitizeBlockDefinition` cắt khoảng trắng…), nên gõ `"Van "` rồi
+lưu sẽ để lại bản nháp `"Van "` bên cạnh bản đã ghi `"Van"`: nút Lưu sáng lại
+như thể còn thay đổi, và Hoàn tác thì đổi nội dung form một cách khó hiểu.
+
+Nay form dội bản nháp theo **phản hồi `PUT`** sau mỗi lượt lưu thành công. Phải
+là phản hồi chứ không phải lần tải lại danh mục ngay sau đó: form không phân
+biệt được lần tải lại ấy với một lần tải lại bất kỳ, mà lần bất kỳ thì **không
+được** đụng vào phần đang gõ dở.
+
+Đã kiểm: gõ `" XX   "` vào Tên hiển thị → Lưu → form hiện `"Van cổng DN80 XX"`
+(đã cắt khoảng trắng) và cả Lưu lẫn Hoàn tác đều tắt.
+
+Vòng review sau chỉ ra rằng dội bản nháp thôi chưa đủ: mốc so sánh vẫn là prop
+`block`, mà prop đó còn là bản **cũ** cho tới khi danh mục tải lại xong. Nút Lưu
+sáng suốt quãng đó, bấm lần nữa là gửi `expectedRevision` cũ và ăn 409; tải lại
+mà hỏng thì form không bao giờ về sạch. Nay mốc là một state riêng, cập nhật
+cùng lúc với bản nháp.
+
+### Fixed — mất công gõ khi danh mục tải lại (Codex review, P2)
+
+Bản nháp của form là **cả** `BlockDefinition` và được đặt lại theo object `block`.
+Danh mục thì tải lại sau mỗi lệnh `insert`/`sync`, và mỗi lần tải lại sinh object
+mới hoàn toàn — nên chạy Chèn trong lúc đang sửa metadata sẽ **xoá sạch phần
+đang gõ**, tuy người dùng không hề chọn sang block khác.
+
+Nay bản nháp chỉ giữ **đúng những trường form sửa được** và chỉ đặt lại theo
+`block.id`. Cách này còn gỡ luôn một cái bẫy thứ hai chưa lộ ra: `syncStatus` do
+máy chủ quyết định và tự đổi sau khi lưu, nên nếu nó nằm trong bản nháp thì sau
+mỗi lượt lưu nút Lưu sẽ sáng vĩnh viễn vì một "thay đổi" không ai tạo ra.
+
+Đã kiểm đúng ca đó trên trình duyệt: gõ dở vào Mô tả → chạy Chèn → danh mục tải
+lại → phần gõ dở vẫn còn.
+
+### Fixed — ô Thẻ nuốt dấu phẩy (Codex review, P2)
+
+Ô Thẻ render từ `tags.join(", ")` còn `onChange` tách chuỗi và bỏ phần rỗng: gõ
+`van,` → `["van", ""]` → bỏ rỗng → render lại thành `van`. Dấu phẩy biến mất
+ngay khi vừa gõ, nên **không gõ được thẻ thứ hai** trừ khi dán cả chuỗi.
+
+Nay ô giữ nguyên văn người dùng gõ; mảng `tags` vẫn cập nhật theo từng phím để
+`dirty`/validate chạy đúng, và nguyên văn chỉ được chuẩn hoá khi rời ô.
+
+### Fixed — tiêu đề thông báo nói sai loại thao tác
+
+Thông báo thành công dùng chung nhãn "Đã gửi lệnh" cho cả ba việc. Với lưu
+metadata thì không có lệnh nào được gửi đi đâu cả — nó ghi vào thư viện và xong
+ngay, nên nhãn đó ngụ ý còn một việc đang chạy trong AutoCAD. Nay `insert`/`sync`
+giữ "Đã gửi lệnh", lưu metadata dùng "Đã lưu".
+
+### Fixed — `<label>` lồng `<label>` (Codex review, P2)
+
+Bảy trường của form được viết là `<label className="field">` bọc một `<label>`
+nữa. HTML không hợp lệ: trình duyệt đóng label ngoài sớm khi parse, cây DOM lệch
+với cây React (cảnh báo hydrate) và mất liên kết bấm-nhãn-để-focus.
+
+Nay theo đúng cấu trúc của bộ mẫu: `<div className="field">` + `<label htmlFor>`
+nối với `id` sinh từ `useId()`.
+
+### Technical
+
+- `DEVELOPMENT.md`: cây thư mục `apps/web` cập nhật đủ `components/`,
+  `features/`, `lib/`; ghi lý do `lib/acadState.ts` tách khỏi feature.
+- 2 test mới cho `validateBlockDraft` (`test-blocks-model.test.ts`: 9 → 11).
+- 4 bất biến mới ở `test-contract.mjs`.
+- Kiểm trên Chrome thật: tên có dấu → khoá + `aria-invalid`, tên rỗng → khoá,
+  sửa hợp lệ → mở, Hoàn tác → về bản gốc và khoá lại. Gõ **bằng bàn phím thật**
+  `, ren` vào ô Thẻ → dấu phẩy đứng lại, nút Lưu bật; bấm Lưu → thẻ đổi từ
+  "Đã sync" sang "Cần cập nhật" kèm đúng câu nhắc chạy Đồng bộ metadata.
+- Kiểm bằng một daemon giả (`NEXT_PUBLIC_DAEMON_URL` trỏ sang cổng khác) thay vì
+  ghi block giả vào thư viện thật.
+
+---
+
 ## 2026-08-10 — Giai đoạn 4 (phần 3): lệnh ghi của thư viện block
 
 ### Added

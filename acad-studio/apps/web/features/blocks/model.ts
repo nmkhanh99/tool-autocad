@@ -226,6 +226,28 @@ export function emptyBlock(): BlockDefinition {
   };
 }
 
+/** Tên kỹ thuật đi thẳng vào AutoCAD nên phải là ASCII và không có ký tự lạ.
+ * AutoCAD chấp nhận một số ký tự khác nữa, nhưng thu hẹp ở đây là cố ý: một
+ * tên có khoảng trắng hay dấu tiếng Việt sẽ chạy được cho tới lúc ai đó gõ nó
+ * trong dòng lệnh hoặc đưa vào một script LISP. */
+export const TECHNICAL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** Kiểm hợp lệ trước khi gửi lên máy chủ. Trả chuỗi rỗng khi hợp lệ.
+ *
+ * Dùng CHUNG cho panel legacy và route mới: hai bản kiểm khác nhau nghĩa là
+ * cùng một block được một màn hình cho lưu còn màn hình kia chặn. */
+export function validateBlockDraft(draft: BlockDefinition | null): string {
+  if (!draft) return "Chưa có block để lưu.";
+  if (!TECHNICAL_NAME_PATTERN.test(draft.technicalName.trim())) {
+    return "Tên kỹ thuật phải là ASCII, không dấu; chỉ dùng chữ, số, dấu chấm, _ hoặc -.";
+  }
+  if (!draft.displayName.trim()) return "Tên hiển thị không được để trống.";
+  if (!draft.defaultLayer.trim()) return "Layer mặc định không được để trống.";
+  if (!draft.units.trim()) return "Đơn vị không được để trống.";
+  if (!draft.allowedSpaces.length) return "Chọn ít nhất Model hoặc Layout.";
+  return "";
+}
+
 export function catalogRecord(body: JsonRecord): JsonRecord {
   return asRecord(body.catalog) || asRecord(body.data) || body;
 }

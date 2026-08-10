@@ -140,11 +140,31 @@ bản **chỉ đọc** với CSS module riêng trích từ mẫu.
 `insert` / `sync` trên `/library/blocks`; sắp lại ranh giới (`lib/acadState.ts`
 + `components/ui/WriteButton`).
 
+**Xong tiếp (2026-08-10):** form **sửa metadata** (`BlockMetadataForm`),
+`PUT /blocks/:id` kèm `expectedRevision`, validate dùng chung với panel cũ; thông
+báo nói rõ việc lưu metadata đẩy block `synced` về `outdated`.
+
+Phần này qua **11 vòng Codex review** mới sạch — 9 phát hiện, trong đó 2 là P1
+(ghi đè im lặng thay đổi của người khác; mất bản nháp khi tải lại hỏng). Gần như
+tất cả đều nằm quanh **một câu hỏi**: form giữ bản nháp bao lâu, và mốc nào để
+biết "đã sửa gì chưa". Ghi lại để phiên sau đừng làm lại từ đầu:
+
+- Bản nháp chỉ giữ **những trường form sửa được**, không phải cả định nghĩa.
+- Đặt lại theo `block.id`, không theo object `block` — danh mục tải lại liên tục.
+- Mốc so sánh là **state riêng**, không phải prop `block`.
+- Lượt lưu mang **revision của mốc**, không phải revision mới nhất của danh mục.
+- Đọc bản đã ghi từ **phản hồi `PUT`**, không đợi danh mục tải lại.
+- Tải lại hỏng thì **giữ danh mục cũ**; block đang chọn tra trong **toàn** danh
+  mục, không phải danh sách đã lọc.
+
+Cùng bộ ràng buộc này sẽ lặp lại ở form **tạo block từ bộ chọn** và các form ở
+`/library/lisp`, `/standards`, `/settings`.
+
 **Còn lại:**
 
-- Phần ghi còn thiếu của thư viện block: **tạo từ bộ chọn**, **sửa metadata**,
-  **quản lý thư mục nguồn**. Ba việc này cần form nhập liệu, nặng hơn hai lệnh
-  vừa làm. Hiện vẫn ở màn hình cũ và trang mới nói rõ.
+- Phần ghi còn thiếu của thư viện block: **tạo từ bộ chọn**
+  (`POST /blocks/create`) và **quản lý thư mục nguồn** (`POST /blocks/sources`,
+  `POST /blocks/scan`). Hiện vẫn ở màn hình cũ và trang mới nói rõ.
 - `/library/lisp`: gom hai nơi về một (`LispLibraryPanel` + card duyệt trong
   chat), `.countdown` 2 phút thật, guardstrip điều kiện duyệt, hiện rõ
   `analysisCoverage`. **Giữ nguyên `askAgent()`** — budget 180 KB, cắt đôi 12

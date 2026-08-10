@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { asRecord, daemonRecord, type JsonRecord } from "../lib/daemon/client";
-import { blockMatches, catalogRecord, duplicateLabel, emptyBlock, finiteNumber, localDuplicateGroups, normalizeBlock, normalizeDuplicates, normalizeSource, slugifyTechnicalName, splitList, syncLabel, textValue, type BlockDefinition, type BlockSpace, type BlockType, type DuplicateGroup, type LibrarySource, type Notice, type SyncStatus } from "../features/blocks/model";
+import { TECHNICAL_NAME_PATTERN, validateBlockDraft, blockMatches, catalogRecord, duplicateLabel, emptyBlock, finiteNumber, localDuplicateGroups, normalizeBlock, normalizeDuplicates, normalizeSource, slugifyTechnicalName, splitList, syncLabel, textValue, type BlockDefinition, type BlockSpace, type BlockType, type DuplicateGroup, type LibrarySource, type Notice, type SyncStatus } from "../features/blocks/model";
 
 export type BlockLibraryPanelProps = {
   open: boolean;
@@ -12,7 +12,6 @@ export type BlockLibraryPanelProps = {
   onOpenAutoCAD?: () => void;
 };
 
-const TECHNICAL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 
 
@@ -187,18 +186,6 @@ export default function BlockLibraryPanel({
     updateDraft({ allowedSpaces: next });
   }
 
-  function validateDraft(): string {
-    if (!draft) return "Chưa có block để lưu.";
-    if (!TECHNICAL_NAME_PATTERN.test(draft.technicalName.trim())) {
-      return "Tên kỹ thuật phải là ASCII, không dấu; chỉ dùng chữ, số, dấu chấm, _ hoặc -.";
-    }
-    if (!draft.displayName.trim()) return "Tên hiển thị không được để trống.";
-    if (!draft.defaultLayer.trim()) return "Layer mặc định không được để trống.";
-    if (!draft.units.trim()) return "Đơn vị không được để trống.";
-    if (!draft.allowedSpaces.length) return "Chọn ít nhất Model hoặc Layout.";
-    return "";
-  }
-
   async function refreshAfterMutation(preferredId?: string) {
     setDraftDirty(false);
     await loadCatalog();
@@ -207,7 +194,7 @@ export default function BlockLibraryPanel({
 
   async function saveMetadata() {
     if (!draft?.id) return;
-    const error = validateDraft();
+    const error = validateBlockDraft(draft);
     if (error) return setNotice({ tone: "error", text: error });
     setBusy("save");
     setNotice(null);
@@ -231,7 +218,7 @@ export default function BlockLibraryPanel({
 
   async function createFromSelection() {
     if (!draft) return;
-    const error = validateDraft();
+    const error = validateBlockDraft(draft);
     if (error) return setNotice({ tone: "error", text: error });
     setBusy("create");
     setNotice(null);
@@ -339,7 +326,7 @@ export default function BlockLibraryPanel({
 
   if (!open) return null;
 
-  const formError = draft ? validateDraft() : "";
+  const formError = draft ? validateBlockDraft(draft) : "";
   const creating = !!draft && !draft.id;
 
   return (

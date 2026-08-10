@@ -47,11 +47,33 @@ apps/web/
 │   ├── layout.tsx           root layout
 │   ├── page.tsx             MÀN HÌNH LEGACY — chat + 7 panel, sẽ dời ở giai đoạn 8
 │   ├── globals.css          CSS legacy (3.500 dòng), sẽ bị thay ở giai đoạn 10
+│   ├── design-system.css    CSS của giao diện mới, gate bằng body[data-ds]
 │   ├── (shell)/             route group của giao diện mới
-│   │   └── changes/page.tsx giàn giáo giai đoạn 0
+│   │   ├── changes/         giàn giáo giai đoạn 0
+│   │   └── library/blocks/  page.tsx + blocks.module.css (style riêng của màn)
 │   └── *Panel.tsx           7 panel của màn hình legacy
+├── components/
+│   ├── shell/               khung dùng chung: Titlebar, Rail, Statusbar…
+│   └── ui/                  primitive: Button, Modal, Tag, GuardStrip,
+│                            WriteButton (+ AcadStateProvider)
+├── features/                logic theo miền, KHÔNG import chéo nhau
+│   ├── acad-connection/     đọc trạng thái AutoCAD (polling + SSE bus)
+│   ├── assistant/           model tin nhắn chat
+│   ├── blocks/              model + useBlockLibrary + actions + form metadata
+│   └── staged-ops/          hàng chờ hai pha + ConfirmSheet
+├── lib/                     hạ tầng dùng chung, không thuộc feature nào
+│   ├── acadState.ts         kiểu + nhãn + canWrite của trạng thái AutoCAD
+│   ├── daemon/              client, endpoints (nguồn duy nhất của URL), docs
+│   └── storage.ts
 └── scripts/                 guardrail + test hợp đồng
 ```
+
+**Vì sao `lib/acadState.ts` tách khỏi `features/acad-connection`:** `ConfirmSheet`
+(ở `features/staged-ops`) cần `WriteButton`, mà `WriteButton` cần trạng thái kết
+nối. Để nó ở `features/acad-connection` là buộc feature import chéo feature.
+Trạng thái kết nối AutoCAD là **hạ tầng dùng chung**, không phải một feature
+ngang hàng — nên phần kiểu/nhãn/`canWrite` nằm ở `lib/`, phần *đọc* trạng thái
+(polling, SSE, heuristic `no-plugin` vs `mute`) ở lại feature.
 
 **Quy tắc bất khả xâm phạm trong lúc migrate:** không được tạo
 `app/(shell)/page.tsx` chừng nào `app/page.tsx` còn tồn tại. Cả hai cùng resolve
@@ -183,6 +205,33 @@ console không báo gì. Log của dev server mới là chỗ nói ra:
 daemon phục vụ không dính bẫy này — nó không đi qua dev server.) Nếu bắt buộc
 phải dùng `127.0.0.1`, thêm `allowedDevOrigins: ["127.0.0.1"]` vào
 `next.config.mjs` rồi khởi động lại dev server.
+
+### Kiểm giao diện bằng tay mà không đụng dữ liệu thật
+
+Nhiều màn hình chỉ hiện được khi có dữ liệu, mà dữ liệu thật thì nằm trong thư
+viện/bản vẽ của người dùng. Đừng tạo dữ liệu giả bằng cách gọi endpoint ghi của
+daemon thật, và cũng đừng vá `window.fetch` trong console: thanh điều hướng dời
+trang theo kiểu MPA nên bản vá mất ngay khi đổi màn hình.
+
+Cách dùng: chạy một daemon giả ở cổng khác rồi trỏ dev server sang nó.
+
+```bash
+cd acad-studio/apps/web
+node scripts/stub-daemon.mjs         # :8899, phục vụ /api/acad/* bằng dữ liệu bịa
+NEXT_PUBLIC_DAEMON_URL=http://127.0.0.1:8899 npx next dev -p 3100
+```
+
+`scripts/stub-daemon.mjs` **không** nằm trong `pnpm verify` — nó là công cụ xem
+bằng mắt, không phải test. Hôm nay nó mới phục vụ phần thư viện block; thêm màn
+hình nào thì thêm route cho màn đó.
+
+Hai lưu ý khi thao tác bằng công cụ tự động:
+
+- **Cú bấm đầu tiên ngay sau khi tải trang bị nuốt** — React chưa hydrate xong.
+  Bấm lại lần nữa.
+- Đọc trạng thái nút **ngay trong cùng một lần chạy script** sau khi bắn sự kiện
+  `input` sẽ thấy giá trị cũ: React render bất đồng bộ. Đọc ở lượt sau, hoặc
+  dùng bàn phím thật.
 
 ---
 

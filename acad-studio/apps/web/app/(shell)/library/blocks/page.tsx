@@ -6,9 +6,12 @@
  * Cả hai là MỘT PHA — máy chủ không có bước chuẩn bị cho chúng, nên chúng không
  * đi qua hàng chờ Thay đổi và `ConfirmSheet` phải nói rõ điều đó.
  *
- * Chưa dựng lại ở đây: tạo block từ bộ chọn, sửa metadata, quản lý thư mục
- * nguồn. Trang nói thẳng và có liên kết sang màn hình cũ, thay vì vẽ nút rồi để
- * nó không làm gì.
+ * Sửa metadata ghi vào **thư viện**, không vào bản vẽ — nên nó không đi qua
+ * `ConfirmSheet`. Đánh đồng nó với một lệnh ghi vào bản vẽ sẽ làm loãng cảnh báo
+ * ở đúng chỗ cảnh báo cần có trọng lượng.
+ *
+ * Chưa dựng lại ở đây: tạo block từ bộ chọn, quản lý thư mục nguồn. Trang nói
+ * thẳng và có liên kết sang màn hình cũ, thay vì vẽ nút rồi để nó không làm gì.
  *
  * Hai điểm bám theo bộ mẫu, cố ý:
  *
@@ -24,7 +27,8 @@ import { Tag } from "../../../../components/ui/Tag";
 import { WriteButton } from "../../../../components/ui/WriteButton";
 import { Icon } from "../../../../components/ui/icons";
 import { ConfirmSheet } from "../../../../features/staged-ops/ConfirmSheet";
-import { runBlockAction } from "../../../../features/blocks/actions";
+import { runBlockAction, saveBlockMetadata } from "../../../../features/blocks/actions";
+import { BlockMetadataForm } from "../../../../features/blocks/BlockMetadataForm";
 import { useBlockLibrary } from "../../../../features/blocks/useBlockLibrary";
 import {
   blockMatches,
@@ -46,6 +50,14 @@ const SYNC_FILTERS: Array<{ value: string; label: string; match: SyncStatus[] }>
   { value: "conflict", label: "Xung đột — cần xử lý tay", match: ["conflict"] },
 ];
 
+/** Thông báo của một thao tác, gắn với block đã sinh ra nó.
+ *
+ * `sent` phân biệt hai loại kết quả rất khác nhau: `insert`/`sync` **gửi lệnh
+ * sang AutoCAD** rồi mới xong ở đó, còn lưu metadata ghi vào thư viện và kết
+ * thúc ngay. Dùng chung một tiêu đề sẽ ngụ ý có lệnh đang chạy trong AutoCAD
+ * khi thực ra không có gì cả. */
+type Notice = { ok: boolean; sent: boolean; blockId: string; text: string };
+
 export default function BlocksLibraryPage() {
   const [query, setQuery] = useState("");
   const [syncFilter, setSyncFilter] = useState("");
@@ -54,10 +66,13 @@ export default function BlocksLibraryPage() {
   /* Thông báo phải gắn với BLOCK đã sinh ra nó. Giữ nó ở dạng toàn cục thì khi
      người dùng chọn block khác, thông báo cũ hiện dưới block mới và ngụ ý thao
      tác vừa rồi áp lên định nghĩa đó. */
-  const [notice, setNotice] = useState<{ ok: boolean; blockId: string; text: string } | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   /** Lệnh đang bay. `insert` chờ tới 2 phút, nên không khoá lại thì một cú bấm
    * thứ hai sẽ xếp thêm một lệnh ghi nữa với cùng `expectedRevision`. */
   const [inFlight, setInFlight] = useState(false);
+  /** Bản định nghĩa máy chủ vừa ghi, để form dội lại bản nháp theo đúng thứ đã
+   * lưu — máy chủ chuẩn hoá đầu vào nên hai bên lệch nhau nếu không dội. */
+  const [saved, setSaved] = useState<{ block: BlockDefinition; revision: string } | null>(null);
   const library = useBlockLibrary(DAEMON_BASE);
 
   const shown = useMemo(() => {
@@ -68,7 +83,11 @@ export default function BlocksLibraryPage() {
       (!filter?.match.length || filter.match.includes(block.syncStatus)));
   }, [library.blocks, query, syncFilter]);
 
-  const selected = shown.find((b) => b.id === selectedId) || null;
+  /* Tra trong TOÀN danh mục, không phải trong danh sách đã lọc. Chính lượt lưu
+     metadata đẩy block từ `synced` sang `outdated`, nên nếu đang bật bộ lọc
+     "Khớp thư viện" thì block vừa sửa rơi khỏi `shown` ngay sau khi lưu — pane
+     chi tiết unmount và phần đang gõ dở biến mất. `shown` chỉ dùng để vẽ lưới. */
+  const selected = library.blocks.find((b) => b.id === selectedId) || null;
 
   return (
     <AppShell
@@ -109,7 +128,17 @@ export default function BlocksLibraryPage() {
       <div className="split">
         <div className="scroll">
           <div className="pad">
-            {library.error ? (
+            {/* Hỏng khi đã có dữ liệu thì báo bằng dải cảnh báo và GIỮ danh sách:
+                thay nó bằng một hộp lỗi sẽ làm mất luôn pane chi tiết bên phải,
+                tức mất phần người dùng đang sửa dở. */}
+            {library.error && library.blocks.length > 0 ? (
+              <div className="callout" data-kind="warn" style={{ marginBottom: "var(--s3)" }}>
+                <span className="lbl">Danh mục có thể đã cũ</span>
+                <p>{library.error}</p>
+              </div>
+            ) : null}
+
+            {library.error && library.blocks.length === 0 ? (
               <div className="statebox" data-state="error">
                 <strong>Không đọc được thư viện block</strong>
                 <p className="hint">{library.error}</p>
@@ -133,7 +162,10 @@ export default function BlocksLibraryPage() {
                     type="button"
                     className={styles.blockcard}
                     aria-selected={block.id === selectedId}
-                    onClick={() => setSelectedId(block.id)}
+                    /* Bỏ luôn dấu vết lượt lưu trước. Giữ lại thì khi quay về
+                       block cũ, form vừa mount sẽ nuốt phải ảnh chụp đã lỗi
+                       thời và hiện metadata cũ kèm revision cũ. */
+                    onClick={() => { setSelectedId(block.id); setSaved(null); }}
                   >
                     {/* Không có hình xem trước — xem ghi chú ở đầu file. */}
                     <span className={styles.prev}>
@@ -162,9 +194,54 @@ export default function BlocksLibraryPage() {
           {selected ? (
             <BlockDetail
               block={selected}
+              revision={library.revision}
+              saved={saved?.block.id === selected.id ? saved : null}
               notice={notice?.blockId === selected.id ? notice : null}
               inFlight={inFlight}
               onAction={(action) => { setNotice(null); setPending(action); }}
+              onSaveMetadata={(draft, expectedRevision) => {
+                const before = selected.syncStatus;
+                setNotice(null);
+                setInFlight(true);
+                /* `expectedRevision` đến TỪ FORM, không phải `library.revision`:
+                   nó là revision mà bản nháp đang dựa trên. Nếu người khác vừa
+                   sửa block này thì hai giá trị lệch nhau và máy chủ phải từ
+                   chối — gửi revision mới nhất là tự tay xoá thay đổi của họ. */
+                void saveBlockMetadata(DAEMON_BASE, draft, expectedRevision).then((result) => {
+                  setInFlight(false);
+                  /* Lưu metadata cho một block đang `synced` sẽ đẩy nó về
+                     `outdated`: định nghĩa trong bản vẽ nay là bản cũ. Người
+                     dùng vừa được báo "đã lưu" mà thẻ trạng thái đổi ngay sau
+                     đó là một bất ngờ im lặng — nói thẳng, và nói cả việc phải
+                     làm tiếp. Đọc từ phản hồi chứ không đoán: máy chủ tự đặt
+                     lại `syncStatus`, và một sửa đổi bị chuẩn hoá về y như cũ
+                     sẽ giữ nguyên `synced`. */
+                  const flipped = result.ok && before === "synced" &&
+                    result.saved?.block.syncStatus === "outdated";
+                  setNotice({
+                    ok: result.ok,
+                    sent: false,
+                    blockId: draft.id,
+                    text: result.ok
+                      ? flipped
+                        ? `${result.hint} Định nghĩa trong bản vẽ nay là bản cũ — chạy Đồng bộ metadata để ghi bản mới.`
+                        : result.hint
+                      : `${result.error} Đã tải lại danh mục; bản đang sửa dựa trên phiên bản cũ nên lưu lại vẫn sẽ bị từ chối — bấm Hoàn tác để lấy bản mới nhất rồi sửa lại.`,
+                  });
+                  if (result.ok) {
+                    /* Dội bản nháp về đúng thứ máy chủ đã ghi. Phải lấy từ phản
+                       hồi PUT: lần tải lại danh mục ngay dưới đây không phân
+                       biệt được với một lần tải lại bất kỳ, mà những lần đó thì
+                       không được đụng vào phần người dùng đang gõ dở. */
+                    setSaved(result.saved ?? null);
+                  }
+                  /* Tải lại kể cả khi HỎNG. Lỗi hay gặp nhất ở đây là 409 vì
+                     người khác vừa sửa thư viện; không tải lại thì form ngồi mãi
+                     trên revision cũ và mọi lần lưu sau đều 409 y hệt — một ngõ
+                     cụt không có đường ra ngay trên trang. */
+                  library.reload();
+                });
+              }}
             />
           ) : (
             <div className={styles.detailPad}>
@@ -195,6 +272,7 @@ export default function BlocksLibraryPage() {
             setInFlight(true);
             setNotice({
               ok: true,
+              sent: true,
               blockId: block.id,
               text: action === "insert"
                 ? "Đã gửi lệnh. Chuyển sang cửa sổ AutoCAD để chỉ điểm chèn — lệnh chờ tối đa 2 phút."
@@ -207,6 +285,7 @@ export default function BlocksLibraryPage() {
             }).then((result) => {
               setNotice({
                 ok: result.ok,
+                sent: true,
                 blockId: block.id,
                 text: result.ok ? result.hint : result.error,
               });
@@ -236,11 +315,14 @@ export default function BlocksLibraryPage() {
   );
 }
 
-function BlockDetail({ block, notice, inFlight, onAction }: {
+function BlockDetail({ block, revision, saved, notice, inFlight, onAction, onSaveMetadata }: {
   block: BlockDefinition;
-  notice: { ok: boolean; blockId: string; text: string } | null;
+  revision: string;
+  saved: { block: BlockDefinition; revision: string } | null;
+  notice: Notice | null;
   inFlight: boolean;
   onAction: (action: "insert" | "sync") => void;
+  onSaveMetadata: (draft: BlockDefinition, expectedRevision: string) => void;
 }) {
   return (
     <div className={styles.detailPad}>
@@ -270,7 +352,12 @@ function BlockDetail({ block, notice, inFlight, onAction }: {
 
       {notice ? (
         <div className="callout" data-kind={notice.ok ? undefined : "stop"}>
-          <span className="lbl">{notice.ok ? "Đã gửi lệnh" : "Không thực hiện được"}</span>
+          {/* "Đã gửi lệnh" chỉ đúng với hai lệnh chạm vào AutoCAD. Lưu metadata
+              ghi vào thư viện và xong ngay — dùng chung tiêu đề sẽ ngụ ý có một
+              lệnh đang chạy đâu đó trong AutoCAD. */}
+          <span className="lbl">
+            {!notice.ok ? "Không thực hiện được" : notice.sent ? "Đã gửi lệnh" : "Đã lưu"}
+          </span>
           <p>{notice.text}</p>
         </div>
       ) : null}
@@ -287,10 +374,19 @@ function BlockDetail({ block, notice, inFlight, onAction }: {
         </WriteButton>
       </div>
 
+      <BlockMetadataForm
+        key={block.id}
+        block={block}
+        revision={revision}
+        saved={saved}
+        busy={inFlight}
+        onSave={onSaveMetadata}
+        onCancel={() => undefined}
+      />
+
       <div className="callout" style={{ marginTop: "auto" }}>
         <p className="hint">
-          Chưa dựng ở đây: tạo block từ bộ chọn, sửa metadata, quản lý thư mục
-          nguồn.{" "}
+          Chưa dựng ở đây: tạo block từ bộ chọn, quản lý thư mục nguồn.{" "}
           <Link href="/?panel=blocks">Mở thư viện ở màn hình cũ</Link>.
         </p>
       </div>

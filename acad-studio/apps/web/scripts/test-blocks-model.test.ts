@@ -10,6 +10,8 @@ import test from "node:test";
 
 import {
   blockMatches,
+  emptyBlock,
+  validateBlockDraft,
   localDuplicateGroups,
   normalizeBlock,
   normalizeSource,
@@ -91,4 +93,26 @@ test("phát hiện trùng tên kỹ thuật trong danh sách hiện tại", () =
   const groups = localDuplicateGroups(blocks);
   assert.equal(groups.length, 1, "chỉ một nhóm trùng");
   assert.deepEqual([...groups[0].blockIds].sort(), ["a", "b"]);
+});
+
+
+test("tên kỹ thuật chỉ nhận ASCII an toàn", () => {
+  const ok = (name: string) => validateBlockDraft({ ...emptyBlock(), id: "b", displayName: "X", technicalName: name });
+  assert.equal(ok("VAN_CONG-DN80.v2"), "", "chữ, số, chấm, gạch dưới, gạch ngang đều hợp lệ");
+  assert.match(ok("Van cổng"), /ASCII/, "dấu tiếng Việt và khoảng trắng bị chặn");
+  assert.match(ok("van cong"), /ASCII/, "khoảng trắng bị chặn");
+  assert.match(ok("-batdau"), /ASCII/, "không được bắt đầu bằng dấu");
+  assert.match(ok(""), /ASCII/);
+  assert.equal(ok("a".repeat(128)), "", "128 ký tự là giới hạn trên");
+  assert.match(ok("a".repeat(129)), /ASCII/, "vượt 128 bị chặn");
+});
+
+test("các trường bắt buộc đều được kiểm", () => {
+  const base = { ...emptyBlock(), id: "b", technicalName: "VAN", displayName: "Van" };
+  assert.equal(validateBlockDraft(base), "");
+  assert.match(validateBlockDraft({ ...base, displayName: "  " }), /Tên hiển thị/);
+  assert.match(validateBlockDraft({ ...base, defaultLayer: "" }), /Layer mặc định/);
+  assert.match(validateBlockDraft({ ...base, units: "" }), /Đơn vị/);
+  assert.match(validateBlockDraft({ ...base, allowedSpaces: [] }), /Model hoặc Layout/);
+  assert.match(validateBlockDraft(null), /Chưa có block/);
 });
