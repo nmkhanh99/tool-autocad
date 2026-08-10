@@ -73,6 +73,24 @@ export const endpoints = {
   /** Ghi manifest. Khi `approved: true` thì phải kèm token ở trên. */
   lispManifest: (base: string, id: string) =>
     `${trim(base)}/api/acad/lisp/${encodeURIComponent(id)}/manifest`,
+  /** Hình học của bản vẽ đang mở — toạ độ thật, đọc trực tiếp từ plugin.
+   *
+   * Đây là một lượt QUÉT trên main thread của AutoCAD, không phải một endpoint
+   * rẻ: bản vẽ lớn làm AutoCAD đứng hình trong lúc chạy. Đừng gọi theo nhịp,
+   * đừng gọi trong `useEffect` phụ thuộc thứ hay đổi. Chỉ gọi khi người dùng
+   * yêu cầu, hoặc đúng một lần lúc mở màn hình.
+   *
+   * `space` và `layer` **không được chứa `=` hay xuống dòng** — request đi qua
+   * một tệp nhiều dòng dạng `key=value`; daemon trả 400 nếu vi phạm. */
+  geometry: (base: string, query: { space?: string; layer?: string; maxEntities?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (query.space) params.set("space", query.space);
+    if (query.layer) params.set("layer", query.layer);
+    if (query.maxEntities != null) params.set("maxEntities", String(query.maxEntities));
+    const search = params.toString();
+    return `${trim(base)}/api/acad/geometry${search ? `?${search}` : ""}`;
+  },
+
   /** Thư mục gốc được quản lý. */
   lispRoots: (base: string) => `${trim(base)}/api/acad/lisp/roots`,
   /** Đọc Support File Search Path của AutoCAD đang chạy rồi thêm làm thư mục gốc. */

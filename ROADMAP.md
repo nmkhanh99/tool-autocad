@@ -219,8 +219,7 @@ route, như `blocks.module.css` vừa làm.
 
 ## Later
 
-- **Giai đoạn 5** — `/workspace`. Phần backend **đã xong (2026-08-10)**; phần
-  giao diện chưa dựng. Ghi lại vì sao nó từng bị chặn: Đã kiểm ngày 2026-08-10 trên snapshot thật (`~/Acad-Bridge/drawing-info.json`,
+- **Giai đoạn 5** — `/workspace`. **Đã xong (2026-08-10)**, cả backend lẫn giao diện. Ghi lại vì sao nó từng bị chặn: Đã kiểm ngày 2026-08-10 trên snapshot thật (`~/Acad-Bridge/drawing-info.json`,
   350 KB) và trên mã nguồn: **không chỗ nào trong daemon hay plugin trả toạ độ
   của bất kỳ đối tượng nào.** `drawing-info` có số đếm theo type/layer/space,
   bảng layer/block/layout/style, và **một** bounding box của cả bản vẽ;
@@ -248,8 +247,14 @@ route, như `blocks.module.css` vừa làm.
   - **`truncated`** phải hiện lên. Vẽ 3.000/47.000 đối tượng mà im lặng thì
     người dùng tin đó là cả bản vẽ.
 
-  Chưa làm ở plugin: hình học bên trong định nghĩa block (INSERT mới chỉ có vị
-  trí + phép biến đổi), và tessellate các kiểu còn lại qua `worldDraw`.
+  **Đã làm nốt (2026-08-10): nội dung định nghĩa block.** Đối chiếu với ảnh bản
+  vẽ thật mới lộ ra rằng đây không phải việc "để sau": bản vẽ chỉ có 259 đối
+  tượng ở cấp trên cùng, còn cả mặt bằng nằm trong 95 định nghĩa block. Nay
+  `geometry.json` có `blocks` (147 định nghĩa, 10.122 đối tượng) và mỗi lần chèn
+  mang ma trận `m`.
+
+  Chưa làm ở plugin: tessellate các kiểu còn lại qua `worldDraw` — HATCH,
+  DIMENSION, MULTILEADER, VIEWPORT ở cấp trên cùng vẫn chỉ có hình bao.
 - **Giai đoạn 6** — `/drawing-info`, tách `/review` và `/standards`.
 - **Giai đoạn 7** — `/changes` (trục xoay), `/takeoff`, `/settings`.
 - **Giai đoạn 8** — `/publish`, `/batch`, `/cadweb`, `/` Tổng quan. Phạm vi đã

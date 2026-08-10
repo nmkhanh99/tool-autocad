@@ -1,6 +1,87 @@
 # CHANGELOG
 
-## 2026-08-10 — Giai đoạn 5 (backend): plugin xuất hình học 2D
+## 2026-08-10
+
+### Added — màn hình `/workspace`: khung xem hình học thật
+
+Route mới, đọc `GET /api/acad/geometry` và vẽ ra SVG: canvas thu/phóng/kéo, bộ
+chọn không gian, bảng layer lọc theo khung xem, inspector thuộc tính.
+
+Ba chỗ **cố tình lệch khỏi bộ mẫu**, vì bộ mẫu mô tả một backend không tồn tại:
+
+- **Bỏ dải phiên bản snapshot** (r45→r48 + banner "snapshot cũ hơn bản vẽ").
+  Không có lịch sử snapshot, `.cadweb` sync chưa có máy chủ nhận, hình học đọc
+  trực tiếp từ plugin mỗi lượt. Thay bằng một sự thật: ảnh chụp lúc mấy giờ, và
+  nút đọc lại.
+- **Bỏ hàng "Màu" và "Linetype"** khỏi inspector. Payload không mang. Một hàng
+  "Màu: ByLayer" viết cứng đọc y hệt giá trị đọc được từ bản vẽ.
+- **Thêm bộ chọn không gian** mà bộ mẫu không có. Bản vẽ thật có 5 không gian
+  với hệ toạ độ khác hẳn nhau (Model ở toạ độ trắc địa cách gốc 3,7 triệu đơn
+  vị; layout tính bằng mm trên giấy). Không có bộ chọn thì 34 đối tượng trên các
+  layout không có đường nào để xem.
+
+Màu nét nói **độ trung thực**, không nói layer: trắng = hình thật, xanh = hình
+thiếu, xám nét đứt = chưa có hình. Trên Model của bản vẽ as-built: 135 / 35 / 54.
+
+### Added — plugin xuất nội dung định nghĩa block
+
+**Đây là thứ quyết định màn hình có dùng được hay không.** Bản vẽ as-built của
+dự án chỉ có **259 đối tượng ở cấp trên cùng** (127 trong đó là lần chèn block,
+không có XREF nào) — toàn bộ mặt bằng kiến trúc, khung tên, trục, cửa, hatch nằm
+**bên trong 95 định nghĩa block**. Bản trước chỉ xuất điểm chèn, nên khung xem
+ra đúng mấy cái chấm; đối chiếu với ảnh bản vẽ thật mới lộ ra.
+
+Nay `geometry.json` có thêm `blocks`: nội dung từng định nghĩa, gửi **một lần**
+mỗi block dù được chèn bao nhiêu lần, kèm ma trận `m` ở mỗi lần chèn. Trên bản
+vẽ thật: 147 định nghĩa, **10.122 đối tượng** — gấp 40 lần cấp trên cùng, mà
+payload chỉ 1,2 MB vì không nhân bản.
+
+- `m` lấy thẳng từ `blockTransform()` của AutoCAD, đã gồm điểm chèn, điểm gốc
+  block, tỉ lệ âm và trục không vuông góc. Dựng lại từ `rot`+`sc` chỉ đúng ở
+  trường hợp đơn giản nhất.
+- Block lồng nhau duyệt theo lớp, trần độ sâu 8 — chặn cả đệ quy vô hạn (bản vẽ
+  hỏng: A chèn B chèn lại A) lẫn những cây lồng quá sâu.
+- Ngân sách riêng 60.000 đối tượng cho nội dung block, tách khỏi trần xuất của
+  cấp trên cùng, kèm cảnh báo `block_geometry_truncated` /
+  `block_nesting_too_deep`.
+
+### Fixed — bốn lỗi của khung xem (Codex review)
+
+- **Góc chữ tính bằng radian đem vẽ như độ (P1).** Plugin trả `rotation()` của
+  AutoCAD là radian, SVG `rotate()` nhận độ — một nhãn xoay 90° chỉ nghiêng
+  1,57°. Sai mà trông như "chữ hơi lệch", nên rất dễ lọt. Inspector cũng in
+  `1.5708°`. Nay cả hai đi qua `degrees()`.
+- **Nội dung block bị cắt mà màn hình vẫn báo đủ (P1).** Plugin phát
+  `block_geometry_truncated` / `block_nesting_too_deep` nhưng **không** bật
+  `truncated` ở cấp trên cùng, và một định nghĩa còn sót một phần vẫn được xếp
+  là "hình thật". Nay đọc cả hai mã và nói ra.
+- **Bộ lọc layer không chạm tới hình bên trong block.** 97% hình nằm trong định
+  nghĩa block, mỗi hình mang layer riêng — tắt một layer chỉ ẩn được phần ở cấp
+  trên cùng, và layer chỉ xuất hiện bên trong block thì không có trong bảng.
+  Nay lọc và đếm đệ quy, kèm **quy tắc layer `0` của AutoCAD**: đối tượng trên
+  layer `0` bên trong block kế thừa layer của lần chèn.
+- **Đọc lại không trả khung nhìn về.** `box` cũ đè lên khung vừa khít mới tính,
+  nên đổi bản vẽ là thấy canvas trống ở một góc toạ độ không còn gì.
+
+### Changed — dựng block bằng `<defs>` + `<use>`
+
+Bung thẳng nội dung block tại mỗi lần chèn cho **38.223 node SVG** trên bản vẽ
+as-built và **treo cả tab** — đã thử và đã treo thật. Định nghĩa dựng một lần
+trong `<defs>`, mỗi lần chèn là một `<use>`: còn **10.737 node**.
+
+Được thêm đúng hành vi chọn: nội dung `<use>` nằm trong shadow tree nên
+`event.target` luôn là lần chèn — bấm vào đâu trong block cũng chọn block, đúng
+như AutoCAD. Khoá của `<defs>` phải gồm cả layer của lần chèn, vì quy tắc layer
+`0` làm cùng một block chèn trên hai layer có thể bị ẩn khác nhau.
+
+### Fixed — khung xem báo "đang hiện" cả những đối tượng nằm ngoài màn hình
+
+`bounds` của plugin gom từ `getGeomExtents()`, mà block rỗng thì hàm đó báo
+không hợp lệ — 5 block bị đặt lạc cách bản vẽ hàng triệu đơn vị không nằm trong
+khung. Khung xem fit theo `bounds` rồi vẫn ghi "224/224 đối tượng đang hiện".
+Nay đếm và nói ra, kèm nút "Thu hết".
+
+ Giai đoạn 5 (backend): plugin xuất hình học 2D
 
 Việc backend gỡ chặn cho `/workspace`. **Đã chạy thật trên bản vẽ as-built của
 dự án**, không phải chỉ biên dịch được.

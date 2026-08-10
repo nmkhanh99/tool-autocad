@@ -352,12 +352,39 @@ Request nhiều dòng: `requestId` · `target` · rồi từng `key=value`. Vì 
 dòng nên `buildGeometryRequest()` **chặn tiêm dòng** — một `space` chứa `\n` có
 thể chèn thêm `maxEntities=99999` vào chính request mà người gọi cố ý giới hạn.
 
+**Nội dung định nghĩa block nằm ở `blocks`, không ở `entities`.** Bản vẽ
+as-built của dự án chỉ có 259 đối tượng ở cấp trên cùng (127 là lần chèn block,
+không XREF nào); cả mặt bằng kiến trúc, khung tên, trục, cửa, hatch nằm trong 95
+định nghĩa block. Bỏ qua `blocks` là mất 97% bản vẽ.
+
+- `blocks` là `{ "tên block": [đối tượng…] }`, toạ độ trong hệ của block, gửi
+  **một lần** mỗi block dù được chèn bao nhiêu lần.
+- Mỗi `insert` mang `m` = affine 2D `[a,b,c,d,e,f]` lấy từ `blockTransform()`:
+  `x' = a·x + c·y + e`, `y' = b·x + d·y + f`. Đã gồm điểm chèn, điểm gốc block,
+  tỉ lệ âm, trục không vuông góc — dựng lại từ `rot`+`sc` chỉ đúng ở trường hợp
+  đơn giản nhất.
+- Đối tượng bên trong định nghĩa **không có `sp`**: chúng không thuộc không gian
+  nào, chúng thuộc không gian của lần chèn.
+- Block lồng nhau duyệt theo lớp, trần độ sâu 8; renderer cũng phải tự chặn độ
+  sâu chứ không tin payload.
+- Bung ra để vẽ thì Model của bản vẽ này thành **~38.000 node SVG** — renderer
+  phải memo hoá cảnh theo dữ liệu, không theo khung nhìn.
+
+⚠️ **`bounds` có thể KHÔNG chứa hết `entities`.** Nó gom từ `getGeomExtents()`,
+mà block rỗng thì hàm đó báo không hợp lệ. Trên bản vẽ thật có 5 block đặt lạc
+cách bản vẽ hàng triệu đơn vị nằm ngoài `bounds`. Nơi nào fit khung theo `bounds`
+đều phải tự đếm số đối tượng nằm ngoài và nói ra.
+
 Ba điều mọi nơi tiêu thụ dữ liệu này phải mang theo:
 
 1. **`a:1` = hình vẽ ra không phải hình thật của đối tượng**, và `aw` nói vì
    sao: `bounding-box` (DIMENSION, HATCH, MULTILEADER, VIEWPORT…) hay
    `mline-centerline` (MLINE — tức là ống — chỉ có tim, không có hai đường
    thành). Trên bản vẽ as-built của dự án, đó là **103/258** đối tượng.
+
+   `a` **không** nói gì về block: một INSERT không có `a` vẫn có thể không vẽ
+   được gì, nếu định nghĩa của nó không có trong `blocks`. Độ trung thực phải
+   suy từ `k` + `aw` + có hay không định nghĩa block.
 2. **`truncated`** — vẽ 3.000/47.000 đối tượng mà im lặng thì người dùng tin đó
    là cả bản vẽ.
 3. **`bounds` là map theo từng space**, không phải một khung. Toạ độ giấy tính
@@ -371,6 +398,8 @@ Giới hạn **ba** phía, vì có ba cách khác nhau để làm treo AutoCAD:
 | `maxEntities` (xuất) | mặc định 20.000, cắt cứng 100.000 | payload quá lớn → `truncated` |
 | `kGeomMaxScanned` (quét) | 200.000 | bộ lọc layer **không khớp gì** vẫn duyệt cả bản vẽ → `geometry_scan_cap_reached` |
 | tổng byte | 24 MB | nhiều polyline 4.000 đỉnh cộng lại |
+| `kGeomMaxBlockEntities` | 60.000 | nội dung định nghĩa block (ngân sách RIÊNG) |
+| `kGeomMaxBlockDepth` | 8 | block lồng nhau, kể cả vòng lặp A→B→A |
 
 Trần xuất và trần quét phải tách nhau: `maxEntities` chỉ đếm thứ đã xuất, nên
 một tên layer gõ sai không bao giờ chạm tới nó — plugin vẫn mở và soi từng đối

@@ -54,6 +54,7 @@
 #include <AcCmColor.h>
 #include <algorithm>
 #include <map>
+#include <set>
 #include <vector>
 
 // ============================ trang thai ============================
@@ -1764,6 +1765,13 @@ static const size_t kGeomMaxTotalBytes      = 24 * 1024 * 1024;
 // loc layer khong khop gi (go sai ten chang han) se khong bao gio cham no — va
 // ta duyet ca ban ve tren MAIN THREAD du nguoi goi xin dung 1 doi tuong.
 static const size_t kGeomMaxScanned         = 200000;
+// Noi dung dinh nghia block co ngan sach RIENG. Gop chung voi tran xuat cua
+// cap tren cung se cho ra hanh vi kho hieu: mot ban ve 200 doi tuong ma 195
+// dinh nghia block se "cham tran" trong khi nguoi dung chi thay 200 dong.
+static const size_t kGeomMaxBlockEntities   = 60000;
+// Block long nhau. Chan de quy vo han khi ban ve hong (block A chen block B
+// chen lai A) va chan ca nhung cay long qua sau de con vẽ noi.
+static const size_t kGeomMaxBlockDepth      = 8;
 
 static std::string geomErrorJson(const std::string& requestId,
                                  const std::string& code,
@@ -1803,7 +1811,8 @@ static bool planarXY(const AcGeVector3d& n) {
     return fabs(n.x) < 1e-9 && fabs(n.y) < 1e-9 && n.z > 0.0;
 }
 
-static std::string entityGeometryJson(AcDbEntity* ent, bool& approx, long long& vertexOverflow) {
+static std::string entityGeometryJson(AcDbEntity* ent, bool& approx, long long& vertexOverflow,
+                                      std::set<std::string>* blockRefs = nullptr) {
     approx = false;
 
     if (AcDbLine* line = AcDbLine::cast(ent)) {
@@ -1900,11 +1909,24 @@ static std::string entityGeometryJson(AcDbEntity* ent, bool& approx, long long& 
         // va ti le chieu xuong XY khong con dung — block se ve sai huong hoac
         // sai kich thuoc.
         if (!planarXY(br->normal())) approx = true;
-        // Chi vi tri + phep bien doi. Hinh cua block nam trong dinh nghia cua no;
-        // xuat ca noi dung block o day se nhan ban hinh hoc cho MOI the hien.
+        if (blockRefs) blockRefs->insert(name);
+        // Hinh cua block nam trong DINH NGHIA cua no, khong nhan ban o day —
+        // mot ban ve co 50 lan chen cung mot block thi nhan ban la 50 lan hinh
+        // hoc trong payload. Thay vao do: dinh nghia gui MOT lan trong `blocks`,
+        // con moi lan chen mang mot ma tran.
+        //
+        // `m` la affine 2D [a,b,c,d,e,f] rut ra tu `blockTransform()`:
+        //     x' = a*x + c*y + e ;  y' = b*x + d*y + f
+        // Dung chinh ma tran cua AutoCAD thay vi tu dung lai tu rot/sc: no da
+        // gom san diem chen, diem goc cua block, ti le am (block bi lat), va
+        // truong hop truc khong vuong goc.
+        const AcGeMatrix3d xf = br->blockTransform();
         return "\"k\":\"insert\",\"p\":[" + xy(br->position()) + "]" +
                ",\"rot\":" + jsonNumber(br->rotation()) +
                ",\"sc\":[" + jsonNumber(sc.sx) + "," + jsonNumber(sc.sy) + "]" +
+               ",\"m\":[" + jsonNumber(xf(0, 0)) + "," + jsonNumber(xf(1, 0)) + "," +
+                             jsonNumber(xf(0, 1)) + "," + jsonNumber(xf(1, 1)) + "," +
+                             jsonNumber(xf(0, 3)) + "," + jsonNumber(xf(1, 3)) + "]" +
                ",\"name\":" + jsonString(name) +
                (approx ? ",\"aw\":\"projected-transform\"" : "");
     }
@@ -2057,6 +2079,9 @@ static void writeGeometry() {
     // hoi — giao dien khong dung bo chon space duoc, va nguoi dung khong biet
     // ban ve co nhung layout do. Doc ten layout thi re; quet doi tuong moi dat.
     std::vector<std::string> allLayouts;
+    // Ten block CAN gui dinh nghia. Gom trong luc quet cap tren cung, roi gui
+    // sau — gui ngay tai cho se nhan ban dinh nghia cho moi lan chen.
+    std::set<std::string> wantBlocks;
 
     AcDbBlockTable* table = nullptr;
     if (db->getBlockTable(table, AcDb::kForRead) != Acad::eOk || !table) {
@@ -2091,7 +2116,8 @@ static void writeGeometry() {
                     if (!wantLayer.empty() && layer != wantLayer) { ent->close(); continue; }
 
                     bool approx = false;
-                    const std::string geom = entityGeometryJson(ent, approx, vertexOverflow);
+                    const std::string geom =
+                        entityGeometryJson(ent, approx, vertexOverflow, &wantBlocks);
                     if (geom.empty()) { skipped++; ent->close(); continue; }
 
                     // Chi bao `truncated` khi that su BO SOT mot doi tuong dang le
@@ -2131,8 +2157,96 @@ static void writeGeometry() {
     } else {
         addWarning(warnings, "entity_iterator_unavailable");
     }
+
+    // ---- Noi dung dinh nghia block ----------------------------------------
+    //
+    // Vi sao BAT BUOC phai co: tren ban ve as-built cua du an, ca ban ve chi co
+    // 259 doi tuong o cap tren cung, trong do 127 la lan chen block — toan bo
+    // mat bang kien truc (tuong, cua, truc, hatch, khung ten) nam BEN TRONG 95
+    // dinh nghia block. Chi xuat diem chen thi khung xem ra vai cham, va nguoi
+    // dung nhin thay mot ban ve trong ron thay vi ban ve cua ho.
+    //
+    // Gui dinh nghia MOT lan moi block, kem ma tran `m` o tung lan chen. Noi
+    // ban ra tung the hien se nhan ban hinh hoc: 50 lan chen `_ArchTick` thanh
+    // 50 ban sao cua cung mot hinh.
+    std::string blocksJson = "{";
+    bool firstBlock = true;
+    long long blockEntities = 0, blockSkipped = 0, blockDefs = 0;
+    bool blockTruncated = false, blockDepthHit = false;
+    {
+        // Duyet theo lop de biet do sau: block long nhau co the tao vong lap
+        // (ban ve hong), va cung co the sau toi muc khong con y nghia de ve.
+        std::set<std::string> done;
+        std::set<std::string> frontier = wantBlocks;
+        for (size_t depth = 0; depth < kGeomMaxBlockDepth && !frontier.empty(); ++depth) {
+            std::set<std::string> next;
+            for (const std::string& name : frontier) {
+                if (name.empty() || done.count(name)) continue;
+                done.insert(name);
+                if ((size_t)blockEntities >= kGeomMaxBlockEntities ||
+                    rows.size() + blocksJson.size() >= kGeomMaxTotalBytes) {
+                    blockTruncated = true;
+                    break;
+                }
+                AcDbBlockTableRecord* btr = nullptr;
+                if (table->getAt(toWide(name).c_str(), btr, AcDb::kForRead) != Acad::eOk || !btr) {
+                    continue;
+                }
+                // Layout khong phai block noi dung; chung da duoc quet o vong
+                // tren cung roi. Gui lai la nhan doi ca ban ve.
+                if (btr->isLayout()) { btr->close(); continue; }
+
+                std::string defRows;
+                long long defCount = 0;
+                AcDbBlockTableRecordIterator* it = nullptr;
+                if (btr->newIterator(it) == Acad::eOk && it) {
+                    for (; !it->done(); it->step()) {
+                        if ((size_t)blockEntities >= kGeomMaxBlockEntities ||
+                            rows.size() + blocksJson.size() + defRows.size() >= kGeomMaxTotalBytes) {
+                            blockTruncated = true;
+                            break;
+                        }
+                        AcDbEntity* ent = nullptr;
+                        if (it->getEntity(ent, AcDb::kForRead) != Acad::eOk || !ent) continue;
+                        bool approx = false;
+                        // `next` chu khong phai `wantBlocks`: block long trong
+                        // block phai roi xuong lop sau de dem dung do sau.
+                        const std::string geom =
+                            entityGeometryJson(ent, approx, vertexOverflow, &next);
+                        if (geom.empty()) { blockSkipped++; ent->close(); continue; }
+                        if (defCount) defRows += ",";
+                        // Khong co `sp`: hinh trong dinh nghia block khong thuoc
+                        // khong gian nao ca — no thuoc khong gian cua lan chen.
+                        defRows += "{\"h\":" + jsonString(objectHandle(ent)) +
+                                   ",\"t\":" + jsonString(objectType(ent)) +
+                                   ",\"l\":" + jsonString(entityLayer(ent)) +
+                                   (approx ? ",\"a\":1" : "") +
+                                   "," + geom + "}";
+                        defCount++;
+                        blockEntities++;
+                        ent->close();
+                    }
+                    delete it;
+                }
+                btr->close();
+                if (!defCount) continue;
+                if (!firstBlock) blocksJson += ",";
+                firstBlock = false;
+                blocksJson += jsonString(name) + ":[" + defRows + "]";
+                blockDefs++;
+            }
+            if (blockTruncated) break;
+            if (depth + 1 >= kGeomMaxBlockDepth && !next.empty()) blockDepthHit = true;
+            frontier = next;
+        }
+    }
+    blocksJson += "}";
+
     table->close();
 
+    if (blockTruncated) addWarning(warnings, "block_geometry_truncated");
+    if (blockDepthHit) addWarning(warnings, "block_nesting_too_deep");
+    if (blockSkipped) addWarning(warnings, "block_entities_without_geometry_skipped");
     if (truncated) addWarning(warnings, "geometry_truncated");
     // Hai nguyen nhan cat bot rat khac nhau: cham tran XUAT nghia la con doi
     // tuong khop chua gui; cham tran QUET nghia la con phan ban ve chua nhin toi.
@@ -2191,12 +2305,15 @@ static void writeGeometry() {
         ",\"counts\":{\"scanned\":" + std::to_string(scanned) +
         ",\"emitted\":" + std::to_string(emitted) +
         ",\"approx\":" + std::to_string(approxCount) +
-        ",\"skipped\":" + std::to_string(skipped) + "}" +
+        ",\"skipped\":" + std::to_string(skipped) +
+        ",\"blockDefs\":" + std::to_string(blockDefs) +
+        ",\"blockEntities\":" + std::to_string(blockEntities) + "}" +
         ",\"truncated\":" + jsonBool(truncated) +
         ",\"bounds\":" + bounds +
         ",\"spaces\":" + spacesJson +
         ",\"layouts\":" + layoutsJson +
         ",\"warnings\":" + warningsJson +
+        ",\"blocks\":" + blocksJson +
         ",\"entities\":[" + rows + "]}";
     acDocManager->unlockDocument(doc);
     writeAtomicJson(gGeomPath, json);
