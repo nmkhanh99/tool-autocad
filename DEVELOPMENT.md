@@ -50,7 +50,8 @@ apps/web/
 │   ├── design-system.css    CSS của giao diện mới, gate bằng body[data-ds]
 │   ├── (shell)/             route group của giao diện mới
 │   │   ├── changes/         giàn giáo giai đoạn 0
-│   │   └── library/blocks/  page.tsx + blocks.module.css (style riêng của màn)
+│   │   ├── library/blocks/  page.tsx + blocks.module.css (style riêng của màn)
+│   │   └── library/lisp/    page.tsx (không cần CSS riêng)
 │   └── *Panel.tsx           7 panel của màn hình legacy
 ├── components/
 │   ├── shell/               khung dùng chung: Titlebar, Rail, Statusbar…
@@ -61,6 +62,7 @@ apps/web/
 │   ├── assistant/           model tin nhắn chat
 │   ├── blocks/              model + hook đọc + actions + 3 form (metadata,
 │   │                        tạo từ bộ chọn, nguồn thư viện)
+│   ├── lisp/                model + hook đọc danh mục AutoLISP
 │   └── staged-ops/          hàng chờ hai pha
 ├── lib/                     hạ tầng dùng chung, không thuộc feature nào
 │   ├── acadState.ts         kiểu + nhãn + canWrite của trạng thái AutoCAD
@@ -316,6 +318,26 @@ selector chứ không trên token class rời.
 - Không commit thẳng `main`; mỗi giai đoạn một nhánh.
 - Trước mỗi commit: chạy `pnpm verify`, cập nhật tài liệu, chạy Codex review.
 - Commit message theo `type(scope): mô tả`.
+
+---
+
+### Duyệt AutoLISP là thao tác của app desktop, không phải của web
+
+Một ràng buộc dễ mất công nếu không biết trước. `POST /api/acad/lisp/:id/approval-challenge`
+đòi một `userProof` **ký bằng Ed25519**:
+
+- khoá riêng nằm trong tiến trình chính của Electron (`apps/desktop/main.js`),
+  phơi ra cho renderer qua `window.acadStudio.signReview` trong `preload.js`, và
+  chỉ nhận request từ origin `127.0.0.1|localhost:8788|3000`;
+- daemon kiểm bằng `ACAD_REVIEW_PUBLIC_KEY` — biến này **chỉ được đặt khi daemon
+  do app desktop spawn**. Chạy `pnpm --filter @acad/daemon start` thì biến rỗng
+  và `validUserReviewProof()` trả `false` với mọi request.
+
+Hệ quả: trong lúc phát triển bằng `next dev` + daemon chạy tay, **không có cách
+nào duyệt được** — và đó là hành vi đúng, không phải lỗi cấu hình. Bằng chứng
+của lượt duyệt được lưu trong `manifest.review` (`analysisCoverage`,
+`acknowledgedIncompleteAnalysis`, `approvedSourceHash`), nên màn hình đọc vẫn
+hiện được đầy đủ mà không cần ký gì.
 
 ---
 

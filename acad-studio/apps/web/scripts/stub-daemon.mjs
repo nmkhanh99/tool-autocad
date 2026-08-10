@@ -62,6 +62,62 @@ createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Access-Control-Allow-Origin": "*" });
     return res.write(": stub\n\n");
   }
+  if (path === "/api/acad/lisp") {
+    const resources = [
+      {
+        id: "LSP-01", name: "Gán đối tượng layer 0 sang A-WALL", extension: ".lsp",
+        kind: "autolisp-source", pathLabel: "cty/layerfix.lsp", rootId: "r1",
+        sizeBytes: 1840, modifiedAt: "2026-07-02T09:14:00Z",
+        sourceHash: "9c1fa730be41cd52aa77e0031b6d4419aa02cf5511e7d38c9a4b1f2e6d708c33",
+        readable: true, loadable: true, loadBlockReason: null,
+        commands: ["CTY-LAYERFIX"], functions: ["c:cty-layerfix"], dependencies: [],
+        reviewStatus: "stale",
+        manifest: { summary: "cũ", review: {
+          status: "approved", analysisCoverage: "full-source",
+          acknowledgedIncompleteAnalysis: false, reviewedAt: "2026-05-04T02:10:00Z",
+          reviewedBy: "user",
+          approvedSourceHash: "1111111111111111111111111111111111111111111111111111111111111111",
+        } },
+        warnings: ["manifest_dependency_or_source_changed"],
+      },
+      {
+        id: "LSP-02", name: "Đặt biến bản vẽ theo hồ sơ tiêu chuẩn", extension: ".lsp",
+        kind: "autolisp-source", pathLabel: "cty/setvars.lsp", rootId: "r1",
+        sizeBytes: 620, modifiedAt: "2026-06-11T04:02:00Z",
+        sourceHash: "4be210dd0f7c48ab91335ce6d0aa7712bb4419aa02cf5511e7d38c9a4b1f2e6d",
+        readable: true, loadable: true, loadBlockReason: null,
+        commands: ["CTY-SETVARS"], functions: [], dependencies: ["cty/common.lsp"],
+        reviewStatus: "unreviewed", manifest: null,
+        warnings: ["manifest_inferred_unreviewed"],
+      },
+      {
+        id: "LSP-03", name: "Bộ công cụ nội bộ (đã biên dịch)", extension: ".vlx",
+        kind: "visual-lisp-application", pathLabel: "vendor/toolkit.vlx", rootId: "r2",
+        sizeBytes: 48210, modifiedAt: "2025-11-20T00:00:00Z", sourceHash: "",
+        readable: false, loadable: false, loadBlockReason: "vlx_windows_only",
+        commands: [], functions: [], dependencies: [],
+        reviewStatus: "approved",
+        manifest: { summary: "vendor", review: {
+          status: "approved", analysisCoverage: "metadata-only",
+          acknowledgedIncompleteAnalysis: true, reviewedAt: "2025-12-01T08:30:00Z",
+          reviewedBy: "user", approvedSourceHash: "",
+        } },
+        warnings: ["compiled_source_not_readable", "vlx_windows_only"],
+      },
+    ];
+    return send(res, 200, {
+      ok: true,
+      resources,
+      roots: [
+        { id: "r1", label: "Thư viện công ty", path: "/Data/lisp/cty" },
+        { id: "r2", label: "Vendor", path: "/Data/lisp/vendor" },
+      ],
+      counts: { total: 3, readable: 2, loadable: 2, reviewed: 1, needsReview: 2 },
+      truncated: false,
+      scanWarnings: [],
+    });
+  }
+
   if (path === "/api/acad/blocks/sources" && req.method === "GET") {
     return send(res, 200, { ok: true, revision: revision(), sources });
   }

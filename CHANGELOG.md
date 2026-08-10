@@ -1,5 +1,76 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 4 (phần 6): `/library/lisp` bản chỉ đọc
+
+### Added
+
+- `app/(shell)/library/lisp/page.tsx` — duyệt danh mục AutoLISP: tìm theo tên,
+  **tên lệnh** hoặc đường dẫn; lọc theo trạng thái duyệt; pane chi tiết.
+- `features/lisp/{model.ts,useLispLibrary.ts}` — chuẩn hoá + dịch mã của daemon
+  sang tiếng Việt, hook đọc `GET /api/acad/lisp`.
+- 15 test mới (`test-lisp-model.test.ts`); tổng 28 → **43**.
+
+Màn hình gần như không cần CSS riêng — `.list`, `.listrow`, `.split`, `.detail`,
+`.opstate` đã có sẵn trong design system.
+
+### Added — nói ra thứ "Đã duyệt" đang giấu
+
+Đọc `saveManifest()` mới thấy daemon **có lưu** bằng chứng của lượt duyệt trong
+`manifest.review`: phạm vi source người duyệt đọc được (`analysisCoverage`), có
+xác nhận biết mình đọc thiếu hay không, và **hash của source lúc duyệt**.
+
+Không hiện ra thì "Đã duyệt" là một cái nhãn rỗng. Nay pane chi tiết nói:
+
+- **Phạm vi đã đọc lúc duyệt** — và cảnh báo khi nó không phải `full-source`.
+- **File đã đổi sau khi duyệt**, kèm hash lúc duyệt so với hash hiện tại.
+
+Một chi tiết dễ nói dối, đã khoá bằng test: bản duyệt cũ không ghi phạm vi thì
+rơi về `manual-review`, **không** rơi về `full-source`. Mặc định sai ở đây sẽ
+biến một bản duyệt không kiểm chứng được thành một bản duyệt đáng tin.
+
+### Changed — nói thẳng vì sao web không duyệt được
+
+Đọc `lispLibrary.ts` + `apps/desktop/main.js`: `POST /:id/approval-challenge`
+đòi chữ ký **Ed25519**; khoá riêng nằm trong tiến trình chính của app desktop và
+chỉ với tới được qua `window.acadStudio.signReview`; daemon kiểm bằng
+`ACAD_REVIEW_PUBLIC_KEY`, biến này **chỉ được đặt khi daemon do app desktop khởi
+chạy**. Daemon chạy tay thì không ai duyệt được, kể cả app desktop.
+
+Nên màn hình mở đầu bằng một banner nói rõ điều đó, thay vì vẽ nút "Duyệt" rồi
+để nó ném lỗi. Bất biến chặn lại: `lisp/page.tsx` không được chứa
+`approval-challenge`, `signReview` hay `approvalToken`.
+
+### Fixed — nút "Quét lại đĩa" không khoá lại (Codex review, P2)
+
+`loading` chỉ đúng ở lần đọc đầu và không bao giờ bật lại, nên sau đó nút vẫn mở
+và bấm chồng được nhiều lượt quét đĩa — thao tác đắt nhất màn này.
+
+Sửa thẳng bằng `setLoading(true)` thì lại xoá trắng danh sách mỗi lần làm mới,
+nên tách hai khái niệm: `loading` = **chưa có gì để hiện** (lần đầu),
+`refreshing` = **đang đọc lại nhưng vẫn có dữ liệu cũ**. Nút dùng `refreshing`,
+danh sách dùng `loading`. Khoá bằng hai bất biến.
+
+### Technical
+
+- Mã của daemon (`reviewStatus`, `kind`, `warnings[]`, `loadBlockReason`,
+  `analysisCoverage`) đều có nhãn tiếng Việt, và **mã lạ trả lại nguyên văn**
+  thay vì thành ô trống. Test khoá đủ 5 mã cảnh báo và 4 lý do chặn nạp mà
+  daemon đang phát.
+- Chuẩn hoá fail-closed: `reviewStatus` lạ → `unreviewed`; `readable`/`loadable`
+  chỉ `true` khi đúng boolean `true`.
+- `useLispLibrary` mang sẵn số thứ tự lượt đọc như `useBlockLibrary` — ở đây còn
+  cần hơn vì `reload(true)` bắt máy chủ quét lại đĩa, chậm hơn hẳn.
+- `truncated` được nói ra: im lặng nghĩa là người dùng kết luận "không có script
+  nào tên X" trong khi thật ra là chưa quét tới.
+- 6 bất biến mới ở `test-contract.mjs`; `nav.ts` đánh dấu `/library/lisp` đã dựng.
+- **Kiểm bằng mắt:** danh sách, bộ lọc, pane chi tiết của bản `.vlx` (không đọc
+  được source · không nạp được · 2 cảnh báo có nhãn) — đã xem trên Chrome. Phần
+  **bằng chứng duyệt** thêm sau đó **chưa xem lại được**: extension Chrome hỏng
+  giữa chừng (mọi tab mới báo "error page" trong khi dev server vẫn trả 200).
+  Phần logic quyết định hiển thị gì đã có test.
+
+---
+
 ## 2026-08-10 — Giai đoạn 4 (phần 5): tạo block từ bộ chọn · nguồn thư viện
 
 Hai lệnh ghi cuối của thư viện block. Với phần này, `/library/blocks` làm được

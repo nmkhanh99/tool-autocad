@@ -181,9 +181,44 @@ chèn định nghĩa ấy vào một bản vẽ **chưa có nó** sẽ lấy hì
 **Vẫn còn ở màn hình cũ:** quét bản vẽ đang mở để đưa định nghĩa của nó vào danh
 mục. Nút **Mở màn hình cũ để sửa** mở thẳng thư viện ở màn hình cũ.
 
+### Thư viện LISP (`/library/lisp`)
+
+Tra cứu script AutoLISP đang được quản lý. **Màn hình này chỉ đọc.**
+
+- Ô tìm kiếm khớp cả tên file, **tên lệnh** (`CTY-...`) và đường dẫn.
+- Lọc theo trạng thái duyệt: chưa duyệt · bản duyệt đã cũ · đã duyệt.
+- **Quét lại đĩa** bắt máy chủ đọc lại thư mục gốc. Nếu danh sách bị cắt bớt vì
+  quá nhiều file, trang nói ra — đừng kết luận "không có script nào tên X" khi
+  chưa thấy cảnh báo đó.
+
+#### "Đã duyệt" nghĩa là gì
+
+Không phải cứ đã duyệt là đã có người đọc hết mã. Pane chi tiết nói rõ **phạm vi
+người duyệt thật sự đọc được** lúc ký:
+
+| Phạm vi | Nghĩa |
+|---|---|
+| Đọc toàn bộ source | Bản duyệt dựa trên toàn bộ mã. |
+| Chỉ đọc được một phần source | Mã quá dài, agent chỉ nhận được một phần. |
+| Chỉ đọc metadata | Không đọc mã — thường là file đã biên dịch. |
+| Bản duyệt cũ | Không ghi lại phạm vi, nên không kiểm chứng được. |
+
+Trang cũng so **hash lúc duyệt** với hash hiện tại. Khác nhau nghĩa là file đã
+đổi sau khi duyệt, và bản duyệt cũ không còn nói về nội dung đang có.
+
+#### Duyệt phải làm trong app desktop
+
+Máy chủ đòi một chữ ký Ed25519 do app Acad Studio desktop tạo, và chỉ chấp nhận
+khi **chính app đó khởi chạy daemon**. Mở giao diện trong trình duyệt thì không
+duyệt được — đây là thiết kế bảo mật cố ý, không phải thiếu tính năng. Bản duyệt
+còn hết hạn sau **2 phút**, nên mỗi lượt phải làm liền một mạch.
+
+**Vẫn còn ở màn hình cũ:** phân tích bằng agent, duyệt manifest, nạp script,
+quản lý thư mục gốc.
+
 ### Các màn hình còn lại
 
-Chưa dựng. Thứ tự dự kiến: Thư viện LISP · Khung bản vẽ · Thông tin bản vẽ ·
+Chưa dựng. Thứ tự dự kiến: Khung bản vẽ · Thông tin bản vẽ ·
 Kiểm tra · Hồ sơ tiêu chuẩn · Thay đổi chờ duyệt · Bóc tách · Kết nối AutoCAD ·
 Xuất bản PDF · Xử lý thư mục · Đồng bộ CadWeb · Tổng quan · Trợ lý AI.
 

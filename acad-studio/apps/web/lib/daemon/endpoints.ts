@@ -55,4 +55,7 @@ export const endpoints = {
   /** Tạo định nghĩa từ bộ chọn đang có trong AutoCAD. Ghi vào CẢ HAI: chạy
    * `-BLOCK` trên bản vẽ rồi lưu định nghĩa vào thư viện. */
   blockCreate: (base: string) => `${trim(base)}/api/acad/blocks/create`,
+
+  /** Danh mục AutoLISP: tài nguyên + thư mục gốc + số đếm. */
+  lispCatalog: (base: string) => `${trim(base)}/api/acad/lisp`,
 } as const;

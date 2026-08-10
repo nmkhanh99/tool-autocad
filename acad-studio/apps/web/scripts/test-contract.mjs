@@ -441,6 +441,51 @@ assert.match(
   "lưu metadata làm mất đồng bộ thì phải nói ra và chỉ việc tiếp theo",
 );
 
+/* Thư viện LISP: duyệt là thao tác của app DESKTOP, không phải của web.
+ * `POST /:id/approval-challenge` đòi chữ ký Ed25519 do preload của app desktop
+ * tạo, và daemon chỉ kiểm được khi chính app đó khởi chạy nó
+ * (`ACAD_REVIEW_PUBLIC_KEY`). Vẽ nút "Duyệt" ở màn hình web là vẽ một nút chắc
+ * chắn ném lỗi. */
+assert.doesNotMatch(
+  stripComments(sourceAt("lisp/page.tsx")),
+  /approval-challenge|signReview|approvalToken/,
+  "màn LISP mới không được tự dựng luồng duyệt",
+);
+assert.match(
+  sourceAt("lisp/page.tsx"),
+  /app desktop, không phải của web/,
+  "màn LISP phải nói rõ duyệt chỉ làm được ở app desktop",
+);
+/* Máy chủ cắt bớt lượt quét thì phải nói ra: im lặng nghĩa là người dùng kết
+ * luận "không có script nào tên X" trong khi thật ra là chưa quét tới. */
+assert.match(
+  stripComments(sourceAt("lisp/page.tsx")),
+  /library\.truncated/,
+  "phải nói ra khi danh sách bị cắt bớt",
+);
+/* Nút quét đĩa phải khoá theo `refreshing`, không theo `loading`: `loading` chỉ
+ * đúng ở lần đọc đầu, nên dùng nó thì nút mở lại ngay và cho bấm chồng nhiều
+ * lượt quét đĩa — thao tác đắt nhất màn này. Và danh sách KHÔNG được dùng
+ * `refreshing`, không thì mỗi lần làm mới lại xoá trắng chỗ đang xem. */
+assert.match(
+  stripComments(sourceAt("lisp/page.tsx")),
+  /disabled=\{library\.refreshing\}/,
+  "nút quét lại đĩa phải khoá theo refreshing",
+);
+assert.doesNotMatch(
+  stripComments(sourceAt("lisp/page.tsx")),
+  /library\.refreshing \?[\s\S]{0,80}?statebox/,
+  "danh sách không được thay bằng trạng thái nạp khi chỉ đang làm mới",
+);
+
+/* Mã của daemon phải có nhãn tiếng Việt, và mã lạ trả lại nguyên văn thay vì
+ * thành ô trống — khoá bằng `test-lisp-model.test.ts`. */
+assert.match(
+  stripComments(sourceAt("lisp/model.ts")),
+  /return REVIEW_LABELS\[status as LispReviewStatus\] \|\| status/,
+  "nhãn trạng thái duyệt phải lùi về chính mã khi gặp giá trị lạ",
+);
+
 /* Một EventSource duy nhất, và ở đúng chỗ. Chỉ đếm "= 1" thì không đủ: hôm
  * trước nó đã bằng 1 khi còn nằm trong page.tsx, nên tiêu chí đó pass mà không
  * đo được gì. Nhiều instance nghĩa là mỗi panel tự mở một kết nối SSE riêng. */

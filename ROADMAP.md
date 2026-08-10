@@ -170,10 +170,23 @@ chuyển sang `components/ui/` — hạ tầng dùng chung, không thuộc `stag
 - `POST /blocks/scan` — quét **bản vẽ đang mở** để đưa định nghĩa của nó vào danh
   mục. Vẫn ở màn hình cũ. Lưu ý khi dựng: nhãn "Quét lại nguồn" của bộ mẫu **mô
   tả sai** — endpoint này không đụng tới thư mục nguồn.
-- `/library/lisp`: gom hai nơi về một (`LispLibraryPanel` + card duyệt trong
-  chat), `.countdown` 2 phút thật, guardstrip điều kiện duyệt, hiện rõ
-  `analysisCoverage`. **Giữ nguyên `askAgent()`** — budget 180 KB, cắt đôi 12
-  lần, chống prompt-injection.
+- `/library/lisp` **bản chỉ đọc xong (2026-08-10)**: danh mục, bộ lọc, pane chi
+  tiết, nhãn tiếng Việt cho mọi mã của daemon, và **hiện rõ `analysisCoverage`**
+  cùng hash lúc duyệt — mục đó của kế hoạch coi như xong.
+
+  **Còn lại, và cần biết trước khi làm:** duyệt manifest **không** dựng được ở
+  web. `POST /:id/approval-challenge` đòi chữ ký Ed25519 do app desktop tạo
+  (`window.acadStudio.signReview`), và daemon chỉ kiểm được khi chính app đó
+  khởi chạy nó (`ACAD_REVIEW_PUBLIC_KEY`). Việc "gom hai nơi về một" vì thế
+  không phải là bê UI sang — nó là câu hỏi *màn hình này chạy ở đâu*. Ba đường:
+  (a) chỉ dựng đầy đủ khi chạy trong app desktop, web thì hiện lý do; (b) dời
+  cả luồng duyệt vào desktop shell; (c) đổi thiết kế bảo mật. **Chưa chốt.**
+
+  Phần chắc chắn làm được ở web: nạp script (`POST /:id/load`), quản lý thư mục
+  gốc (`/roots`), `.countdown` 2 phút thật cho token nạp.
+
+  **Giữ nguyên `askAgent()`** — budget 180 KB, cắt đôi 12 lần, chống
+  prompt-injection.
 - Xoá CSS `blocklib-*` (281 dòng) và `lisp-*` (407 dòng) khỏi `globals.css` khi
   panel cũ bị gỡ.
 
