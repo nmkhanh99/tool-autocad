@@ -456,6 +456,28 @@ assert.match(
   /app desktop, không phải của web/,
   "màn LISP phải nói rõ duyệt chỉ làm được ở app desktop",
 );
+/* …nhưng kết luận đó phải theo MÔI TRƯỜNG ĐANG CHẠY. Chính trang này cũng được
+ * app desktop mở, và ở đó câu "web không duyệt được" là sai. */
+assert.match(
+  stripComments(sourceAt("lisp/page.tsx")),
+  /signer === "present"/,
+  "kết luận về khả năng duyệt phải theo môi trường đang chạy",
+);
+/* Ba trạng thái, không phải hai: lần render đầu chạy trên máy chủ rồi mới
+ * hydrate, nên đoán "không có signer" ngay từ đầu sẽ hiện một câu sai trong
+ * khoảnh khắc đầu ở app desktop. */
+assert.match(
+  stripComments(sourceAt("lisp/reviewSigner.ts")),
+  /"unknown" \| "present" \| "absent"/,
+  "trạng thái bộ ký phải có nhánh chưa-biết",
+);
+/* Có bộ ký MỚI LÀ NỬA điều kiện. Nửa còn lại (`ACAD_REVIEW_PUBLIC_KEY` của
+ * daemon) client không nhìn thấy, nên giao diện không được kết luận thay. */
+assert.match(
+  sourceAt("lisp/page.tsx"),
+  /nửa điều kiện đầu đã\s+đạt/,
+  "có bộ ký thì phải nói rõ đó mới là nửa điều kiện",
+);
 /* Máy chủ cắt bớt lượt quét thì phải nói ra: im lặng nghĩa là người dùng kết
  * luận "không có script nào tên X" trong khi thật ra là chưa quét tới. */
 assert.match(

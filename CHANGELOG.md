@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## 2026-08-10 — D7: duyệt LISP theo môi trường đang chạy
+
+### Fixed — banner nói sai khi mở trong app desktop
+
+Bản trước viết cứng "Duyệt script là thao tác của app desktop, **không phải của
+web**". Câu đó đúng trong trình duyệt và **sai** khi chính trang này được app
+desktop mở — nơi `window.acadStudio.signReview` có thật. Một màn hình dựng lên
+để không nói sai về khả năng của mình lại nói sai về chính mình.
+
+Nay `features/lisp/reviewSigner.ts` đọc môi trường và banner kết luận theo đó.
+
+**Ba trạng thái, không phải hai.** `unknown` tồn tại vì lần render đầu chạy lúc
+prerender rồi mới hydrate: mặc định "không có bộ ký" sẽ hiện một câu sai trong
+khoảnh khắc đầu ở app desktop. Lúc chưa biết thì chỉ nói phần luôn đúng.
+
+**Có bộ ký mới là nửa điều kiện.** Nửa còn lại là `ACAD_REVIEW_PUBLIC_KEY` của
+daemon — chỉ được đặt khi daemon do app desktop khởi chạy, và client không nhìn
+thấy biến môi trường của daemon. Giao diện nói đúng nửa mình biết chứ không kết
+luận thay; daemon chạy tay thì vẫn 403.
+
+### Technical
+
+- 4 bất biến mới ở `test-contract.mjs`.
+- Kiểm cả **hai** nhánh trên Chrome: không có bộ ký → "Cửa sổ này không có bộ
+  ký…"; cài `window.acadStudio.signReview` rồi điều hướng mềm quay lại → "Duyệt
+  được từ đây — nhưng còn một điều kiện nữa ở phía daemon."
+- Sửa một hiểu nhầm của chính tôi ghi ở phần trước: rail **có** điều hướng mềm
+  (`next/link`). Những lần "vá `window.fetch` không sống qua chuyển trang" trước
+  đây là do bấm trước khi hydrate xong, không phải do tải lại cả trang.
+- Thanh trạng thái hiện "AutoCAD chưa chạy" trong khoảnh khắc sau khi chuyển
+  trang rồi mới về "đã nối". Đây là mặc định **fail-closed** trong lúc chờ lượt
+  poll đầu tiên — đúng ý đồ với một cờ dùng để khoá lệnh ghi, không phải lỗi.
+
+---
+
 ## 2026-08-10 — Giai đoạn 4 (phần 7): nạp script LISP · thư mục gốc
 
 Hai lệnh ghi của thư viện LISP mà **web làm được**. Duyệt manifest thì không —

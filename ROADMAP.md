@@ -122,6 +122,7 @@ không so thẳng bộ đếm.
 | **D2** | **Giữ** 2 panel prototype — bê nguyên vào route + banner "bản dựng thử" | 2026-08-10 | Tạo `/preconstruction` và `/review-pdf` ở GĐ10. **Không refactor** — refactor làm chúng trông đã hoàn thiện. Banner cấp route, không tắt được. Giữ luôn 1.745 dòng CSS |
 | **D3** | **Build** 3 endpoint enumerate + `onConflict` cho `/publish` | 2026-08-10 | `/plot/devices`, `/plot/style-sheets`, `/plot/page-setups`, `/layouts`; thêm `onConflict: "fail"\|"overwrite"\|"suffix"` vào whitelist. ~3–5 ngày backend. **Vẫn phải cắt** dpi / tỉ lệ ngoài `fit\|1:1` / vùng in "Cửa sổ" — giới hạn kênh plot macOS, không phải thiếu route |
 | **D4** | **Build cả (b) và (c)** cho `/batch` | 2026-08-10 | (b) `/files`, `recursive`, `/mep/recipes`, job model + SSE + cancel — ~5–8 ngày. (c) cầu nối Python `/api/acad/offline/*` — ~3–5 ngày. (c) là lối thoát duy nhất khi máy chưa cài AutoCAD |
+| **D7** | Duyệt LISP: **chỉ đầy đủ trong app desktop**, web hiện lý do | 2026-08-10 | Giao diện kết luận theo **môi trường đang chạy** (`window.acadStudio.signReview`), không viết cứng. Không dời luồng duyệt sang desktop shell, không đổi thiết kế bảo mật. **Còn phải giải:** đề xuất manifest lấy từ đâu — xem mục Giai đoạn 4 |
 | **D5** | **Dựng** sync server nhận `.cadweb` | 2026-08-10 | ~10–15 ngày + phần Windows chưa rõ. Cần process + 5 implementation (`Authenticator`, `Authorizer`, `ImmutableBlobStore`, `RevisionMetadataStore`, `RevisionEventPublisher`). Mở khoá `.revstrip` ở `/workspace` và bảng snapshot per-drawing ở `/cadweb` |
 
 **Không còn quyết định nào đang chặn.** Tổng backend phát sinh từ D3+D4+D5:
@@ -174,13 +175,22 @@ chuyển sang `components/ui/` — hạ tầng dùng chung, không thuộc `stag
   tiết, nhãn tiếng Việt cho mọi mã của daemon, và **hiện rõ `analysisCoverage`**
   cùng hash lúc duyệt — mục đó của kế hoạch coi như xong.
 
-  **Còn lại, và cần biết trước khi làm:** duyệt manifest **không** dựng được ở
-  web. `POST /:id/approval-challenge` đòi chữ ký Ed25519 do app desktop tạo
-  (`window.acadStudio.signReview`), và daemon chỉ kiểm được khi chính app đó
-  khởi chạy nó (`ACAD_REVIEW_PUBLIC_KEY`). Việc "gom hai nơi về một" vì thế
-  không phải là bê UI sang — nó là câu hỏi *màn hình này chạy ở đâu*. Ba đường:
-  (a) chỉ dựng đầy đủ khi chạy trong app desktop, web thì hiện lý do; (b) dời
-  cả luồng duyệt vào desktop shell; (c) đổi thiết kế bảo mật. **Chưa chốt.**
+  **D7 đã chốt (2026-08-10): đường (a)** — chỉ dựng đầy đủ khi chạy trong app
+  desktop, web thì hiện lý do.
+
+  Phần đầu của (a) **đã làm**: banner kết luận theo `window.acadStudio.signReview`
+  chứ không viết cứng, và nói rõ có bộ ký mới là **nửa** điều kiện — nửa còn lại
+  (`ACAD_REVIEW_PUBLIC_KEY` của daemon) client không nhìn thấy được nên giao
+  diện không kết luận thay. Trước đó banner nói "web không duyệt được" vô điều
+  kiện, tức nói **sai** khi chính trang này được app desktop mở.
+
+  **Còn phải giải trước khi dựng nốt luồng duyệt: đề xuất manifest lấy từ đâu.**
+  Nó do agent sinh ra trong chat (`<lisp-manifest-proposal>` → `message.lispProposal`
+  ở `app/page.tsx`) và **không được lưu ở đâu cả** — `db.ts` chỉ lưu *quyết định*
+  (`setLispProposalDecision`), không lưu đề xuất. Nên "gom hai nơi về một" còn
+  kẹt ở chỗ này, không phải ở chuyện ký. Ba đường: lưu đề xuất xuống DB; hoặc
+  cho `/library/lisp` tự gọi `askAgent`; hoặc để chat vẫn là nơi duyệt và màn
+  LISP chỉ dẫn sang. **Chưa chốt.**
 
   **Nạp script và thư mục gốc đã xong (2026-08-10).** `ConfirmSheet` có thêm chế
   độ `session` cho lệnh đổi phiên AutoCAD chứ không ghi bản vẽ; `guards.ts`
@@ -205,8 +215,24 @@ route, như `blocks.module.css` vừa làm.
 
 ## Later
 
-- **Giai đoạn 5** — `/workspace`: hit-test entity trên canvas WebGL2 là code
-  mới hoàn toàn, không tái sử dụng được gì.
+- **Giai đoạn 5** — `/workspace`. **BỊ CHẶN, không phải vì khó mà vì thiếu dữ
+  liệu.** Đã kiểm ngày 2026-08-10 trên snapshot thật (`~/Acad-Bridge/drawing-info.json`,
+  350 KB) và trên mã nguồn: **không chỗ nào trong daemon hay plugin trả toạ độ
+  của bất kỳ đối tượng nào.** `drawing-info` có số đếm theo type/layer/space,
+  bảng layer/block/layout/style, và **một** bounding box của cả bản vẽ;
+  `selection.objects` và `SelectionSubject` chỉ có `{handle, type, layer,
+  layerHandle, ownerHandle}`. Grep `vertices|geometry|startPoint|endPoint` trong
+  `apps/daemon/src` và `objectarx/mepbridge.cpp`: không có.
+
+  Nghĩa là canvas không có gì để vẽ — dựng nó bây giờ sẽ ra đúng một
+  `PreconstructionPanel` thứ hai (hình bịa, người dùng tin là bản vẽ thật). Ghi
+  chú "hit-test trên canvas WebGL2" trong kế hoạch cũng lệch với bộ mẫu: mẫu
+  `workspace.html` dùng **SVG inline** với `data-entity`/`data-handle` viết cứng.
+
+  Muốn làm thật thì phải mở rộng plugin ObjectARX để xuất hình học (và quyết
+  định xuất bao nhiêu, dạng gì, ngưỡng bao nhiêu đối tượng) — đó là việc
+  backend/plugin, không phải việc migrate giao diện. **Đề nghị nhảy sang giai
+  đoạn 6 và đưa việc xuất hình học vào danh sách backend.**
 - **Giai đoạn 6** — `/drawing-info`, tách `/review` và `/standards`.
 - **Giai đoạn 7** — `/changes` (trục xoay), `/takeoff`, `/settings`.
 - **Giai đoạn 8** — `/publish`, `/batch`, `/cadweb`, `/` Tổng quan. Phạm vi đã

@@ -27,6 +27,7 @@ import { Tag } from "../../../../components/ui/Tag";
 import { Icon } from "../../../../components/ui/icons";
 import { useLispLibrary } from "../../../../features/lisp/useLispLibrary";
 import { useLispDetail } from "../../../../features/lisp/useLispDetail";
+import { useReviewSigner } from "../../../../features/lisp/reviewSigner";
 import { LoadDialog } from "../../../../features/lisp/LoadDialog";
 import { RootsDialog } from "../../../../features/lisp/RootsDialog";
 import {
@@ -79,6 +80,7 @@ export default function LispLibraryPage() {
   const [loadResultState, setLoadResult] =
     useState<{ ok: boolean; id: string; text: string } | null>(null);
   const library = useLispLibrary(DAEMON_BASE);
+  const signer = useReviewSigner();
 
   const shown = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("vi");
@@ -107,21 +109,45 @@ export default function LispLibraryPage() {
           <Button onClick={() => { setRootError(""); setRootNotice(""); setRootsOpen(true); }}>
             Thư mục gốc
           </Button>
-          <Link className="btn" href="/?panel=lisp">Mở màn hình cũ để duyệt</Link>
+          <Link className="btn" href="/?panel=lisp">
+            {signer === "present" ? "Mở màn hình cũ để duyệt" : "Mở màn hình cũ"}
+          </Link>
         </>
       }
     >
+      {/* Kết luận phải theo MÔI TRƯỜNG ĐANG CHẠY, không viết cứng. Trang này
+          cũng được app desktop mở, và ở đó câu "web không duyệt được" là sai —
+          đúng loại nói sai mà cả màn hình này tồn tại để tránh. Khi chưa biết
+          (lần render đầu, trước hydrate) thì chỉ nói phần luôn đúng. */}
       <div className="banner" data-tone="hard" style={{ margin: "0 0 var(--s3)" }}>
         <span className="bm" />
         <div>
-          <strong>Duyệt script là thao tác của app desktop, không phải của web.</strong>
+          <strong>
+            {signer === "present"
+              ? "Duyệt được từ đây — nhưng còn một điều kiện nữa ở phía daemon."
+              : signer === "absent"
+                ? "Duyệt script là thao tác của app desktop, không phải của web."
+                : "Duyệt script cần chữ ký của app Acad Studio desktop."}
+          </strong>
           <p>
             Máy chủ đòi một chữ ký Ed25519 do app Acad Studio desktop tạo, và chỉ
-            chấp nhận khi chính app đó khởi chạy daemon. Mở giao diện này trong
-            trình duyệt thì <strong>không duyệt được</strong> — không phải vì màn
-            hình thiếu nút, mà vì thiết kế bảo mật cố ý như vậy. Bản duyệt còn
-            hết hạn sau <strong>2 phút</strong>, nên mỗi lượt duyệt phải làm liền
-            một mạch.
+            chấp nhận khi <strong>chính app đó khởi chạy daemon</strong>.{" "}
+            {signer === "present" ? (
+              <>
+                Cửa sổ này <strong>có</strong> bộ ký, nên nửa điều kiện đầu đã
+                đạt. Nửa còn lại nằm ở daemon và trình duyệt không nhìn thấy
+                được: nếu daemon đang chạy được bật bằng tay thì mọi lượt duyệt
+                vẫn bị từ chối.
+              </>
+            ) : signer === "absent" ? (
+              <>
+                Cửa sổ này <strong>không có</strong> bộ ký, nên không duyệt được
+                — không phải vì màn hình thiếu nút, mà vì thiết kế bảo mật cố ý
+                như vậy.
+              </>
+            ) : null}{" "}
+            Bản duyệt còn hết hạn sau <strong>2 phút</strong>, nên mỗi lượt duyệt
+            phải làm liền một mạch.
           </p>
         </div>
       </div>

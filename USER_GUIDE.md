@@ -209,9 +209,17 @@ Trang cũng so **hash lúc duyệt** với hash hiện tại. Khác nhau nghĩa 
 #### Duyệt phải làm trong app desktop
 
 Máy chủ đòi một chữ ký Ed25519 do app Acad Studio desktop tạo, và chỉ chấp nhận
-khi **chính app đó khởi chạy daemon**. Mở giao diện trong trình duyệt thì không
-duyệt được — đây là thiết kế bảo mật cố ý, không phải thiếu tính năng. Bản duyệt
-còn hết hạn sau **2 phút**, nên mỗi lượt phải làm liền một mạch.
+khi **chính app đó khởi chạy daemon**. Đây là thiết kế bảo mật cố ý, không phải
+thiếu tính năng. Bản duyệt còn hết hạn sau **2 phút**, nên mỗi lượt phải làm
+liền một mạch.
+
+Banner ở đầu màn hình cho biết cửa sổ bạn đang mở có duyệt được không:
+
+- **Mở bằng trình duyệt** — không có bộ ký, không duyệt được.
+- **Mở trong app Acad Studio desktop** — có bộ ký, nhưng đó mới là *nửa* điều
+  kiện. Nếu daemon đang chạy được bật bằng tay (không phải do app desktop khởi
+  chạy) thì lượt duyệt vẫn bị từ chối. App không nhìn thấy được điều đó nên
+  không kết luận thay bạn.
 
 #### Nạp script vào AutoCAD
 
