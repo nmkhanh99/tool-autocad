@@ -132,7 +132,7 @@ khoảng **21–33 ngày công**, tính riêng ngoài 95–140 ngày front-end.
 
 ## Next
 
-### Giai đoạn 4 — `/library/blocks` và `/library/lisp`
+### Giai đoạn 4 — `/library/blocks` và `/library/lisp` — **XONG (2026-08-10)**
 
 **Xong:** tách `features/blocks/model.ts` (9 test); route `/library/blocks`
 bản **chỉ đọc** với CSS module riêng trích từ mẫu.
@@ -184,13 +184,17 @@ chuyển sang `components/ui/` — hạ tầng dùng chung, không thuộc `stag
   diện không kết luận thay. Trước đó banner nói "web không duyệt được" vô điều
   kiện, tức nói **sai** khi chính trang này được app desktop mở.
 
-  **Còn phải giải trước khi dựng nốt luồng duyệt: đề xuất manifest lấy từ đâu.**
-  Nó do agent sinh ra trong chat (`<lisp-manifest-proposal>` → `message.lispProposal`
-  ở `app/page.tsx`) và **không được lưu ở đâu cả** — `db.ts` chỉ lưu *quyết định*
-  (`setLispProposalDecision`), không lưu đề xuất. Nên "gom hai nơi về một" còn
-  kẹt ở chỗ này, không phải ở chuyện ký. Ba đường: lưu đề xuất xuống DB; hoặc
-  cho `/library/lisp` tự gọi `askAgent`; hoặc để chat vẫn là nơi duyệt và màn
-  LISP chỉ dẫn sang. **Chưa chốt.**
+  **Duyệt đã dựng xong (2026-08-10) — và không cần agent.** Giả định "phải có đề
+  xuất của agent mới duyệt được" là **sai**: `validateApprovedManifest()` chỉ
+  bắt buộc một câu tóm tắt, phần còn lại daemon đã phân tích tĩnh sẵn
+  (`inferred`), và chữ ký Ed25519 xác nhận *một con người đã đọc source* chứ
+  không xác nhận rằng một agent đã chạy. Hộp duyệt vì thế hiện source ra, bắt
+  viết tóm tắt, bắt tích xác nhận — rồi ký.
+
+  Vẫn còn ở màn hình cũ: **nhờ agent phân tích rồi đề xuất manifest**. Đó là một
+  tiện ích, không phải điều kiện để duyệt. Chuyển nó sang màn mới vẫn cần trả
+  lời "đề xuất lưu ở đâu" (`db.ts` chỉ lưu *quyết định*), nhưng nó không còn
+  chặn gì nữa.
 
   **Nạp script và thư mục gốc đã xong (2026-08-10).** `ConfirmSheet` có thêm chế
   độ `session` cho lệnh đổi phiên AutoCAD chứ không ghi bản vẽ; `guards.ts`

@@ -1,3 +1,5 @@
+import { canonicalJson, manifestFingerprint } from "../features/lisp/fingerprint";
+
 export type LispManifestProposal = {
   resourceId: string;
   resourceName?: string;
@@ -51,28 +53,14 @@ export function shownAssistantText(text: string): string {
     .trim();
 }
 
-function canonicalJson(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalJson);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
-      .map(([key, entry]) => [key, canonicalJson(entry)]),
-  );
-}
-
+/* `canonicalJson` và phép băm chuyển sang `features/lisp/fingerprint.ts`: màn
+   `/library/lisp` cũng duyệt manifest, và hai bản băm song song là hai cách
+   trả lời câu hỏi "hash của manifest này là gì" — lệch nhau thì mọi lượt duyệt
+   403 với thông điệp nói về token, sai hướng hoàn toàn. */
 export async function proposalFingerprint(
   proposal: Pick<LispManifestProposal, "resourceId" | "baseRevision" | "manifest">,
 ): Promise<string> {
-  const payload = JSON.stringify(canonicalJson({
-    resourceId: proposal.resourceId,
-    baseRevision: proposal.baseRevision,
-    manifest: proposal.manifest,
-  }));
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+  return manifestFingerprint(proposal);
 }
 
 /**

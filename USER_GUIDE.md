@@ -213,6 +213,19 @@ khi **chính app đó khởi chạy daemon**. Đây là thiết kế bảo mật
 thiếu tính năng. Bản duyệt còn hết hạn sau **2 phút**, nên mỗi lượt phải làm
 liền một mạch.
 
+Nút **Duyệt** nằm ở pane chi tiết. Hộp duyệt **hiện source ra** để bạn đọc, kèm
+những gì daemon phân tích được từ file (lệnh, hàm, phụ thuộc, biến hệ thống nó
+đụng tới) để bạn đối chiếu. Bạn phải viết một câu tóm tắt script làm gì — đó là
+trường duy nhất máy chủ bắt buộc — và tích xác nhận đã đọc.
+
+**Phạm vi đã đọc do app suy ra, bạn không chọn được.** Đọc được source thì ghi
+"đọc toàn bộ"; không đọc được (mã đã biên dịch, hoặc file quá 4 MB) thì ghi "chỉ
+đọc metadata" và bắt bạn tích thêm một ô xác nhận biết điều đó. Ghi chú ấy theo
+resource này mãi.
+
+Không cần nhờ agent phân tích trước. Agent là một tiện ích để soạn manifest,
+không phải điều kiện để duyệt.
+
 Banner ở đầu màn hình cho biết cửa sổ bạn đang mở có duyệt được không:
 
 - **Mở bằng trình duyệt** — không có bộ ký, không duyệt được.
@@ -255,7 +268,7 @@ thư mục nào thì danh mục rỗng dù trên đĩa có script.
 - Thêm xong phải **Quét lại đĩa** thì danh mục mới đọc thư mục mới.
 - **Không bỏ được thư mục gốc** — backend chưa có đường đó.
 
-**Vẫn còn ở màn hình cũ:** phân tích bằng agent và duyệt manifest.
+**Vẫn còn ở màn hình cũ:** nhờ agent phân tích rồi đề xuất manifest.
 
 ### Các màn hình còn lại
 

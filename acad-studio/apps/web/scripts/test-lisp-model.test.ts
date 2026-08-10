@@ -39,6 +39,7 @@ test("đủ nhãn cho mọi mã cảnh báo daemon đang phát", () => {
     "vlx_windows_only",
     "manifest_dependency_or_source_changed",
     "staged_support_paths_added_to_autocad_session",
+    "source_too_large",
   ]) {
     assert.notEqual(warningLabel(code), code, `thiếu nhãn tiếng Việt cho ${code}`);
   }

@@ -108,6 +108,8 @@ const WARNING_LABELS: Record<string, string> = {
     "Source hoặc dependency đã đổi từ sau lần duyệt — phải phân tích và duyệt lại.",
   staged_support_paths_added_to_autocad_session:
     "Đã thêm support path vào phiên AutoCAD đang chạy.",
+  source_too_large:
+    "File lớn hơn 4 MB nên máy chủ không đọc source. Duyệt được, nhưng chỉ ở mức metadata.",
 };
 
 export function warningLabel(code: string): string {

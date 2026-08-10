@@ -1,5 +1,86 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 4 XONG: duyệt manifest ngay trên `/library/lisp`
+
+Mảnh cuối của giai đoạn 4. `/library/lisp` nay duyệt được, và **không cần agent**.
+
+### Added — duyệt từ manifest sẵn có
+
+`features/lisp/{approval.ts,ApprovalDialog.tsx,fingerprint.ts}`.
+
+Giả định tôi mang theo suốt hai lượt trước là **sai**: tôi tưởng phải có đề xuất
+của agent mới duyệt được, nên coi việc này bị chặn bởi "đề xuất lưu ở đâu". Đọc
+`validateApprovedManifest()` thì manifest được duyệt chỉ bắt buộc **một câu tóm
+tắt**; `commands`/`publicFunctions`/`dependencies` daemon đã phân tích tĩnh sẵn
+trong `inferred`. Và chữ ký Ed25519 xác nhận **một con người đã đọc source**,
+không xác nhận rằng một agent đã chạy — nên đòi phải có agent là thêm một điều
+kiện mà thiết kế bảo mật không hề đòi.
+
+Nên hộp duyệt làm đúng thứ chữ ký nói: **hiện source ra**, cho đối chiếu với
+phân tích tĩnh của daemon, bắt viết một câu tóm tắt, bắt tích xác nhận đã đọc.
+
+**`analysisCoverage` được suy ra, không cho khai.** Máy chủ trả source nguyên
+vẹn hoặc không trả gì (quá 4 MB → `source_too_large`) chứ không cắt dở, nên "đã
+đọc bao nhiêu" là hệ quả của việc có source hay không. Cho người dùng tự chọn
+`full-source` khi màn hình không hiện được dòng nào là mở đường cho một lời khai
+sai nằm vĩnh viễn trong manifest. Không đọc được source thì có thêm ô xác nhận
+thứ hai — đúng thứ máy chủ đòi (`acknowledgedIncomplete`).
+
+Không dùng `ConfirmSheet`: ba cảnh báo của nó nói về ghi vào bản vẽ hoặc đổi
+phiên AutoCAD, còn duyệt thì ghi vào thư viện.
+
+### Changed — chỉ còn MỘT chỗ băm manifest
+
+`canonicalJson` + phép băm chuyển từ `app/lispProposal.ts` sang
+`features/lisp/fingerprint.ts`; chat legacy import lại từ đó.
+
+Đây là chỗ dễ hỏng ngầm nhất của cả luồng: khi nhận `PUT /:id/manifest`, máy chủ
+**tự tính lại** `sha256(stableJson({resourceId, baseRevision, manifest}))` và từ
+chối nếu khác giá trị đã dùng để xin token. Hai bản băm song song lệch nhau một
+dấu phẩy là mọi lượt duyệt trả 403 — mà thông điệp lại nói về "token thiếu hoặc
+hết hạn", sai hướng hoàn toàn. Bất biến khoá: đúng **một** chỗ gọi
+`crypto.subtle.digest`, và `lispProposal.ts` không được tự băm.
+
+### Changed — bỏ hẳn `.countdown` 2 phút
+
+Mẫu vẽ hai bước "Ký duyệt" rồi đếm ngược token. Ở đây ký → xin token → ghi chạy
+liền trong một lời gọi, token sống vài mili-giây. Dựng đồng hồ đếm ngược cho
+quãng đó là vẽ một cơ chế người dùng không bao giờ chạm tới, đổi lại thêm một
+trạng thái hỏng có thật: token hết hạn giữa hai cú bấm.
+
+### Fixed — duyệt lại đánh rơi manifest đang có (Codex review, P1)
+
+Hộp duyệt dựng payload từ `baseManifest` — sidecar **gốc**. Manifest đang có
+hiệu lực là `resource.manifest` (đã gộp override). Bấm "Duyệt lại" vì thế dựng
+lại từ dữ liệu cũ và **âm thầm xoá** những trường đã có: `guardrails`,
+`examples`, mọi phần đã sửa trước đó. Mất dữ liệu, không phải mất tiện nghi.
+
+### Fixed — file rỗng bị coi là không đọc được (Codex review, P2)
+
+`coverageFor` đòi `source.length > 0`. Một file `.lsp` rỗng là file hợp lệ, và
+người duyệt đã nhìn thấy trọn vẹn nội dung của nó — nhưng giao diện lại bảo
+"không đọc được source", bắt tích một ô xác nhận sai sự thật, rồi ghi
+`metadata-only` vào manifest vĩnh viễn. Nay chỉ `null` mới là không đọc được.
+
+### Fixed — thông báo duyệt mượn nhầm tiêu đề của nạp
+
+Lượt duyệt thành công hiện "Đã gửi lệnh nạp" — không có lệnh nạp nào được gửi.
+Cùng loại lỗi đã sửa một lần ở `/library/blocks`. Nay thông báo mang `kind`.
+
+### Fixed — ghi chú cuối pane nói sai
+
+Vẫn ghi "chưa dựng ở đây: duyệt manifest" trong khi nút Duyệt nằm ngay bên trên.
+
+### Technical
+
+- 11 bất biến mới ở `test-contract.mjs`.
+- Kiểm mắt cả hai nhánh: đọc được source (hiện mã, một ô xác nhận, ký xong báo
+  "Đã duyệt") và không đọc được (cảnh báo + **hai** ô xác nhận).
+- Nút Duyệt **luôn hiện**, kể cả khi không ký được — ẩn đi thì người dùng trong
+  trình duyệt không biết có việc này; hiện kèm lý do thì họ biết mở ở đâu.
+
+---
+
 ## 2026-08-10 — D7: duyệt LISP theo môi trường đang chạy
 
 ### Fixed — banner nói sai khi mở trong app desktop

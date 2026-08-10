@@ -28,6 +28,8 @@ import { Icon } from "../../../../components/ui/icons";
 import { useLispLibrary } from "../../../../features/lisp/useLispLibrary";
 import { useLispDetail } from "../../../../features/lisp/useLispDetail";
 import { useReviewSigner } from "../../../../features/lisp/reviewSigner";
+import { ApprovalDialog } from "../../../../features/lisp/ApprovalDialog";
+import { approveManifest } from "../../../../features/lisp/approval";
 import { LoadDialog } from "../../../../features/lisp/LoadDialog";
 import { RootsDialog } from "../../../../features/lisp/RootsDialog";
 import {
@@ -70,6 +72,8 @@ export default function LispLibraryPage() {
   const [reviewFilter, setReviewFilter] = useState("");
   const [selectedId, setSelectedId] = useState("");
   const [loadOpen, setLoadOpen] = useState(false);
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [approveError, setApproveError] = useState("");
   const [rootsOpen, setRootsOpen] = useState(false);
   const [inFlight, setInFlight] = useState(false);
   const [rootError, setRootError] = useState("");
@@ -78,7 +82,7 @@ export default function LispLibraryPage() {
    * như `notice` ở `/library/blocks`: giữ toàn cục thì thông báo cũ hiện dưới
    * tài nguyên mới và ngụ ý thao tác vừa rồi áp lên nó. */
   const [loadResultState, setLoadResult] =
-    useState<{ ok: boolean; id: string; text: string } | null>(null);
+    useState<{ ok: boolean; id: string; kind: "load" | "approve"; text: string } | null>(null);
   const library = useLispLibrary(DAEMON_BASE);
   const signer = useReviewSigner();
 
@@ -265,7 +269,9 @@ export default function LispLibraryPage() {
               resource={selected}
               notice={loadResultState?.id === selected.id ? loadResultState : null}
               inFlight={inFlight}
+              canApprove={signer === "present"}
               onLoad={() => { setLoadResult(null); setLoadOpen(true); }}
+              onApprove={() => { setApproveError(""); setApproveOpen(true); }}
             />
           ) : (
             <div className="pad">
@@ -301,10 +307,47 @@ export default function LispLibraryPage() {
               setLoadResult({
                 ok: result.ok,
                 id: resource.id,
+                kind: "load",
                 text: result.ok ? result.hint : result.error,
               });
               /* Quét lại: nạp xong máy chủ có thể gắn cảnh báo
                  `staged_support_paths_added_to_autocad_session` cho tài nguyên. */
+              library.reload();
+            });
+          }}
+        />
+      ) : null}
+
+      {approveOpen && selected ? (
+        <ApprovalDialog
+          resource={selected}
+          revision={detail.revision}
+          source={detail.source}
+          effectiveManifest={detail.effectiveManifest}
+          inferred={detail.inferred}
+          signerPresent={signer === "present"}
+          busy={inFlight}
+          error={approveError}
+          onCancel={() => setApproveOpen(false)}
+          onApprove={(manifest, coverage) => {
+            const resource = selected;
+            setApproveError("");
+            setInFlight(true);
+            void approveManifest(DAEMON_BASE, {
+              resourceId: resource.id,
+              baseRevision: detail.revision,
+              manifest,
+              analysisCoverage: coverage,
+            }).then((result) => {
+              setInFlight(false);
+              if (result.ok) {
+                setApproveOpen(false);
+                setLoadResult({ ok: true, id: resource.id, kind: "approve", text: result.hint });
+              } else {
+                /* GIỮ hộp thoại mở khi hỏng: người dùng vừa gõ một câu tóm tắt
+                   và tích hai ô xác nhận: đóng lại là bắt làm lại từ đầu. */
+                setApproveError(result.error);
+              }
               library.reload();
             });
           }}
@@ -360,11 +403,14 @@ export default function LispLibraryPage() {
   );
 }
 
-function ResourceDetail({ resource, notice, inFlight, onLoad }: {
+function ResourceDetail({ resource, notice, inFlight, canApprove, onLoad, onApprove }: {
   resource: LispResource;
-  notice: { ok: boolean; text: string } | null;
+  notice: { ok: boolean; kind: "load" | "approve"; text: string } | null;
   inFlight: boolean;
+  /** Cửa sổ này có bộ ký của app desktop không. */
+  canApprove: boolean;
   onLoad: () => void;
+  onApprove: () => void;
 }) {
   return (
     <div className="pad stack" style={{ gap: "var(--s3)" }}>
@@ -483,7 +529,13 @@ function ResourceDetail({ resource, notice, inFlight, onLoad }: {
 
       {notice ? (
         <div className="callout" data-kind={notice.ok ? undefined : "stop"}>
-          <span className="lbl">{notice.ok ? "Đã gửi lệnh nạp" : "Không nạp được"}</span>
+          {/* Duyệt và nạp là hai việc khác nhau; dùng chung một tiêu đề sẽ báo
+              "đã gửi lệnh nạp" cho một lượt duyệt không gửi lệnh nào. */}
+          <span className="lbl">
+            {notice.kind === "approve"
+              ? (notice.ok ? "Đã duyệt" : "Không duyệt được")
+              : (notice.ok ? "Đã gửi lệnh nạp" : "Không nạp được")}
+          </span>
           <p>{notice.text}</p>
         </div>
       ) : null}
@@ -492,13 +544,23 @@ function ResourceDetail({ resource, notice, inFlight, onLoad }: {
         <WriteButton variant="primary" onClick={onLoad} disabled={inFlight}>
           {inFlight ? "Đang nạp…" : "Nạp vào AutoCAD"}
         </WriteButton>
+        {/* Nút duyệt LUÔN hiện, kể cả khi không ký được — ẩn đi thì người dùng
+            trong trình duyệt không biết có việc này, còn hiện kèm lý do thì họ
+            biết phải mở ở đâu. Nút bị khoá nói lý do qua `title`. */}
+        <Button
+          onClick={onApprove}
+          disabled={inFlight || !canApprove}
+          title={canApprove ? undefined : "Cần app Acad Studio desktop để ký duyệt"}
+        >
+          {resource.reviewStatus === "approved" ? "Duyệt lại" : "Duyệt"}
+        </Button>
       </div>
 
       <div className="callout" style={{ marginTop: "auto" }}>
         <p className="hint">
-          Chưa dựng ở đây: phân tích bằng agent và duyệt manifest — duyệt là thao
-          tác của app desktop.{" "}
-          <Link href="/?panel=lisp">Mở thư viện LISP ở màn hình cũ</Link>.
+          Chưa dựng ở đây: nhờ agent phân tích rồi đề xuất manifest.{" "}
+          <Link href="/?panel=lisp">Mở thư viện LISP ở màn hình cũ</Link>. Duyệt
+          thì làm ngay tại đây được — nhưng phải mở trong app desktop.
         </p>
       </div>
     </div>

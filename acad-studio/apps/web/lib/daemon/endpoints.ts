@@ -66,6 +66,13 @@ export const endpoints = {
    * support path và `TRUSTEDPATHS` của phiên, và **thực thi** mã ngay. */
   lispLoad: (base: string, id: string) =>
     `${trim(base)}/api/acad/lisp/${encodeURIComponent(id)}/load`,
+  /** Xin token duyệt. Đòi chữ ký Ed25519 của app desktop; token sống 2 phút,
+   * dùng một lần. */
+  lispApprovalChallenge: (base: string, id: string) =>
+    `${trim(base)}/api/acad/lisp/${encodeURIComponent(id)}/approval-challenge`,
+  /** Ghi manifest. Khi `approved: true` thì phải kèm token ở trên. */
+  lispManifest: (base: string, id: string) =>
+    `${trim(base)}/api/acad/lisp/${encodeURIComponent(id)}/manifest`,
   /** Thư mục gốc được quản lý. */
   lispRoots: (base: string) => `${trim(base)}/api/acad/lisp/roots`,
   /** Đọc Support File Search Path của AutoCAD đang chạy rồi thêm làm thư mục gốc. */

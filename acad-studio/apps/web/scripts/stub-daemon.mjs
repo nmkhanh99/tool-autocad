@@ -106,11 +106,60 @@ createServer((req, res) => {
       return send(res, 200, { ok: true, state: "done", jobId: "stub-1" });
     });
   }
+  const challenge = path.match(/^\/api\/acad\/lisp\/([^/]+)\/approval-challenge$/);
+  if (challenge && req.method === "POST") {
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    return req.on("end", () => {
+      const body = JSON.parse(raw || "{}");
+      if (!body.userProof) {
+        return send(res, 403, {
+          ok: false, code: "desktop_user_review_proof_required",
+          error: "Chỉ thao tác review trực tiếp trong Acad Studio desktop mới được phép duyệt",
+        });
+      }
+      globalThis.__token = "tok-" + Date.now();
+      globalThis.__tokenHash = body.proposalHash;
+      return send(res, 200, { ok: true, approvalToken: globalThis.__token, expiresInMs: 120000 });
+    });
+  }
+  const manifestPut = path.match(/^\/api\/acad\/lisp\/([^/]+)\/manifest$/);
+  if (manifestPut && req.method === "PUT") {
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    return req.on("end", () => {
+      const body = JSON.parse(raw || "{}");
+      if (body.approvalToken !== globalThis.__token || body.proposalHash !== globalThis.__tokenHash) {
+        return send(res, 403, {
+          ok: false, code: "user_review_challenge_required",
+          error: "Token đã thiếu, hết hạn hoặc không khớp proposal",
+        });
+      }
+      globalThis.__token = null;
+      return send(res, 200, { ok: true, resource: { id: decodeURIComponent(manifestPut[1]) } });
+    });
+  }
   const lispOne = path.match(/^\/api\/acad\/lisp\/([^/]+)$/);
   if (lispOne && req.method === "GET") {
+    const id = decodeURIComponent(lispOne[1]);
+    const src = id === "LSP-03" ? null : `(defun c:CTY-SETVARS ( / )
+  (setvar "OSMODE" 179)
+  (setvar "DIMSCALE" 100)
+  (command "_.-LAYER" "_M" "MEP-PIPE" "")
+  (princ "\\nDa dat bien theo ho so tieu chuan.")
+  (princ))`;
     return send(res, 200, {
       ok: true,
-      resource: { id: decodeURIComponent(lispOne[1]), manifestRevision: "rev-lsp-01" },
+      resource: {
+        id, manifestRevision: "rev-lsp-01",
+        source: src, sourceEncoding: src ? "utf8" : null,
+        baseManifest: id === "LSP-02" ? { summary: "Đặt biến bản vẽ theo hồ sơ tiêu chuẩn." } : null,
+        inferred: {
+          commands: ["CTY-SETVARS"], functions: [], dependencies: ["cty/common.lsp"],
+          dialogs: [], cadCommands: ["-LAYER"],
+          systemVariables: ["OSMODE", "DIMSCALE"], apiCalls: [], fileReferences: [],
+        },
+      },
     });
   }
 

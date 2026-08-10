@@ -543,6 +543,76 @@ assert.match(
   "phải dịch các mã lỗi mang tham số của luồng nạp",
 );
 
+/* Hash gửi kèm lượt duyệt phải khớp `stableJson()` của daemon: máy chủ TỰ TÍNH
+ * LẠI từ `{resourceId, baseRevision, manifest}` và 403 nếu khác. Hai bản băm
+ * song song sẽ lệch, và thông điệp lỗi lại nói về "token thiếu hoặc hết hạn" —
+ * sai hướng hoàn toàn. Nên chỉ được có MỘT chỗ băm. */
+assert.equal(
+  stripComments(sourceAt("lisp/fingerprint.ts")).match(/crypto\.subtle\.digest/g)?.length,
+  1,
+  "chỉ được một chỗ băm manifest",
+);
+assert.doesNotMatch(
+  stripComments(sourceAt("lispProposal.ts")),
+  /crypto\.subtle\.digest/,
+  "chat legacy phải dùng chung phép băm, không tự băm lại",
+);
+/* `analysisCoverage` phải SUY RA từ việc có source hay không, không cho người
+ * dùng khai. Khai được nghĩa là một lời khai sai nằm vĩnh viễn trong manifest. */
+assert.doesNotMatch(
+  stripComments(sourceAt("lisp/ApprovalDialog.tsx")),
+  /setCoverage|onChange=\{[^}]*[Cc]overage/,
+  "phạm vi đã đọc không được để người dùng tự chọn",
+);
+assert.match(
+  stripComments(sourceAt("lisp/ApprovalDialog.tsx")),
+  /coverageFor\(source\)/,
+  "phạm vi đã đọc phải suy ra từ source",
+);
+/* Duyệt lại phải bắt đầu từ manifest ĐANG CÓ HIỆU LỰC. Đọc `baseManifest`
+ * (sidecar gốc) sẽ âm thầm đánh rơi `guardrails`, `examples` và mọi phần đã sửa
+ * — mất dữ liệu, không phải mất tiện nghi. */
+assert.match(
+  stripComments(sourceAt("lisp/useLispDetail.ts")),
+  /asRecord\(resource\?\.manifest\) \?\? asRecord\(resource\?\.baseManifest\)/,
+  "duyệt lại phải dựng từ manifest đang có hiệu lực",
+);
+/* Source rỗng vẫn là toàn bộ file. Chỉ `null` mới là "không đọc được". */
+assert.match(
+  stripComments(sourceAt("lisp/approval.ts")),
+  /return typeof source === "string" \? "full-source"/,
+  "chuỗi rỗng vẫn phải tính là đọc được toàn bộ source",
+);
+/* Duyệt ghi vào THƯ VIỆN, không chạm bản vẽ hay phiên AutoCAD — mượn
+ * `ConfirmSheet` sẽ dán ba cảnh báo không đúng chỗ lên nó. */
+assert.doesNotMatch(
+  stripComments(sourceAt("lisp/ApprovalDialog.tsx")),
+  /ConfirmSheet/,
+  "hộp duyệt không được mượn cảnh báo của lệnh ghi vào bản vẽ",
+);
+/* Source phải HIỆN RA trước khi ký. Chữ ký xác nhận một con người đã đọc nội
+ * dung; không hiện nội dung thì nó xác nhận một việc không xảy ra. */
+assert.match(
+  stripComments(sourceAt("lisp/ApprovalDialog.tsx")),
+  /<pre[\s\S]*?\{source\}/,
+  "hộp duyệt phải hiện source",
+);
+/* Hỏng thì GIỮ hộp thoại: người dùng vừa gõ tóm tắt và tích hai ô xác nhận. */
+assert.match(
+  stripComments(sourceAt("lisp/page.tsx")),
+  /setApproveError\(result\.error\)/,
+  "duyệt hỏng thì giữ hộp thoại và báo lý do tại chỗ",
+);
+
+/* Duyệt và nạp là hai việc khác nhau. Dùng chung một tiêu đề thông báo sẽ báo
+ * "đã gửi lệnh nạp" cho một lượt duyệt không gửi lệnh nào — đúng loại nói sai
+ * đã sửa một lần ở `/library/blocks`. */
+assert.match(
+  stripComments(sourceAt("lisp/page.tsx")),
+  /notice\.kind === "approve"/,
+  "thông báo phải phân biệt duyệt với nạp",
+);
+
 /* Nút quét đĩa phải khoá theo `refreshing`, không theo `loading`: `loading` chỉ
  * đúng ở lần đọc đầu, nên dùng nó thì nút mở lại ngay và cho bấm chồng nhiều
  * lượt quét đĩa — thao tác đắt nhất màn này. Và danh sách KHÔNG được dùng
