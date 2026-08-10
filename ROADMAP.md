@@ -94,6 +94,25 @@ chuyển nó sang route.
 
 ---
 
+### D6 — xác minh `dbmod` trên AutoCAD thật (2026-08-10)
+
+Plugin đã build và **nạp vào AutoCAD 2027**. Chạy đủ ba bước kiểm:
+
+| Bước | `revision` | `dbmod` |
+|---|---|---|
+| Bản vẽ vừa mở | 0 | **0** |
+| Sau khi vẽ 1 đường | 3 | **1** |
+| Sau khi lưu | 44 | **0** |
+
+Sự kiện `drawingSaved` phát đúng chỗ trong `events.jsonl`.
+
+Ghi lại một điều học được: sau khi lưu, `revision` nhảy 3 → 44 vì AutoCAD chạm
+nhiều đối tượng trong lúc lưu. So bộ đếm thô sẽ báo "chưa lưu" ngay sau khi vừa
+lưu xong — đó chính là lý do thiết kế cần **mốc đặt lại bởi `saveComplete`** chứ
+không so thẳng bộ đếm.
+
+---
+
 ## Quyết định đã chốt
 
 | # | Quyết định | Chốt ngày | Hệ quả |
@@ -111,21 +130,6 @@ khoảng **21–33 ngày công**, tính riêng ngoài 95–140 ngày front-end.
 ---
 
 ## Next
-
-### Nạp plugin mới vào AutoCAD và kiểm `dbmod` thật
-
-Việc duy nhất của giai đoạn 3 **chưa xác minh trên AutoCAD thật**. Bundle đã
-build ở `objectarx/build/Acad-Bridge.bundle` nhưng chưa nạp.
-
-1. `cd objectarx && ./build.sh` (bỏ `--build-only` để cài vào ApplicationPlugins).
-2. Khởi động lại AutoCAD — **AutoCAD không nạp lại bundle giữa phiên**.
-3. Mở 2 bản vẽ, sửa một cái, không lưu. Kiểm `~/Acad-Bridge/docs.json` có
-   `"dbmod":1` cho bản vẽ đã sửa và `0` cho bản còn lại.
-4. Lưu bản vẽ đó → `dbmod` phải về `0` **ngay**, không đợi nhịp 2,1 s.
-
-Nếu bước 3 cho `dbmod:1` ở cả hai, giả định "sửa của người dùng luôn xảy ra khi
-tài liệu đang hoạt động" sai ở đâu đó — đọc lại ghi chú giới hạn trong
-`acadDatabaseModified()`.
 
 ### Giai đoạn 4 — `/library/blocks` và `/library/lisp`
 
@@ -188,6 +192,20 @@ Khoảng **21–33 ngày công**, tính riêng ngoài 95–140 ngày front-end.
   `RevisionEventPublisher`. Kèm `GET /api/cadweb/snapshots?drawing=` và
   `POST /sync/retry/:artifactId`. Mở khoá `.revstrip` ở `/workspace`.
   ~10–15 ngày; phần Windows chưa rõ.
+
+---
+
+## Hoàn tác bản plugin
+
+Bản plugin cũ (build 29.07) được sao lưu trước khi ghi đè:
+
+```
+/Users/khanhnm/Desktop/tool-autocad/objectarx/build/backup-plugin-20260810-095550
+```
+
+Khôi phục: copy hai thư mục `ApplicationPlugins-*` / `ApplicationAddins-*` trong
+đó trở lại `~/Library/Application Support/Autodesk/<tương ứng>/Acad-Bridge.bundle`
+rồi khởi động lại AutoCAD.
 
 ---
 

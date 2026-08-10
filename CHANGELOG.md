@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## 2026-08-10 — Xác minh `dbmod` trên AutoCAD thật
+
+Plugin AcadBridge đã build và **nạp vào AutoCAD 2027**. Đây là thứ duy nhất của
+giai đoạn 3 chưa kiểm được trên máy thật.
+
+### Verified
+
+| Bước | `revision` | `dbmod` |
+|---|---|---|
+| Bản vẽ vừa mở (sạch) | 0 | **0** |
+| Sau khi vẽ một đường (`entmake LINE` qua `/api/acad/job`) | 3 | **1** |
+| Sau khi lưu (`QSAVE`) | 44 | **0** |
+
+Sự kiện `drawingSaved` phát đúng chỗ trong `events.jsonl`, nằm giữa
+`commandStart QSAVE` và `commandEnded QSAVE`.
+
+Trường `busy` mới ở `/api/acad/status` cũng trả đúng `false` khi không có job.
+
+### Technical
+
+Ghi lại một điều chỉ lộ ra khi chạy thật: sau khi lưu, `revision` nhảy **3 → 44**
+vì AutoCAD chạm nhiều đối tượng trong quá trình lưu. Nếu `dbmod` so bộ đếm thô
+thì bản vẽ sẽ bị báo "chưa lưu" **ngay sau khi vừa lưu xong**. Nó ra `0` vì
+`AcRxEventReactor::saveComplete` đặt lại mốc — đúng lý do thiết kế cần mốc chứ
+không so thẳng bộ đếm. Không có bước kiểm thật này thì lỗi đó sẽ chỉ lộ ra ở
+tay người dùng.
+
+Bản plugin cũ (29.07) đã được sao lưu trước khi ghi đè, xem mục hoàn tác trong
+`ROADMAP.md`.
+
+---
+
 ## 2026-08-10 — Giai đoạn 4 (phần 2): route `/library/blocks` (chỉ đọc)
 
 ### Added
