@@ -6,7 +6,8 @@
 
 Luôn duy trì tài liệu đồng bộ với code để một developer khác có thể clone repository, hiểu hệ thống, chạy ứng dụng và tiếp tục phát triển mà không phải dựa vào kiến thức ngầm.
 
-Rule này áp dụng cho mọi task, mọi thay đổi code và mọi commit trong dự án **app học CFA**.
+Rule này áp dụng cho mọi task, mọi thay đổi code và mọi commit trong dự án
+**AutoCAD Toolkit**.
 
 ## Các tài liệu bắt buộc
 
@@ -24,8 +25,7 @@ Tài liệu kỹ thuật dành cho developer. Nội dung phải phản ánh tr�
 - Command cho test, lint, type-check, format và build.
 - Quy ước code.
 - Quy ước Git và commit.
-- Mô hình dữ liệu (data model), schema nội dung (JSON bóc tách từ PDF), và chiến lược lưu trữ (IndexedDB cho tiến độ/ghi chú/SRS).
-- Pipeline bóc tách nội dung từ PDF curriculum sang JSON.
+- Mô hình dữ liệu và hợp đồng trao đổi với plugin (`~/Acad-Bridge`, định dạng `.cadweb`).
 - State management và các luồng xử lý chính.
 - Các quyết định kỹ thuật quan trọng và lý do lựa chọn.
 - Dependencies quan trọng và mục đích sử dụng.
@@ -36,17 +36,15 @@ Mọi thay đổi liên quan đến kiến trúc, mô hình dữ liệu, pipelin
 
 ### `USER_GUIDE.md`
 
-Hướng dẫn dành cho người dùng cuối (người học CFA). Nội dung phải phản ánh hành vi thực tế của ứng dụng và bao gồm, khi có:
+Hướng dẫn dành cho người dùng cuối (kỹ sư làm việc với bản vẽ AutoCAD). Nội dung
+phải phản ánh hành vi thực tế của ứng dụng và bao gồm, khi có:
 
 - Mục đích và phạm vi của ứng dụng.
-- Cách chọn topic / Learning Module để học.
-- Cách đọc bài học, theo dõi và đánh dấu (tick) các LOS đã học.
-- Cách ghi chú cá nhân cho từng bài.
-- Cách làm quiz / practice, xem chấm điểm và lời giải.
-- Cách ôn flashcard với spaced repetition (SRS).
-- Cách dùng các Lab tương tác (máy tính TVM, đồ thị phân phối, cây xác suất, mô phỏng CLT, kiểm định giả thuyết...).
-- Cách xem dashboard tiến độ học và điểm yếu.
-- Giải thích các thuật ngữ tài chính / định lượng được sử dụng trong ứng dụng.
+- Cách khởi động daemon và mở giao diện; yêu cầu về AutoCAD và plugin AcadBridge.
+- Cách dùng từng màn hình đã dựng.
+- Các nguyên tắc an toàn người dùng phải biết: mọi lệnh ghi là hai pha, không có
+  hoàn tác, và những việc kết thúc trong AutoCAD chứ không trong app.
+- Giới hạn đã biết — ghi thẳng thứ app KHÔNG làm được, không để người dùng tự suy.
 - Các lỗi thường gặp và cách xử lý.
 
 Mọi tính năng mới hoặc thay đổi hành vi mà người dùng có thể nhìn thấy hoặc tương tác đều phải được cập nhật vào `USER_GUIDE.md`.
@@ -100,7 +98,9 @@ Khi hoàn thành task, chuyển task đó sang `Done`, cập nhật trạng thá
 7. Tài liệu phải đủ rõ để người khác clone repository, cài đặt, chạy ứng dụng, kiểm tra và tiếp tục phát triển.
 8. Chỉ ghi thông tin đã được xác minh từ code, cấu hình, kết quả chạy command hoặc yêu cầu đã được xác nhận.
 9. Không ghi thông tin giả hoặc suy đoán như sự thật. Phần chưa được triển khai hoặc chưa xác minh phải ghi rõ `Chưa có` hoặc `Sẽ bổ sung sau`.
-10. Không ghi secret, token, private key, mật khẩu hoặc thông tin tài khoản thật vào bất kỳ tài liệu nào. Không sao chép nguyên văn nội dung có bản quyền của CFA Institute vào tài liệu; nội dung curriculum chỉ dùng cá nhân.
+10. Không ghi secret, token, private key, mật khẩu hoặc thông tin tài khoản thật
+    vào bất kỳ tài liệu nào. Không chép nguyên văn bản vẽ hay tài liệu có bản
+    quyền của khách hàng vào tài liệu dự án.
 11. Khi tài liệu mâu thuẫn với code, phải coi code và kết quả kiểm tra thực tế là nguồn để xác minh, sau đó sửa tài liệu trong cùng task.
 12. Không xóa thông tin lịch sử hợp lệ khỏi `CHANGELOG.md`; chỉ sửa khi thông tin đó sai hoặc gây hiểu nhầm.
 
