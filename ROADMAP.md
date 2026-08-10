@@ -274,7 +274,18 @@ route, như `blocks.module.css` vừa làm.
     giữ lại đòi tách một MTEXT thành nhiều thẻ có kiểu riêng.
   - Chữ bắt qua `worldDraw` vẫn không có căn lề — nó đến từ lời gọi cấp thấp
     không mang thông tin đó.
-- **Giai đoạn 6** — `/drawing-info`, tách `/review` và `/standards`.
+- **Giai đoạn 6** — `/drawing-info` **đã xong (2026-08-11)**; còn tách `/review`
+  và `/standards`.
+
+  Phần đã xong mang theo một sự thật của backend mà mọi màn hình ghi khác cũng
+  phải biết: `select` chạy theo **phạm vi**, còn `move-to-layer` chạy trên **bộ
+  chọn hiện tại của AutoCAD** và bỏ qua phạm vi hoàn toàn.
+
+  Tách `/review` và `/standards`: `/standards` quản lý hồ sơ quy tắc
+  (`/standards/profiles`), `/review` chạy quét và xử lý phát hiện
+  (`/standards/scan|apply|action`). Hôm nay hai việc đó nằm chung trong
+  `DrawingStandardsPanel.tsx` (2411 dòng), còn `DocumentReviewPanel.tsx` (1348
+  dòng) là prototype chỉ gọi đúng một API.
 - **Giai đoạn 7** — `/changes` (trục xoay), `/takeoff`, `/settings`.
 - **Giai đoạn 8** — `/publish`, `/batch`, `/cadweb`, `/` Tổng quan. Phạm vi đã
   chốt qua D3/D4/D5; **backend phải xong trước** (xem mục dưới).

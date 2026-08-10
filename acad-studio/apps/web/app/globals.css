@@ -878,8 +878,13 @@ a.hfix { display: inline-flex; align-items: center; }
 .standards-table tbody tr:hover td { color: #eef6ff; background: #1b2937; }
 .standards-table tbody tr.selected td { background: rgba(35, 73, 106, .48); }
 .standards-table tbody tr:last-child td { border-bottom: 0; }
-.standards-table th.check, .standards-table td.check { width: 32px; text-align: center; }
-.standards-table td.check input,
+/* Đổi tên từ `.check`: design-system có `.check` KHÔNG phạm vi (ô tích của
+   `ConfirmSheet`, `ApprovalDialog`…), và nó là `inline-flex` — trúng vào một
+   `<td>` là vỡ layout bảng. Guardrail cũ bỏ lọt vì chỉ so class ĐƠN với class
+   ĐƠN, mà legacy nhắm ô này bằng selector ghép. Đổi phía legacy vì phía đó sẽ
+   chết ở giai đoạn 10. */
+.standards-table th.selcell, .standards-table td.selcell { width: 32px; text-align: center; }
+.standards-table td.selcell input,
 .standards-layer-table td.center input { accent-color: var(--legacy-accent); }
 .standards-table td > strong {
   display: block; max-width: 390px; overflow: hidden; color: #dce4eb;

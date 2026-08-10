@@ -54,6 +54,7 @@ import {
   countOutsideBounds,
   fitViewBox,
   layersOf,
+  operationTarget,
   selectBlockedReason,
   spaceOrder,
   unionExtent,
@@ -180,7 +181,7 @@ export default function WorkspacePage() {
     setSelectError("");
     try {
       const op = await prepareSelectHandles(DAEMON_BASE, {
-        target: payload?.document?.file ?? "",
+        target: operationTarget(payload),
         handles: [selectedEntity.h],
         /* Guard lấy từ CHÍNH `payload` đã sinh ra handle này — xem
            `catalogGuardOf`. */

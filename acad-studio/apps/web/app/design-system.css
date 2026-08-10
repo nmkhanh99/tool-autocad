@@ -423,6 +423,42 @@ table.data th.sortable[aria-sort]:not([aria-sort="none"]) { color: var(--accent)
 .palette li .cmd { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: auto; }
 .palette li[data-active="true"] .cmd { color: var(--accent); }
 
+
+
+/* ---------- 5b. THÔNG TIN BẢN VẼ (drawing-info) ----------
+   BỌC TRONG `[data-screen]`: `.info` và `.bar` là tên quá chung, và
+   `globals.css` legacy cũng có phần tử mang class `info`. Một quy tắc
+   không phạm vi ở đây sẽ ép chúng thành lưới hai cột — `check:css` nay
+   chặn đúng kiểu rò rỉ đó.
+   Chép từ khối <style> riêng của `mau-thiet-ke/drawing-info.html`. Nó nằm
+   trong trang chứ không nằm trong `css/app.css` của bộ mẫu, nên lần đối chiếu
+   trước không thấy — đây không phải lớp mới tự nghĩ ra. */
+[data-screen="drawing-info"] .info { display: grid; grid-template-columns: minmax(0, 1fr) 320px; min-height: 0; flex: 1; }
+[data-screen="drawing-info"] .info > .cols { overflow-y: auto; min-width: 0; }
+[data-screen="drawing-info"] .info > .picker { border-left: 1px solid var(--border); background: var(--surface); overflow-y: auto; }
+[data-screen="drawing-info"] .infopad { padding: var(--s5); display: flex; flex-direction: column; gap: var(--s4); }
+[data-screen="drawing-info"] .kv { display: grid; grid-template-columns: 168px minmax(0, 1fr); }
+[data-screen="drawing-info"] .kv dt, [data-screen="drawing-info"] .kv dd { margin: 0; padding: 8px var(--s4); border-bottom: 1px solid var(--border); font-size: 12.5px; }
+[data-screen="drawing-info"] .kv dt { color: var(--muted); }
+[data-screen="drawing-info"] .kv dd { font-family: var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+[data-screen="drawing-info"] .kv dt:last-of-type, [data-screen="drawing-info"] .kv dd:last-of-type { border-bottom: 0; }
+[data-screen="drawing-info"] .bars { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s4); }
+[data-screen="drawing-info"] .bar { display: grid; grid-template-columns: 112px 1fr 56px; align-items: center; gap: var(--s3); font-size: 12px; }
+[data-screen="drawing-info"] .bar .t { height: 8px; background: var(--fg-06); border-radius: var(--r-pill); overflow: hidden; }
+[data-screen="drawing-info"] .bar .t i { display: block; height: 100%; background: var(--accent); border-radius: var(--r-pill); }
+[data-screen="drawing-info"] .bar .c { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-72); }
+[data-screen="drawing-info"] .bar .nm { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-screen="drawing-info"] .pickpad { padding: var(--s4); display: flex; flex-direction: column; gap: var(--s4); }
+@media (max-width: 1240px) { [data-screen="drawing-info"] .info { grid-template-columns: minmax(0, 1fr) 288px; } }
+/* Dưới 900px: XẾP DỌC, không ẩn.
+   Bộ mẫu đặt `display: none` cho `.picker` ở khổ này. Ẩn hẳn thì bộ tạo thao
+   tác biến mất mà không có đường nào mở lại — người dùng thu hẹp cửa sổ là mất
+   luôn tính năng, và không có gì trên màn hình nói vì sao. Xếp nó xuống dưới
+   giữ được mọi thứ với tới được mà không cần dựng thêm giao diện. */
+@media (max-width: 900px) {
+  [data-screen="drawing-info"] .info { grid-template-columns: 1fr; }
+  [data-screen="drawing-info"] .info > .picker { border-left: 0; border-top: 1px solid var(--border); }
+}
 /* ---------- 5. VIEWER (workspace) ---------- */
 .workspace { display: grid; grid-template-columns: 240px 1fr var(--inspector); min-height: 0; flex: 1; }
 .wpane { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; background: var(--surface); }

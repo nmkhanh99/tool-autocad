@@ -513,7 +513,7 @@ function IssueTable({
       <table className="standards-table standards-issues-table">
         <thead>
           <tr>
-            <th className="check" aria-label="Chọn" />
+            <th className="selcell" aria-label="Chọn" />
             <th>Mức độ</th>
             <th>Nội dung</th>
             <th>Hiện tại</th>
@@ -524,7 +524,7 @@ function IssueTable({
         <tbody>
           {issues.map((issue) => (
             <tr key={issue.id} className={selected.has(issue.id) ? "selected" : ""}>
-              <td className="check">
+              <td className="selcell">
                 <input
                   type="checkbox"
                   checked={selected.has(issue.id)}

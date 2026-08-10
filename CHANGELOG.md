@@ -2,6 +2,75 @@
 
 ## 2026-08-11
 
+### Added — màn hình `/drawing-info`
+
+Giai đoạn 6, phần đầu. Hồ sơ đầy đủ của bản vẽ đang mở: tệp và phiên bản, đơn vị
+và phạm vi, đối tượng theo kiểu, bảng layer 43 dòng, bảng ký hiệu, layout/xref,
+từ điển đối tượng có tên — cộng **bộ tạo thao tác** ở cột phải.
+
+Bốn chỗ cố tình lệch khỏi bộ mẫu, vì bộ mẫu tả một backend khác:
+
+- **`extents` có thể bị GIẤU ĐI.** Mẫu in EXTMIN/EXTMAX như một cặp toạ độ lúc
+  nào cũng có nghĩa. Thật ra AutoCAD gộp mọi không gian vào một cặp: `min` từ
+  Model (toạ độ bản vẽ) và `max` từ layout (mm trên giấy), ra một khung rộng
+  **3,8 triệu** đơn vị. Bản vẽ nhiều không gian thì màn hình nói "không dùng
+  được" và chỉ sang `/workspace`, nơi có khung theo từng không gian.
+- **Bỏ "theo kiểu đối tượng" và "đặt màu theo layer".** `cleanScope()` của daemon
+  chỉ nhận `layer`/`block`/`handles`; thao tác chỉ có `select` và `move-to-layer`.
+- **Hai thao tác chạy trên hai TẬP KHÁC NHAU** — và đây là chỗ dễ gây ghi nhầm
+  nhất. `select` chạy theo phạm vi chọn ở đây; `move-to-layer` **bỏ qua phạm vi
+  hoàn toàn**, daemon gọi `captureCurrent()` và ghi lên **bộ chọn hiện tại của
+  AutoCAD**. Nên khi chọn thao tác gán, hai ô phạm vi **biến mất** thay vì đứng
+  đó gợi ý sai, và màn hình nói rõ nó chạy trên bao nhiêu đối tượng đang chọn.
+- **Bỏ banner về snapshot `.cadweb`.** Mẫu nói khung xem không hiện
+  dimension/hatch/xref. Từ giai đoạn 5, `/workspace` đọc hình học trực tiếp và vẽ
+  được cả hai — giữ câu đó là nói sai về chính app.
+
+Đã chạy trọn hai pha trên bản vẽ thật: `Đã chọn 1 đối tượng trong AutoCAD`. Đó
+cũng lấp nốt chỗ chưa kiểm được của commit trước.
+
+### Fixed — tám lỗi của lượt này (Codex review)
+
+- **Bộ tạo thao tác mời ghi nhầm đối tượng (P1).** Gửi `scope` kèm
+  `move-to-layer` trong khi daemon bỏ qua nó: người dùng chọn "layer P-ThoatXi",
+  bấm ghi, và một tập đối tượng khác hẳn bị đổi layer.
+- **Bản vẽ chưa lưu ghi nhầm sang bản vẽ khác (P1).** `document.file` rỗng khi
+  bản vẽ chưa từng lưu, và đích rỗng làm daemon phân giải sang **bản vẽ đang hoạt
+  động** — có thể là bản vẽ khác nếu người dùng đổi tab AutoCAD sau khi trang
+  tải. Nay lùi về `title`, đúng thứ tự `file || title` daemon dùng. Sửa ở **cả**
+  `/workspace`.
+- **Chỉ đọc được một dạng phản hồi (P1).** `drawing-info` trả cả khoá ở gốc lẫn
+  khối `drawing` lồng bên trong với tên khác (`entitiesByType`, `layers`…).
+  Daemon chỉ bù `tables.layers`/`blocks`; `counts`/`settings`/`extents` chép
+  thẳng từ plugin. Một plugin chỉ phát dạng lồng sẽ cho ra màn hình 0 đối tượng
+  mà không lỗi gì. Nay chuẩn hoá một chỗ, và **tên khoá đã đối chiếu với phản hồi
+  thật** (`dimension`/`linetypes`, không phải `dim`/`linetype` như tôi đoán).
+- **Bản vẽ chỉ đọc bị chặn cả thao tác chọn**, dù daemon chỉ chặn chỉ-đọc cho
+  `move-to-layer`.
+- **CSS rò rỉ sang màn hình legacy.** `.info` không phạm vi trúng
+  `.lisp-library-notice.info`. Nay cả khối bọc trong `[data-screen="drawing-info"]`,
+  **từng selector một** — bọc mỗi cái đầu sau dấu phẩy vẫn để `.kv dd` ở phạm vi
+  toàn cục.
+- **Ẩn hẳn bộ tạo thao tác dưới 900px.** Quy tắc chép từ bộ mẫu, nhưng ẩn một
+  tính năng mà không có đường mở lại là ngõ cụt. Nay xếp dọc xuống dưới.
+- **`inUse` thiếu bị coi là "không dùng"** — một lời khai không có căn cứ, mà
+  người dùng dọn bản vẽ dựa trên đúng nhãn đó.
+- **Ô màu layer vô hình:** `.swatch` chỉ có kích thước bên trong `.layerrow`.
+
+### Changed — `check:css` bắt được kiểu rò rỉ đã lọt
+
+Guardrail cũ so "class đơn với class đơn", nên một quy tắc design-system không
+phạm vi trúng phần tử legacy chỉ được nhắm bằng **selector ghép** thì không bị
+báo. Thêm chiều kiểm thứ hai, và sửa luôn một lỗi trong chính nó: `unscopedClasses`
+bóc `[...]` **trước** khi tìm tổ tiên, nên `[data-screen="x"] .info` bị đọc thành
+không phạm vi — đúng lỗi làm lọt `.info` qua vòng kiểm đầu.
+
+Chiều kiểm mới tìm ra một va chạm **có sẵn**: `.check` của design system
+(`inline-flex`) trúng vào `<td class="check">` của bảng standards legacy. Đổi tên
+phía legacy thành `.selcell`, đúng như thông điệp của chính guardrail.
+
+## 2026-08-11
+
 ### Added — "Chọn trong AutoCAD" từ khung xem
 
 Chỗ cuối cùng của giai đoạn 5 còn treo. Bấm một đối tượng trong khung xem rồi

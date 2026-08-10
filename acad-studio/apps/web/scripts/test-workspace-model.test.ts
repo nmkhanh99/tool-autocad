@@ -27,6 +27,7 @@ import {
   fitViewBox,
   ellipsePath,
   layersOf,
+  operationTarget,
   pathDataOf,
   polylinePath,
   selectBlockedReason,
@@ -489,6 +490,14 @@ test("guard chọn đối tượng phải lấy từ CHÍNH đợt đọc, thi�
   assert.equal(catalogGuardOf({ document: { revision: 7 } }), null);
   assert.equal(catalogGuardOf({ document: { instance: "ABC-1" } }), null);
   assert.equal(catalogGuardOf(null), null);
+});
+
+test("bản vẽ chưa lưu vẫn có đích: lùi về tiêu đề", () => {
+  /* Đích rỗng thì daemon phân giải sang bản vẽ đang hoạt động — có thể là bản
+     vẽ khác nếu người dùng đổi tab AutoCAD sau khi trang tải. */
+  assert.equal(operationTarget({ document: { file: "/a/b.dwg", title: "b.dwg" } }), "/a/b.dwg");
+  assert.equal(operationTarget({ document: { file: "", title: "Drawing1.dwg" } }), "Drawing1.dwg");
+  assert.equal(operationTarget(null), "");
 });
 
 test("revision 0 vẫn là revision hợp lệ", () => {

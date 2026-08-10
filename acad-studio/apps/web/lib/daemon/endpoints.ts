@@ -73,6 +73,13 @@ export const endpoints = {
   /** Ghi manifest. Khi `approved: true` thì phải kèm token ở trên. */
   lispManifest: (base: string, id: string) =>
     `${trim(base)}/api/acad/lisp/${encodeURIComponent(id)}/manifest`,
+  /** Hồ sơ đầy đủ của bản vẽ đang mở: bảng layer/block/layout/style, biến hệ
+   * thống, từ điển, xref, khung bao.
+   *
+   * Lượt đọc **nặng nhất** của app — 350 KB trên bản vẽ as-built của dự án, và
+   * nó quét toàn bộ bảng ký hiệu. Đừng gọi theo nhịp. */
+  drawingInfo: (base: string) => `${trim(base)}/api/acad/drawing-info`,
+
   /** Hình học của bản vẽ đang mở — toạ độ thật, đọc trực tiếp từ plugin.
    *
    * Đây là một lượt QUÉT trên main thread của AutoCAD, không phải một endpoint

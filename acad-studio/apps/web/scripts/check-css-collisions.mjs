@@ -92,14 +92,35 @@ function unscopedClasses(css) {
   const found = new Map();
   for (const prelude of selectorsOf(css)) {
     for (const raw of splitTopLevel(prelude, ",")) {
-      const bare = raw
+      /* Thay `[...]` bằng một token KHÔNG có khoảng trắng trước khi tách tổ
+         tiên. Bóc hẳn nó đi (như bản trước) sẽ biến
+         `[data-screen="x"] .info` thành ` .info`, và một selector CÓ tổ tiên bị
+         đọc thành không có — đúng lỗi làm lọt `.info` qua guardrail này. */
+      const masked = raw
         .trim()
-        .replace(/\[[^\]]*\]/g, "")
-        .replace(/::?[A-Za-z-]+(\([^)]*\))?/g, "")
-        .trim();
+        .replace(/\[[^\]]*\]/g, "\u0000")
+        .replace(/::?[A-Za-z-]+(\([^)]*\))?/g, "");
+      const parts = masked.split(/\s*[>+~]\s*|\s+/).filter(Boolean);
+      /* Có tổ tiên hoặc anh em → không phải quy tắc không phạm vi. */
+      if (parts.length !== 1) continue;
+      const bare = parts[0].replace(/\u0000/g, "").trim();
       const match = /^\.([A-Za-z0-9_-]+)$/.exec(bare);
       if (match && !found.has(match[1])) found.set(match[1], raw.trim());
     }
+  }
+  return found;
+}
+
+/** MỌI tên class được nhắc tới trong CSS, kể cả trong selector ghép.
+ *
+ * Cần nó vì phép so hai chiều là ASYMMETRIC: một quy tắc design-system viết
+ * `.info { … }` sẽ trúng MỌI phần tử mang class đó, kể cả phần tử mà legacy chỉ
+ * nhắm bằng selector ghép như `.lisp-library-notice.info`. So "class đơn với
+ * class đơn" bỏ lọt đúng trường hợp đó — và đã bỏ lọt thật một lần. */
+function allClasses(css) {
+  const found = new Set();
+  for (const prelude of selectorsOf(css)) {
+    for (const m of prelude.matchAll(/\.([A-Za-z0-9_-]+)/g)) found.add(m[1]);
   }
   return found;
 }
@@ -141,6 +162,20 @@ assert.equal(
     clashes.join("\n"),
 );
 
+/* Chiều thứ hai: quy tắc design-system KHÔNG có phạm vi sẽ trúng cả phần tử
+   legacy mang class đó, dù legacy nhắm nó bằng selector ghép. */
+const legacyAll = allClasses(legacy);
+const bleeding = [...designClasses.keys()]
+  .filter((name) => legacyAll.has(name) && !legacyClasses.has(name))
+  .map((name) => `  .${name}  (design: ${designClasses.get(name)})`);
+assert.equal(
+  bleeding.length,
+  0,
+  "quy tắc design-system không có phạm vi sẽ trúng phần tử LEGACY mang cùng class:\n" +
+    bleeding.join("\n") +
+    "\n  Bọc quy tắc trong [data-screen=\"…\"], hoặc đổi tên phía legacy.",
+);
+
 const propClashes = [...customProps(legacy)].filter((p) => customProps(design).has(p));
 assert.equal(
   propClashes.length,
@@ -149,5 +184,6 @@ assert.equal(
 );
 
 console.log(
-  `✓ css collisions: 0 class + 0 token va chạm (legacy ${legacyClasses.size} class đơn, design ${designClasses.size})`,
+  `✓ css collisions: 0 class + 0 rò rỉ sang legacy + 0 token va chạm ` +
+    `(legacy ${legacyClasses.size} class đơn / ${legacyAll.size} tổng, design ${designClasses.size})`,
 );

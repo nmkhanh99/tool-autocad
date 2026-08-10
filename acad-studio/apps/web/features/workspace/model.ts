@@ -804,6 +804,19 @@ export function layersOf(
  * `null` khi đợt đọc thiếu `instance` — plugin bản cũ không phát trường này, và
  * đoán bừa một guard là cách chắc chắn nhất để chọn nhầm.
  */
+/** Đích của một thao tác ghi: **đường dẫn tệp, hoặc tiêu đề nếu chưa lưu**.
+ *
+ * Bản vẽ chưa từng lưu không có đường dẫn. Gửi đích rỗng thì daemon tự phân
+ * giải sang bản vẽ ĐANG HOẠT ĐỘNG — có thể là một bản vẽ khác hẳn nếu người
+ * dùng chuyển tab AutoCAD sau khi trang đã tải. Đúng thứ tự `file || title` mà
+ * daemon dùng. */
+export function operationTarget(payload: GeometryResponse | null): string {
+  const doc = payload?.document;
+  const file = typeof doc?.file === "string" ? doc.file.trim() : "";
+  if (file) return file;
+  return typeof doc?.title === "string" ? doc.title.trim() : "";
+}
+
 export function catalogGuardOf(
   payload: GeometryResponse | null,
 ): { instance: string; revision: number } | null {
