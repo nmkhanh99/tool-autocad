@@ -82,10 +82,19 @@ Vài mã của daemon mang **tham số** (`review_required:stale`,
 - `state: "sent"` **không** phải "đã nạp xong" — máy chủ chỉ chờ AutoCAD trong
   15 giây. Thông báo nói đúng điều đó thay vì báo thành công.
 - 10 bất biến mới ở `test-contract.mjs`; test 43 → **47**.
-- **Chưa kiểm được bằng mắt.** Extension Chrome kẹt từ lượt trước và không hồi
-  phục kể cả sau khi đóng hết tab, tạo group mới, đổi host — mọi tab báo "error
-  page" trong khi dev server vẫn trả 200 qua `curl`. Bù bằng test cho phần dễ
-  sai nhất (giải mã lỗi) và bằng bất biến cho phần câu chữ.
+- **Đã kiểm bằng mắt** (bổ sung sau khi gỡ được sự cố Chrome, xem mục dưới):
+  hộp nạp hiện đủ ba cảnh báo và câu "không bản vẽ nào bị ghi"; guardstrip cho
+  dấu **đạt/không đạt thật** trên `loadable` và `reviewStatus`, hàng phụ thuộc
+  để nét đứt; tài nguyên `stale` bị chặn kèm lý do, tài nguyên đã duyệt nạp
+  trọn vòng. Hộp thư mục gốc: chặn `~`, thêm tay (đếm 2 → 3, nhãn tự lấy tên
+  thư mục), lấy support path từ AutoCAD (đếm → 4, báo "bỏ qua 2 đường dẫn").
+  Kiểm lại `/library/blocks` sau khi sửa `ConfirmSheet`: chế độ `immediate`
+  không hồi quy.
+
+- **Sự cố Chrome hoá ra không phải lỗi extension.** Có **hai** Chrome cùng kết
+  nối, nên lệnh tự động đi vào cửa sổ khác với cửa sổ đang mở — mọi thao tác
+  báo "error page" trong khi `curl` vẫn 200. Lần sau gặp triệu chứng này, kiểm
+  số trình duyệt đang kết nối trước khi nghi ngờ dev server.
 
 ---
 
@@ -153,10 +162,9 @@ danh sách dùng `loading`. Khoá bằng hai bất biến.
   nào tên X" trong khi thật ra là chưa quét tới.
 - 6 bất biến mới ở `test-contract.mjs`; `nav.ts` đánh dấu `/library/lisp` đã dựng.
 - **Kiểm bằng mắt:** danh sách, bộ lọc, pane chi tiết của bản `.vlx` (không đọc
-  được source · không nạp được · 2 cảnh báo có nhãn) — đã xem trên Chrome. Phần
-  **bằng chứng duyệt** thêm sau đó **chưa xem lại được**: extension Chrome hỏng
-  giữa chừng (mọi tab mới báo "error page" trong khi dev server vẫn trả 200).
-  Phần logic quyết định hiển thị gì đã có test.
+  được source · không nạp được · 2 cảnh báo có nhãn). Phần **bằng chứng duyệt**
+  đã xem lại sau đó: "Phạm vi đã đọc lúc duyệt: Đọc toàn bộ source" và cảnh báo
+  **"File đã đổi sau khi duyệt"** kèm hash lúc duyệt so với hash hiện tại.
 
 ---
 
