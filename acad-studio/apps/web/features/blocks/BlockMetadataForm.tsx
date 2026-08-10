@@ -13,11 +13,13 @@
  */
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "../../components/ui/Button";
+import { sourceUsableForInsert } from "./sources";
 import {
   TECHNICAL_NAME_PATTERN,
   validateBlockDraft,
   type BlockDefinition,
   type BlockSpace,
+  type LibrarySource,
 } from "./model";
 
 const SPACES: Array<{ value: BlockSpace; label: string }> = [
@@ -44,7 +46,7 @@ type Draft = Pick<
   BlockDefinition,
   | "technicalName" | "displayName" | "description"
   | "defaultLayer" | "units" | "category" | "tags" | "allowedSpaces"
->;
+> & { sourceId: string };
 
 const editableOf = (block: BlockDefinition): Draft => ({
   technicalName: block.technicalName,
@@ -55,10 +57,16 @@ const editableOf = (block: BlockDefinition): Draft => ({
   category: block.category,
   tags: block.tags,
   allowedSpaces: block.allowedSpaces,
+  /* `sourceId` là optional ở `BlockDefinition` nhưng bản nháp giữ nó là chuỗi:
+     `undefined` và `""` phải là MỘT trạng thái, không thì bỏ chọn nguồn rồi
+     chọn lại đúng nguồn cũ sẽ thành "có thay đổi" vĩnh viễn. */
+  sourceId: block.sourceId || "",
 });
 
-export function BlockMetadataForm({ block, revision, saved, busy, onSave, onCancel }: {
+export function BlockMetadataForm({ block, sources, revision, saved, busy, onSave, onCancel }: {
   block: BlockDefinition;
+  /** Nguồn thư viện để gán cho định nghĩa này. */
+  sources: LibrarySource[];
   /** Revision của danh mục ở lần đọc gần nhất. */
   revision: string;
   /** Bản máy chủ VỪA GHI kèm revision mới, lấy thẳng từ phản hồi `PUT`. Đổi
@@ -94,7 +102,25 @@ export function BlockMetadataForm({ block, revision, saved, busy, onSave, onCanc
      `dirty` và validate chạy đúng; nguyên văn chỉ được chuẩn hoá khi rời ô. */
   const [tagsText, setTagsText] = useState(block.tags.join(", "));
 
-  const merged: BlockDefinition = { ...block, ...draft };
+  const { sourceId, ...editable } = draft;
+  /* Bỏ hẳn `sourceId` khi rỗng thay vì gửi chuỗi rỗng: máy chủ kiểm
+     `catalog.blocks.sourceId` phải trỏ tới một nguồn có thật, và chuỗi rỗng
+     không phải là một id hợp lệ.
+
+     Và phải bỏ luôn `sourcePath`. `linkedDwgSource()` cố ý QUAY VỀ `sourcePath`
+     khi không có `sourceId` — nên chỉ gỡ `sourceId` thì block vẫn còn liên kết
+     và vẫn nhập được từ file DWG cũ, trong khi form hiện "không gán nguồn".
+     Giao diện nói một đằng, máy chủ làm một nẻo. */
+  const merged: BlockDefinition = sourceId
+    ? { ...block, ...editable, sourceId }
+    : (() => {
+        const { sourceId: _id, sourcePath: _path, ...rest } = block;
+        return { ...rest, ...editable };
+      })();
+  /** Block đang liên kết kiểu cũ: trỏ thẳng tới một file, không qua nguồn nào. */
+  const legacyPath = !draft.sourceId && typeof block.sourcePath === "string"
+    ? block.sourcePath.trim()
+    : "";
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
   /* Các effect bên dưới cần đọc trạng thái mới nhất mà KHÔNG được phụ thuộc vào
      `draft` — phụ thuộc thì chúng chạy lại theo từng phím gõ. */
@@ -267,6 +293,40 @@ export function BlockMetadataForm({ block, revision, saved, busy, onSave, onCanc
             </label>
           ))}
         </div>
+      </div>
+
+      <div className="field">
+        <label htmlFor={`${fieldId}-source`}>Nguồn DWG</label>
+        <select
+          id={`${fieldId}-source`}
+          className="select"
+          value={draft.sourceId}
+          onChange={(event) => set("sourceId", event.target.value)}
+        >
+          <option value="">— không gán nguồn —</option>
+          {sources.map((source) => (
+            <option key={source.id} value={source.id} disabled={!sourceUsableForInsert(source)}>
+              {source.displayName}
+              {sourceUsableForInsert(source) ? "" : " (không chèn được)"}
+            </option>
+          ))}
+        </select>
+        <span className="hint">
+          Chỉ dùng khi <strong>chèn vào bản vẽ chưa có định nghĩa này</strong> —
+          máy chủ lấy hình từ file DWG đó. Không gán thì lệnh chèn sẽ hỏng ở đúng
+          trường hợp ấy.
+        </span>
+        {legacyPath ? (
+          <div className="callout" data-kind="warn">
+            <span className="lbl">Định nghĩa này vẫn còn trỏ thẳng tới một file</span>
+            <p>
+              <span className="mono">{legacyPath}</span> — liên kết kiểu cũ, không
+              qua nguồn nào. Máy chủ vẫn nhập từ file đó khi chèn, tuy ô trên ghi
+              “không gán nguồn”. Bấm <strong>Lưu metadata</strong> để gỡ hẳn, hoặc
+              chọn một nguồn để thay thế.
+            </p>
+          </div>
+        ) : null}
       </div>
 
       {invalid && dirty ? (

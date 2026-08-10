@@ -8,6 +8,11 @@ import { createHash } from "node:crypto";
 
 const PORT = 8899;
 
+let sources = [
+  { id: "s1", kind: "dwg", displayName: "Thư viện dự án", path: "/Data/Acad-Library/van.dwg" },
+  { id: "s2", kind: "xtp", displayName: "Bảng công cụ cũ", path: "/Data/palette.xtp" },
+];
+
 let blocks = [
   {
     id: "b1", technicalName: "VAN_CONG_DN80", displayName: "Van cổng DN80",
@@ -27,7 +32,7 @@ let blocks = [
 ];
 
 const revision = () =>
-  createHash("sha256").update(JSON.stringify(blocks)).digest("hex");
+  createHash("sha256").update(JSON.stringify({ blocks, sources })).digest("hex");
 
 const send = (res, code, body) => {
   res.writeHead(code, {
@@ -57,14 +62,42 @@ createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Access-Control-Allow-Origin": "*" });
     return res.write(": stub\n\n");
   }
-  if (path === "/api/acad/blocks/sources") {
-    return send(res, 200, {
-      ok: true, revision: revision(),
-      sources: [{ id: "s1", kind: "dwg", displayName: "Thư viện dự án", path: "~/Acad-Library/blocks" }],
+  if (path === "/api/acad/blocks/sources" && req.method === "GET") {
+    return send(res, 200, { ok: true, revision: revision(), sources });
+  }
+  if (path === "/api/acad/blocks/sources" && req.method === "POST") {
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    return req.on("end", () => {
+      const body = JSON.parse(raw || "{}");
+      if (body.expectedRevision !== revision()) {
+        return send(res, 409, { ok: false, error: "Block library đã thay đổi; hãy tải lại trước khi lưu." });
+      }
+      sources = [...sources, { id: `s${sources.length + 1}`, ...body.source }];
+      return send(res, 201, { ok: true, revision: revision(), blocks, sources });
+    });
+  }
+  if (path === "/api/acad/blocks/create" && req.method === "POST") {
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    return req.on("end", () => {
+      const body = JSON.parse(raw || "{}");
+      if (body.expectedRevision !== revision()) {
+        return send(res, 409, { ok: false, error: "Thư viện đã thay đổi; hãy tải lại trước khi tạo block." });
+      }
+      if (process.env.NO_SELECTION === "1") {
+        return send(res, 400, { ok: false, error: "Hãy chọn hình/ATTDEF trong AutoCAD trước khi bấm Tạo block." });
+      }
+      const created = { ...body.block, id: `b${blocks.length + 1}`, syncStatus: "synced" };
+      blocks = [...blocks, created];
+      return send(res, 201, {
+        ok: true, revision: revision(), blocks, sources, block: created,
+        hint: "stub: coi như đã tạo định nghĩa từ bộ chọn.",
+      });
     });
   }
   if (path === "/api/acad/blocks" && req.method === "GET") {
-    return send(res, 200, { ok: true, revision: revision(), blocks, sources: [] });
+    return send(res, 200, { ok: true, revision: revision(), blocks, sources });
   }
 
   // POST /api/acad/blocks/insert — không làm gì thật, chỉ để nơi gọi tải lại danh mục
@@ -97,7 +130,7 @@ createServer((req, res) => {
       const changed = JSON.stringify({ ...previous, syncStatus: 0 }) !== JSON.stringify({ ...next, syncStatus: 0 });
       if (previous.syncStatus === "synced" && changed) next.syncStatus = "outdated";
       blocks = blocks.map((b, i) => (i === index ? next : b));
-      return send(res, 200, { ok: true, revision: revision(), blocks, sources: [] });
+      return send(res, 200, { ok: true, revision: revision(), blocks, sources });
     });
   }
 

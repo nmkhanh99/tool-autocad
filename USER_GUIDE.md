@@ -142,8 +142,44 @@ không có hộp xác nhận: sửa sai thì sửa lại.
   nhật".** Đúng như vậy: bản vẽ vẫn giữ thông tin cũ. Thông báo sẽ nhắc bạn chạy
   **Đồng bộ metadata** để ghi bản mới xuống bản vẽ.
 
-**Vẫn còn ở màn hình cũ:** tạo block từ bộ chọn và quản lý thư mục nguồn. Nút
-**Mở màn hình cũ để sửa** mở thẳng thư viện ở màn hình cũ.
+#### Tạo từ bộ chọn
+
+Lệnh ghi **duy nhất lấy đi thứ đang có trên bản vẽ**. AutoCAD gom các đối tượng
+bạn đang chọn thành một định nghĩa block rồi **xoá chúng khỏi bản vẽ** — đó là
+hành vi của lệnh `-BLOCK`, không phải lựa chọn của app. Gõ `OOPS` trong AutoCAD
+ngay sau đó nếu cần lấy lại.
+
+Ba điều phải tự lo trước khi bấm, app **không kiểm hộ được**:
+
+1. **Chọn đối tượng trong AutoCAD trước.** App không tạo được bộ chọn thay bạn;
+   máy chủ từ chối nếu bộ chọn rỗng.
+2. **Bản vẽ đích phải đang hoạt động.**
+3. **Sau khi bấm, chuyển sang AutoCAD để chỉ điểm chèn.** Chờ tối đa 2 phút.
+
+App chặn trước hai thứ nó biết chắc: tên kỹ thuật sai định dạng, và tên đã có
+trong thư viện (không phân biệt hoa thường). Còn nếu **bản vẽ** đã có block cùng
+tên thì máy chủ mới từ chối — kể cả khi thư viện chưa có.
+
+Chỉ tạo được **block tĩnh**. Block động phải dựng trong Block Editor.
+
+#### Nguồn thư viện
+
+Mở bằng nút **Nguồn thư viện** ở góc trên.
+
+**Thêm nguồn không quét gì cả.** Máy chủ chỉ ghi đường dẫn vào danh mục — không
+định nghĩa nào được tìm thấy hay nhập vào. Một nguồn chỉ có tác dụng khi bạn
+**gán nó cho một định nghĩa** ở ô *Nguồn DWG* trong phần sửa metadata; khi đó,
+chèn định nghĩa ấy vào một bản vẽ **chưa có nó** sẽ lấy hình từ file này.
+
+- Nguồn là **một file `.dwg`**, không phải thư mục. Loại `xtp`/`image` ghi được
+  nhưng không chèn được, và danh sách nói rõ điều đó.
+- **Không dùng `~`** — máy chủ không nở dấu ngã. Viết đường dẫn tuyệt đối.
+- Đường dẫn không được kiểm lúc lưu; viết sai chỉ lộ ra khi chèn.
+- **Không xoá được nguồn**, cũng không xoá được định nghĩa — backend chưa có
+  đường đó, ở cả màn hình mới lẫn màn hình cũ.
+
+**Vẫn còn ở màn hình cũ:** quét bản vẽ đang mở để đưa định nghĩa của nó vào danh
+mục. Nút **Mở màn hình cũ để sửa** mở thẳng thư viện ở màn hình cũ.
 
 ### Các màn hình còn lại
 

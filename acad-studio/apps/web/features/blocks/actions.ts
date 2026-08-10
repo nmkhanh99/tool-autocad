@@ -26,7 +26,7 @@ export async function runBlockAction(
   base: string,
   action: "insert" | "sync",
   input: { blockId: string; target: string; expectedRevision: string },
-): Promise<BlockActionResult> {
+): Promise<BlockActionResult & { revision?: string }> {
   try {
     const body = await daemonRecord(await fetch(endpoints.blockAction(base, action), {
       method: "POST",
@@ -42,7 +42,62 @@ export async function runBlockAction(
       : action === "insert"
         ? "Đã bắt đầu chèn trong AutoCAD — chuyển sang cửa sổ AutoCAD để chỉ điểm chèn."
         : "Đã ghi metadata lên định nghĩa block trong bản vẽ.";
-    return { ok: true, hint };
+    /* Cả `insert` lẫn `sync` đều `saveBlockLibraryCatalog(...)`, tức revision
+       của danh mục ĐỔI. Không trả nó về thì màn hình còn giữ revision cũ tới khi
+       tải lại xong, và lệnh ghi kế tiếp trong quãng đó ăn 409 oan. */
+    return {
+      ok: true,
+      hint,
+      ...(typeof body.revision === "string" ? { revision: body.revision } : {}),
+    };
+  } catch (failure) {
+    return { ok: false, error: daemonFailureText(failure) };
+  }
+}
+
+/** Tạo một định nghĩa mới từ bộ chọn đang có trong AutoCAD.
+ *
+ * ⚠️ Lệnh ghi **nặng nhất** trong màn hình này, và là lệnh duy nhất **lấy đi**
+ * thứ đang có trên bản vẽ. `buildCreateBlockLisp` chạy `-BLOCK`, lệnh này gom
+ * các đối tượng đang chọn thành định nghĩa rồi **xoá chúng khỏi bản vẽ**. Không
+ * có bước chuẩn bị, không đi qua hàng chờ, và app không hoàn tác được.
+ *
+ * Bốn điều kiện máy chủ bắt buộc, đều chỉ biết được ở phía AutoCAD:
+ *
+ *  · phải có **bộ chọn** — LISP đọc `(ssgetfirst)`; rỗng thì `selection_required`;
+ *  · bản vẽ đích phải đang **active**;
+ *  · không gian hiện tại phải nằm trong `allowedSpaces` (`space_not_allowed`);
+ *  · bản vẽ chưa được có sẵn tên block đó (`block_name_exists`).
+ *
+ * Rồi AutoCAD **hỏi điểm chèn** (`getpoint`) — người dùng phải chuyển sang
+ * AutoCAD để chỉ, giới hạn 2 phút như lệnh `insert`.
+ *
+ * Chỉ tạo được block **tĩnh**: `buildCreateBlockLisp` ném lỗi với block động
+ * ("phải author trong Block Editor").
+ */
+export async function createBlockFromSelection(
+  base: string,
+  block: BlockDefinition,
+  expectedRevision: string,
+): Promise<BlockActionResult & { createdId?: string; revision?: string }> {
+  const invalid = validateBlockDraft(block);
+  if (invalid) return { ok: false, error: invalid };
+  try {
+    // `id` do máy chủ sinh — gửi id rỗng lên sẽ trượt kiểm `idValue`.
+    const { id: _id, ...payload } = block;
+    const body = await daemonRecord(await fetch(endpoints.blockCreate(base), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ block: payload, expectedRevision }),
+    }));
+    const created = normalizeBlock(body.block);
+    return {
+      ok: true,
+      hint: typeof body.hint === "string" ? body.hint : "Đã tạo định nghĩa block từ bộ chọn.",
+      ...(created ? { createdId: created.id } : {}),
+      // Revision mới, để nơi gọi dùng ngay thay vì đợi danh mục tải lại xong.
+      ...(typeof body.revision === "string" ? { revision: body.revision } : {}),
+    };
   } catch (failure) {
     return { ok: false, error: daemonFailureText(failure) };
   }

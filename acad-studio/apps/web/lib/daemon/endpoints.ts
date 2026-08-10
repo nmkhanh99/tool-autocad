@@ -52,4 +52,7 @@ export const endpoints = {
   /** Sửa metadata một định nghĩa. Ghi vào THƯ VIỆN, không vào bản vẽ. */
   block: (base: string, id: string) =>
     `${trim(base)}/api/acad/blocks/${encodeURIComponent(id)}`,
+  /** Tạo định nghĩa từ bộ chọn đang có trong AutoCAD. Ghi vào CẢ HAI: chạy
+   * `-BLOCK` trên bản vẽ rồi lưu định nghĩa vào thư viện. */
+  blockCreate: (base: string) => `${trim(base)}/api/acad/blocks/create`,
 } as const;

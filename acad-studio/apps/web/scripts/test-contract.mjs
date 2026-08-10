@@ -340,8 +340,29 @@ assert.match(
  * lúc dễ hỏng nhất vừa là lúc có nhiều thứ để mất nhất. */
 assert.doesNotMatch(
   stripComments(sourceAt("blocks/useBlockLibrary.ts")),
-  /catch[\s\S]{0,160}?setBlocks\(\[\]\)/,
+  /catch[\s\S]{0,200}?set(Blocks|Sources)\(\[\]\)/,
   "đọc danh mục hỏng thì không được xoá bản đang hiển thị",
+);
+/* Lượt đọc về muộn không được đè lên trạng thái mới hơn. Hai lệnh ghi liên tiếp
+ * là đủ: reload của lệnh đầu có thể về SAU echo của lệnh sau, ghi đè revision
+ * mới bằng revision cũ, và lệnh kế tiếp ăn 409 dù không ai sửa gì. */
+assert.match(
+  stripComments(sourceAt("blocks/useBlockLibrary.ts")),
+  /const ticket = \+\+sequence\.current/,
+  "mỗi lượt đọc danh mục phải mang số thứ tự",
+);
+assert.match(
+  stripComments(sourceAt("blocks/useBlockLibrary.ts")),
+  /applyServerEcho[\s\S]{0,200}?sequence\.current\+\+/,
+  "nhận echo phải vô hiệu hoá mọi lượt đọc đang bay",
+);
+/* Gỡ nguồn phải gỡ CẢ `sourcePath`: `linkedDwgSource()` quay về `sourcePath` khi
+ * không có `sourceId`, nên bỏ mỗi id thì block vẫn còn liên kết trong khi form
+ * ghi "không gán nguồn". */
+assert.match(
+  stripComments(sourceAt("blocks/BlockMetadataForm.tsx")),
+  /sourceId: _id, sourcePath: _path/,
+  "gỡ nguồn phải gỡ cả liên kết sourcePath kiểu cũ",
 );
 /* Block đang chọn phải tra trong TOÀN danh mục. Chính lượt lưu đẩy nó từ
  * `synced` sang `outdated`, nên tra trong danh sách đã lọc nghĩa là bật bộ lọc
@@ -350,6 +371,69 @@ assert.match(
   stripComments(sourceAt("blocks/page.tsx")),
   /const selected = library\.blocks\.find/,
   "block đang chọn tra trong toàn danh mục, không phải danh sách đã lọc",
+);
+
+/* `-BLOCK` LẤY ĐI thứ đang có: nó gom các đối tượng đang chọn thành định nghĩa
+ * rồi xoá chúng khỏi bản vẽ. Đây là lệnh ghi duy nhất trong app có tính chất đó,
+ * và người dùng phải biết trước khi bấm, không phải sau. */
+assert.match(
+  sourceAt("blocks/CreateBlockDialog.tsx"),
+  /xoá khỏi bản vẽ/,
+  "hộp tạo block phải nói rõ đối tượng đang chọn bị xoá khỏi bản vẽ",
+);
+assert.match(
+  sourceAt("blocks/CreateBlockDialog.tsx"),
+  /OOPS/,
+  "phải chỉ đường lấy lại đối tượng đã bị -BLOCK nuốt",
+);
+/* Guardstrip ở đây liệt kê ĐIỀU KIỆN app không kiểm được. Đánh dấu pass/fail sẽ
+ * bịa ra một phép kiểm không tồn tại — chỉ `pending` là đúng sự thật. */
+assert.doesNotMatch(
+  stripComments(sourceAt("blocks/CreateBlockDialog.tsx")),
+  /data-pass="(true|false)"/,
+  "không được vẽ dấu tick/chéo cho điều kiện mà app không kiểm được",
+);
+/* Nguồn thư viện: bộ mẫu gọi là "thư mục" và có nút "quét lại nguồn". Backend
+ * không quét gì cả — `POST /blocks/sources` chỉ ghi đường dẫn, và
+ * `POST /blocks/scan` quét BẢN VẼ ĐANG MỞ chứ không quét nguồn. */
+assert.match(
+  sourceAt("blocks/SourcesDialog.tsx"),
+  /Thêm nguồn không quét gì cả/,
+  "màn nguồn phải nói rõ thêm nguồn không quét gì",
+);
+assert.doesNotMatch(
+  stripComments(sourceAt("blocks/SourcesDialog.tsx")),
+  /thư mục nguồn|Quét lại nguồn/,
+  "không được mô tả nguồn là thư mục được quét",
+);
+/* Lệnh ghi phải nhận revision mới NGAY từ phản hồi, không đợi `reload()`. Đợi
+ * nghĩa là cú bấm thứ hai trong quãng đó gửi `expectedRevision` cũ và ăn 409 —
+ * một xung đột hoàn toàn tự gây ra, không có ai sửa thư viện cả. */
+assert.match(
+  stripComments(sourceAt("blocks/page.tsx")),
+  /applyServerEcho\(\{ revision: result\.revision, sources: result\.sources \}\)/,
+  "thêm nguồn phải áp revision mới ngay, không đợi tải lại",
+);
+assert.match(
+  stripComments(sourceAt("blocks/page.tsx")),
+  /if \(result\.revision\) library\.applyServerEcho/,
+  "tạo block phải áp revision mới ngay, không đợi tải lại",
+);
+/* BỐN lệnh ghi vào danh mục: insert, sync, lưu metadata, thêm nguồn, tạo block —
+ * `insert`/`sync` dùng chung một call site. Thiếu chỗ nào là chỗ đó để lại
+ * revision cũ và làm lệnh ghi kế tiếp ăn 409 oan. */
+assert.equal(
+  stripComments(sourceAt("blocks/page.tsx")).match(/applyServerEcho/g)?.length,
+  4,
+  "mọi lệnh ghi vào danh mục đều phải áp revision từ phản hồi",
+);
+
+/* Chỉ xoá trắng form khi máy chủ đã ghi. Hỏng hay gặp nhất là 409, và bắt gõ lại
+ * một đường dẫn tuyệt đối dài chỉ vì phải tải lại là mất công vô cớ. */
+assert.match(
+  stripComments(sourceAt("blocks/SourcesDialog.tsx")),
+  /if \(!added\) return;/,
+  "form nguồn chỉ được xoá trắng sau khi thêm thành công",
 );
 assert.match(
   sourceAt("blocks/page.tsx"),

@@ -15,9 +15,12 @@ export type BlockType = "static" | "dynamic";
 export type BlockSpace = "model" | "layout";
 export type SyncStatus = "local_only" | "cad_only" | "synced" | "outdated" | "conflict";
 
+/** Chỉ `dwg` mở khoá được đường chèn — xem `features/blocks/sources.ts`. */
+export type LibrarySourceKind = "dwg" | "xtp" | "image";
+
 export type LibrarySource = {
   id: string;
-  kind: "dwg" | "xtp" | "image";
+  kind: LibrarySourceKind;
   displayName: string;
   path: string;
 };

@@ -16,11 +16,17 @@
  *
  * Ô tích xác nhận là bắt buộc và cố ý gây ma sát: một lệnh không hoàn tác được
  * không nên chỉ cách một cú bấm nhầm.
+ *
+ * Nằm ở `components/ui/` chứ không ở `features/staged-ops/`, cùng lý do với
+ * `WriteButton`: **mọi** màn hình có lệnh ghi đều cần nó, kể cả những lệnh một
+ * pha không hề đi qua hàng chờ. Để nó trong một feature nghĩa là feature khác
+ * phải import chéo feature — hoặc tệ hơn, tự viết lại ba cảnh báo này và viết
+ * lệch đi.
  */
 import { useState, type ReactNode } from "react";
-import { Modal } from "../../components/ui/Modal";
-import { Button } from "../../components/ui/Button";
-import { WriteButton } from "../../components/ui/WriteButton";
+import { Modal } from "./Modal";
+import { Button } from "./Button";
+import { WriteButton } from "./WriteButton";
 
 export type ConfirmMode =
   /** Máy chủ đã chuẩn bị sẵn thao tác; xác nhận là ghi bản đã xem. */
@@ -35,6 +41,7 @@ export function ConfirmSheet({
   summary,
   confirmLabel = "Xác nhận & ghi",
   busy = false,
+  blocked = "",
   onConfirm,
   onCancel,
   children,
@@ -47,6 +54,10 @@ export function ConfirmSheet({
   summary: string;
   confirmLabel?: string;
   busy?: boolean;
+  /** Lý do chưa ghi được, khi hộp thoại có form bên trong. Rỗng = ghi được.
+   * Nó là *lý do*, không phải cờ boolean: một nút ghi bị khoá mà không nói vì
+   * sao là một ngõ cụt. */
+  blocked?: string;
   onConfirm: () => void;
   onCancel: () => void;
   children?: ReactNode;
@@ -71,7 +82,8 @@ export function ConfirmSheet({
           <Button onClick={onCancel} disabled={busy}>Bỏ qua</Button>
           <WriteButton
             variant="primary"
-            disabled={!acked || busy}
+            disabled={!acked || busy || !!blocked}
+            title={blocked || undefined}
             onClick={onConfirm}
           >
             {busy ? "Đang ghi…" : confirmLabel}

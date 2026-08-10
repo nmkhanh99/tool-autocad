@@ -55,18 +55,26 @@ apps/web/
 ├── components/
 │   ├── shell/               khung dùng chung: Titlebar, Rail, Statusbar…
 │   └── ui/                  primitive: Button, Modal, Tag, GuardStrip,
-│                            WriteButton (+ AcadStateProvider)
+│                            WriteButton (+ AcadStateProvider), ConfirmSheet
 ├── features/                logic theo miền, KHÔNG import chéo nhau
 │   ├── acad-connection/     đọc trạng thái AutoCAD (polling + SSE bus)
 │   ├── assistant/           model tin nhắn chat
-│   ├── blocks/              model + useBlockLibrary + actions + form metadata
-│   └── staged-ops/          hàng chờ hai pha + ConfirmSheet
+│   ├── blocks/              model + hook đọc + actions + 3 form (metadata,
+│   │                        tạo từ bộ chọn, nguồn thư viện)
+│   └── staged-ops/          hàng chờ hai pha
 ├── lib/                     hạ tầng dùng chung, không thuộc feature nào
 │   ├── acadState.ts         kiểu + nhãn + canWrite của trạng thái AutoCAD
 │   ├── daemon/              client, endpoints (nguồn duy nhất của URL), docs
 │   └── storage.ts
 └── scripts/                 guardrail + test hợp đồng
 ```
+
+**Vì sao `ConfirmSheet` ở `components/ui/` chứ không ở `features/staged-ops/`:**
+mọi màn hình có lệnh ghi đều cần nó, kể cả những lệnh **một pha** không hề đi qua
+hàng chờ (`/blocks/insert`, `/blocks/sync`, `/blocks/create`). Để nó trong một
+feature nghĩa là feature khác phải import chéo feature — hoặc tệ hơn, tự viết lại
+ba cảnh báo bắt buộc và viết lệch đi. `check-import-boundaries.mjs` chặn vế thứ
+nhất; vế thứ hai thì không script nào bắt được, nên phải giải quyết bằng vị trí.
 
 **Vì sao `lib/acadState.ts` tách khỏi `features/acad-connection`:** `ConfirmSheet`
 (ở `features/staged-ops`) cần `WriteButton`, mà `WriteButton` cần trạng thái kết

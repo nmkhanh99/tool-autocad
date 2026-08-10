@@ -160,11 +160,16 @@ biết "đã sửa gì chưa". Ghi lại để phiên sau đừng làm lại t�
 Cùng bộ ràng buộc này sẽ lặp lại ở form **tạo block từ bộ chọn** và các form ở
 `/library/lisp`, `/standards`, `/settings`.
 
+**Xong tiếp (2026-08-10):** **tạo block từ bộ chọn** (`POST /blocks/create`,
+dựng trong `ConfirmSheet` vì nó xoá đối tượng khỏi bản vẽ) và **nguồn thư viện**
+(`POST /blocks/sources` + ô `sourceId` trong form metadata). `ConfirmSheet`
+chuyển sang `components/ui/` — hạ tầng dùng chung, không thuộc `staged-ops`.
+
 **Còn lại:**
 
-- Phần ghi còn thiếu của thư viện block: **tạo từ bộ chọn**
-  (`POST /blocks/create`) và **quản lý thư mục nguồn** (`POST /blocks/sources`,
-  `POST /blocks/scan`). Hiện vẫn ở màn hình cũ và trang mới nói rõ.
+- `POST /blocks/scan` — quét **bản vẽ đang mở** để đưa định nghĩa của nó vào danh
+  mục. Vẫn ở màn hình cũ. Lưu ý khi dựng: nhãn "Quét lại nguồn" của bộ mẫu **mô
+  tả sai** — endpoint này không đụng tới thư mục nguồn.
 - `/library/lisp`: gom hai nơi về một (`LispLibraryPanel` + card duyệt trong
   chat), `.countdown` 2 phút thật, guardstrip điều kiện duyệt, hiện rõ
   `analysisCoverage`. **Giữ nguyên `askAgent()`** — budget 180 KB, cắt đôi 12
@@ -240,6 +245,19 @@ rồi khởi động lại AutoCAD.
   và gắn banner "bản dựng thử" cấp route, không tắt được. Điều kiện thoát: chỉ
   gỡ banner khi có endpoint thật. **Không refactor** — refactor làm chúng trông
   đã hoàn thiện, đúng thứ nguy hiểm nhất: người dùng tin vào con số bịa.
+- **Nghi vấn ở `buildCreateBlockLisp` — chưa xác minh, chưa sửa.** Sau khi chạy
+  `-BLOCK` (lệnh này **xoá** các đối tượng đã chọn), LISP làm
+  `(setq acadlib:ref (entlast))` rồi `CHPROP` đối tượng đó sang layer mặc định
+  của block. Nhưng `-BLOCK` không chèn thể hiện nào, nên `entlast` khả năng cao
+  **không** phải block vừa tạo mà là một đối tượng bất kỳ — tức có thể âm thầm
+  đổi layer của một hình không liên quan. Đã thử dò trên AutoCAD thật nhưng job
+  LISP lỗi giữa chừng và không trả kết quả, nên **chưa kết luận được**. Không sửa
+  trong giai đoạn UI này; cần một lượt kiểm riêng trên bản vẽ nháp.
+  File: `apps/daemon/src/blockLibraryCad.ts`, quanh dòng 277-287.
+- **Job LISP lỗi giữa chừng làm kẹt `activeJob` 2 phút.** `acad:write-result`
+  không chạy thì daemon giữ `state:"sent"` tới khi `JOB_BUSY_MS` hết hạn, và mọi
+  lệnh ghi bị chặn trong quãng đó. Tự khỏi nên không nghiêm trọng, nhưng thông
+  điệp cho người dùng lúc ấy là "AutoCAD đang bận" — sai nguyên nhân.
 - **`globals.css` 3.500 dòng, 1.119 hex literal.** Xoá ở giai đoạn 10.
 - **32 đường dẫn API rải rác trong `app/page.tsx`.** Ranh giới "endpoint chỉ khai
   ở `lib/daemon/endpoints.ts`" hiện chỉ áp cho `components/` và `features/`.

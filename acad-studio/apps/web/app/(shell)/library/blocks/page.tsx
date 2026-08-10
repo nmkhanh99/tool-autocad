@@ -10,8 +10,12 @@
  * `ConfirmSheet`. Đánh đồng nó với một lệnh ghi vào bản vẽ sẽ làm loãng cảnh báo
  * ở đúng chỗ cảnh báo cần có trọng lượng.
  *
- * Chưa dựng lại ở đây: tạo block từ bộ chọn, quản lý thư mục nguồn. Trang nói
- * thẳng và có liên kết sang màn hình cũ, thay vì vẽ nút rồi để nó không làm gì.
+ * Tạo block từ bộ chọn cũng là lệnh ghi một pha, và là lệnh duy nhất **lấy đi**
+ * thứ đang có trên bản vẽ: `-BLOCK` gom các đối tượng đang chọn rồi xoá chúng.
+ *
+ * Nguồn thư viện ghi vào thư viện, không vào bản vẽ. Bộ mẫu gọi nó là "thư mục
+ * nguồn" và có nút "quét lại nguồn" — cả hai mô tả sai việc backend làm; xem
+ * `features/blocks/sources.ts`.
  *
  * Hai điểm bám theo bộ mẫu, cố ý:
  *
@@ -23,17 +27,26 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "../../../../components/shell/AppShell";
+import { Button } from "../../../../components/ui/Button";
 import { Tag } from "../../../../components/ui/Tag";
 import { WriteButton } from "../../../../components/ui/WriteButton";
 import { Icon } from "../../../../components/ui/icons";
-import { ConfirmSheet } from "../../../../features/staged-ops/ConfirmSheet";
-import { runBlockAction, saveBlockMetadata } from "../../../../features/blocks/actions";
+import { ConfirmSheet } from "../../../../components/ui/ConfirmSheet";
+import {
+  createBlockFromSelection,
+  runBlockAction,
+  saveBlockMetadata,
+} from "../../../../features/blocks/actions";
 import { BlockMetadataForm } from "../../../../features/blocks/BlockMetadataForm";
+import { CreateBlockDialog } from "../../../../features/blocks/CreateBlockDialog";
+import { SourcesDialog } from "../../../../features/blocks/SourcesDialog";
+import { addLibrarySource } from "../../../../features/blocks/sources";
 import { useBlockLibrary } from "../../../../features/blocks/useBlockLibrary";
 import {
   blockMatches,
   syncLabel,
   type BlockDefinition,
+  type LibrarySource,
   type SyncStatus,
 } from "../../../../features/blocks/model";
 import styles from "./blocks.module.css";
@@ -73,6 +86,12 @@ export default function BlocksLibraryPage() {
   /** Bản định nghĩa máy chủ vừa ghi, để form dội lại bản nháp theo đúng thứ đã
    * lưu — máy chủ chuẩn hoá đầu vào nên hai bên lệch nhau nếu không dội. */
   const [saved, setSaved] = useState<{ block: BlockDefinition; revision: string } | null>(null);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [sourceError, setSourceError] = useState("");
+  const [creating, setCreating] = useState(false);
+  /** Kết quả lượt tạo gần nhất. Không gắn với block nào nên không dùng `notice`
+   * — `notice` được lọc theo `blockId` của định nghĩa đang chọn. */
+  const [createResult, setCreateResult] = useState<{ ok: boolean; text: string } | null>(null);
   const library = useBlockLibrary(DAEMON_BASE);
 
   const shown = useMemo(() => {
@@ -95,9 +114,30 @@ export default function BlocksLibraryPage() {
       title="Thư viện block"
       sub={<>Định nghĩa block dùng chung · <span className="mono">/blocks · /blocks/sources</span></>}
       actions={
-        <Link className="btn" href="/?panel=blocks">Mở màn hình cũ để sửa</Link>
+        <>
+          <Button onClick={() => { setSourceError(""); setSourcesOpen(true); }}>
+            Nguồn thư viện
+          </Button>
+          <Button onClick={() => { setCreateResult(null); setCreating(true); }}>
+            Tạo từ bộ chọn
+          </Button>
+          <Link className="btn" href="/?panel=blocks">Mở màn hình cũ để sửa</Link>
+        </>
       }
     >
+      {createResult ? (
+        <div
+          className="callout"
+          data-kind={createResult.ok ? undefined : "stop"}
+          style={{ marginBottom: "var(--s3)" }}
+        >
+          <span className="lbl">
+            {createResult.ok ? "Tạo block từ bộ chọn" : "Không tạo được"}
+          </span>
+          <p>{createResult.text}</p>
+        </div>
+      ) : null}
+
       <div className="filterbar" data-od-id="blocks-filters">
         <div className="searchfield" style={{ width: 260 }}>
           <Icon name="search" />
@@ -194,6 +234,7 @@ export default function BlocksLibraryPage() {
           {selected ? (
             <BlockDetail
               block={selected}
+              sources={library.sources}
               revision={library.revision}
               saved={saved?.block.id === selected.id ? saved : null}
               notice={notice?.blockId === selected.id ? notice : null}
@@ -234,6 +275,11 @@ export default function BlocksLibraryPage() {
                        biệt được với một lần tải lại bất kỳ, mà những lần đó thì
                        không được đụng vào phần người dùng đang gõ dở. */
                     setSaved(result.saved ?? null);
+                    /* Áp cả cho hook, không chỉ cho form: form tự ghim revision
+                       của bản nháp, nhưng `library.revision` mới là thứ các lệnh
+                       ghi KHÁC dùng — mở hộp Nguồn ngay sau khi lưu mà chưa áp
+                       thì lượt thêm nguồn đó ăn 409 oan. */
+                    if (result.saved) library.applyServerEcho({ revision: result.saved.revision });
                   }
                   /* Tải lại kể cả khi HỎNG. Lỗi hay gặp nhất ở đây là 409 vì
                      người khác vừa sửa thư viện; không tải lại thì form ngồi mãi
@@ -250,6 +296,65 @@ export default function BlocksLibraryPage() {
           )}
         </aside>
       </div>
+
+      {creating ? (
+        <CreateBlockDialog
+          existingNames={library.blocks.map((block) => block.technicalName)}
+          busy={inFlight}
+          onCancel={() => setCreating(false)}
+          onCreate={(block) => {
+            /* Đóng hộp thoại NGAY: máy chủ chờ tới 2 phút để người dùng chỉ điểm
+               chèn TRONG AutoCAD, và giữ một hộp thoại chặn màn hình suốt quãng
+               đó là chắn đúng lúc người ta cần sang cửa sổ khác. Cùng lý do với
+               lệnh `insert`. */
+            setCreating(false);
+            setInFlight(true);
+            setCreateResult({
+              ok: true,
+              text: "Đã gửi lệnh. Chuyển sang AutoCAD để chỉ điểm chèn — lệnh chờ tối đa 2 phút.",
+            });
+            void createBlockFromSelection(DAEMON_BASE, block, library.revision).then((result) => {
+              setInFlight(false);
+              setCreateResult({ ok: result.ok, text: result.ok ? result.hint : result.error });
+              if (result.ok) {
+                // Cùng lý do như thêm nguồn: dùng revision của phản hồi ngay.
+                if (result.revision) library.applyServerEcho({ revision: result.revision });
+                if (result.createdId) setSelectedId(result.createdId);
+              }
+              library.reload();
+            });
+          }}
+        />
+      ) : null}
+
+      {sourcesOpen ? (
+        <SourcesDialog
+          sources={library.sources}
+          busy={inFlight}
+          error={sourceError}
+          onClose={() => setSourcesOpen(false)}
+          onAdd={(source) => {
+            setSourceError("");
+            setInFlight(true);
+            return addLibrarySource(DAEMON_BASE, source, library.revision).then((result) => {
+              setInFlight(false);
+              if (result.ok) {
+                /* Nhận revision mới NGAY từ phản hồi. Đợi `reload()` xong mới có
+                   nó nghĩa là cú bấm thứ hai trong quãng đó gửi revision cũ và
+                   ăn 409 — một xung đột hoàn toàn tự gây ra. */
+                library.applyServerEcho({ revision: result.revision, sources: result.sources });
+              } else {
+                setSourceError(result.error);
+              }
+              /* Tải lại dù thành công hay không — cùng lý do như lưu metadata:
+                 hỏng ở đây gần như luôn là 409, và không tải lại thì lần thêm
+                 sau vẫn mang revision cũ và hỏng y hệt. */
+              library.reload();
+              return result.ok;
+            });
+          }}
+        />
+      ) : null}
 
       {pending && selected ? (
         <ConfirmSheet
@@ -289,6 +394,10 @@ export default function BlocksLibraryPage() {
                 blockId: block.id,
                 text: result.ok ? result.hint : result.error,
               });
+              // `insert` và `sync` cũng ghi lại danh mục — revision đã đổi.
+              if (result.ok && result.revision) {
+                library.applyServerEcho({ revision: result.revision });
+              }
               setInFlight(false);
               if (result.ok) library.reload();
             });
@@ -315,8 +424,9 @@ export default function BlocksLibraryPage() {
   );
 }
 
-function BlockDetail({ block, revision, saved, notice, inFlight, onAction, onSaveMetadata }: {
+function BlockDetail({ block, sources, revision, saved, notice, inFlight, onAction, onSaveMetadata }: {
   block: BlockDefinition;
+  sources: LibrarySource[];
   revision: string;
   saved: { block: BlockDefinition; revision: string } | null;
   notice: Notice | null;
@@ -377,6 +487,7 @@ function BlockDetail({ block, revision, saved, notice, inFlight, onAction, onSav
       <BlockMetadataForm
         key={block.id}
         block={block}
+        sources={sources}
         revision={revision}
         saved={saved}
         busy={inFlight}
@@ -386,8 +497,11 @@ function BlockDetail({ block, revision, saved, notice, inFlight, onAction, onSav
 
       <div className="callout" style={{ marginTop: "auto" }}>
         <p className="hint">
-          Chưa dựng ở đây: tạo block từ bộ chọn, quản lý thư mục nguồn.{" "}
+          Chưa dựng ở đây: quét bản vẽ đang mở để đưa định nghĩa của nó vào danh
+          mục.{" "}
           <Link href="/?panel=blocks">Mở thư viện ở màn hình cũ</Link>.
+          {" "}Xoá định nghĩa hay xoá nguồn thì <strong>không màn hình nào</strong>{" "}
+          làm được — backend chưa có đường đó.
         </p>
       </div>
     </div>

@@ -1,5 +1,130 @@
 # CHANGELOG
 
+## 2026-08-10 — Giai đoạn 4 (phần 5): tạo block từ bộ chọn · nguồn thư viện
+
+Hai lệnh ghi cuối của thư viện block. Với phần này, `/library/blocks` làm được
+mọi việc màn hình cũ làm, trừ quét bản vẽ vào danh mục.
+
+### Added — tạo block từ bộ chọn
+
+`features/blocks/CreateBlockDialog.tsx` + `createBlockFromSelection()` →
+`POST /api/acad/blocks/create`.
+
+Dựng **bên trong** `ConfirmSheet` chứ không phải một Modal riêng: đây là lệnh ghi
+vào bản vẽ nên phải mang đúng ba cảnh báo bắt buộc, và cách chắc chắn nhất để
+không viết lại chúng lệch đi là dùng lại chính component đó, đưa form vào làm
+`children`. `ConfirmSheet` nhận thêm `blocked` — *lý do* chưa ghi được, không
+phải cờ boolean, vì một nút ghi bị khoá mà không nói vì sao là một ngõ cụt.
+
+**Đây là lệnh ghi duy nhất trong app lấy đi thứ đang có trên bản vẽ.** Đọc
+`buildCreateBlockLisp`: nó chạy `-BLOCK`, lệnh gom các đối tượng đang chọn thành
+định nghĩa rồi **xoá chúng khỏi bản vẽ**. Hộp thoại nói thẳng điều đó và chỉ
+đường lấy lại (`OOPS`), thay vì để người dùng phát hiện sau khi hình biến mất.
+
+Guardstrip liệt kê ba điều kiện, tất cả để `data-pass="pending"` (vòng nét đứt).
+Đây là lựa chọn có chủ ý: app **không kiểm được** chúng, nên vẽ dấu tick hay dấu
+chéo là bịa ra một phép kiểm không tồn tại. Riêng bộ chọn, màn hình cố ý **không**
+hiện số đối tượng đang chọn tuy `GET /selection/current` đọc được — con số ấy cũ
+đi ngay khi người dùng chuyển sang AutoCAD, mà chuyển sang AutoCAD lại đúng là
+việc họ phải làm.
+
+Chặn trước hai thứ **đáng tin**: tên sai định dạng, và tên trùng trong thư viện
+(so không phân biệt hoa thường, trên đúng danh mục mà máy chủ sẽ so).
+
+### Added — nguồn thư viện
+
+`features/blocks/{sources.ts,SourcesDialog.tsx}` + ô **Nguồn DWG** trong form
+metadata (`sourceId`).
+
+### Changed — bộ mẫu mô tả sai việc này, và đây là chỗ sửa lại
+
+Mẫu gọi nguồn là "thư mục nguồn" và có nút "Quét lại nguồn". Đọc daemon thì:
+
+- `POST /blocks/sources` **chỉ ghi đường dẫn** vào danh mục — không quét, không
+  nhập định nghĩa nào;
+- `POST /blocks/scan` **không quét nguồn**, nó quét **bản vẽ đang mở**;
+- nguồn chỉ có tác dụng ở đúng một chỗ: `linkedDwgSource()` khi chèn một block mà
+  bản vẽ đích chưa có định nghĩa — và chỉ với **file `.dwg`** có thật.
+
+Nên màn hình nói đúng thứ đang xảy ra: nguồn là **một file**, thêm nguồn không
+quét gì, và nó chỉ có tác dụng khi một định nghĩa trỏ vào nó. Nguồn `xtp`/`image`
+hiện kèm nhãn "không chèn được", cả ở danh sách lẫn ô chọn.
+
+Chặn `~` ngay tại chỗ: `linkedDwgSource()` gọi thẳng `existsSync(path)` và không
+có chỗ nào nở dấu ngã, nên `~/...` chắc chắn hỏng — nhưng chỉ hỏng lúc chèn, với
+thông điệp "không tìm thấy source DWG" chẳng nhắc gì tới dấu ngã.
+
+### Changed — `ConfirmSheet` chuyển sang `components/ui/`
+
+`check-import-boundaries.mjs` chặn đúng lúc: `features/blocks/CreateBlockDialog`
+import `features/staged-ops/ConfirmSheet` là feature import chéo feature. Cùng
+lý do đã chuyển `WriteButton` trước đây — **mọi** màn hình có lệnh ghi đều cần
+`ConfirmSheet`, kể cả lệnh một pha không đi qua hàng chờ, nên nó là hạ tầng dùng
+chung chứ không thuộc `staged-ops`.
+
+### Fixed — gỡ nguồn nhưng block vẫn còn liên kết (Codex review, P2)
+
+Kiểu lỗi tệ nhất: giao diện nói một đằng, máy chủ làm một nẻo. Chọn “— không gán
+nguồn —” chỉ gỡ `sourceId`, trong khi `linkedDwgSource()` **cố ý quay về**
+`block.sourcePath` khi không có `sourceId`. Block vẫn nhập được từ file DWG cũ,
+tuy form ghi rõ là không gán nguồn.
+
+Nay gỡ nguồn là gỡ cả `sourcePath`. Và nếu một định nghĩa đang liên kết kiểu cũ
+(trỏ thẳng tới file, không qua nguồn nào), form nói ra đường dẫn đó cùng cách gỡ
+— thay vì hiện “không gán nguồn” rồi để người dùng tin là đã gỡ.
+
+### Fixed — lượt tải lại về muộn đè lên trạng thái mới (Codex review, P2)
+
+`applyServerEcho` đặt revision mới rồi `reload()` chạy song song, không xếp thứ
+tự. Hai lệnh ghi liên tiếp là đủ hỏng: lượt tải lại của lệnh đầu có thể về **sau**
+echo của lệnh sau, ghi đè revision mới bằng revision cũ, và lệnh kế tiếp ăn 409
+dù không ai sửa gì. Nay mỗi lượt đọc mang số thứ tự và kết quả cũ bị bỏ; nhận
+echo thì vô hiệu hoá mọi lượt đọc đang bay.
+
+Đồng thời bỏ `setSources([])` ở nhánh lỗi. Lý do cũ ("nguồn chỉ là con số phụ")
+hết đúng từ commit này: nguồn nay là ô **Nguồn DWG** trong form, nên xoá trắng vì
+một lần đọc hỏng sẽ làm block đang gán nguồn hiện ra như chưa gán — rồi người
+dùng lưu đè lên đúng liên kết đang có.
+
+### Fixed — xung đột 409 tự gây ra sau mỗi lượt ghi (Codex review, P2)
+
+`revision` chỉ được cập nhật khi `library.reload()` chạy xong, mà lời gọi đó bất
+đồng bộ. Bấm ghi lần thứ hai trong quãng đó gửi `expectedRevision` cũ và ăn 409 —
+không có ai sửa thư viện cả, xung đột hoàn toàn do app tự tạo.
+
+Nay `useBlockLibrary` có `applyServerEcho()`: lấy revision mới thẳng từ phản hồi
+của lệnh ghi, áp cho **cả bốn** đường ghi vào danh mục (`insert`/`sync`, lưu
+metadata, thêm nguồn, tạo block). Vòng review sau chỉ ra rằng sửa mỗi hai đường
+mới là chưa đủ: form sửa metadata tự ghim revision của bản nháp nên nó không tự
+hỏng, nhưng `library.revision` mới là thứ **các lệnh ghi khác** dùng — lưu
+metadata xong mở ngay hộp Nguồn và thêm một nguồn là ăn 409 oan. Khoá bằng một
+bất biến đếm: đủ 4 chỗ áp echo.
+
+### Fixed — thêm nguồn hỏng thì mất luôn đường dẫn vừa gõ (Codex review, P2)
+
+Form xoá trắng ngay khi bấm, trước khi biết kết quả. Hỏng hay gặp nhất ở đây là
+409, nên người dùng phải gõ lại một đường dẫn tuyệt đối dài chỉ vì máy chủ bảo
+"tải lại rồi thử lại". Nay `onAdd` trả về `Promise<boolean>` và form chỉ xoá khi
+máy chủ đã ghi.
+
+### Technical
+
+- `endpoints.blockCreate()`; `LibrarySourceKind` tách thành type có tên.
+- 13 bất biến mới ở `test-contract.mjs`: hộp tạo block phải nói "xoá khỏi bản vẽ"
+  và chỉ `OOPS`; không được dùng `data-pass="true|false"` cho điều kiện không
+  kiểm được; màn nguồn phải nói "thêm nguồn không quét gì cả" và không được gọi
+  nguồn là thư mục.
+- `scripts/stub-daemon.mjs` thêm route `/blocks/create`, `POST /blocks/sources`,
+  và cờ `NO_SELECTION=1` để dựng ca lỗi.
+- Kiểm trên Chrome: thêm nguồn (đếm 2 → 3), `~` bị chặn, tạo block chạy trọn
+  vòng và tự chọn định nghĩa mới, trùng tên `van_cong_dn80` vs `VAN_CONG_DN80`
+  bị chặn, ô Nguồn DWG liệt kê 3 nguồn với `xtp` bị khoá.
+- **Chưa kiểm được:** đường lỗi "bộ chọn rỗng" trên trình duyệt — dialog đóng/mở
+  lệch nhịp với công cụ tự động. Nó dùng chung đúng component thông báo đã kiểm
+  ở ca 409.
+
+---
+
 ## 2026-08-10 — Giai đoạn 4 (phần 4): sửa metadata block
 
 ### Added
