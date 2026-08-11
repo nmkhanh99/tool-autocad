@@ -12,7 +12,6 @@ import { useAcadEvents } from "../features/acad-connection/events";
 import { newMessageId, patchById } from "../features/assistant/messages";
 import { fetchDocs } from "../lib/daemon/docs";
 import { DAEMON_BASE } from "../lib/daemon/endpoints";
-import DrawingInfoPanel from "./DrawingInfoPanel";
 import DrawingStandardsPanel from "./DrawingStandardsPanel";
 import BlockLibraryPanel from "./BlockLibraryPanel";
 import LispLibraryPanel from "./LispLibraryPanel";
@@ -180,10 +179,6 @@ export default function Page() {
   const [docList, setDocList] = useState<{ title: string; file: string; active: boolean }[] | null>(null);
   const [docsAlive, setDocsAlive] = useState<boolean | null>(null);
   const [acadLive, setAcadLive] = useState<{ activeDoc: string; last: string } | null>(null);
-  const [drawingInfoOpen, setDrawingInfoOpen] = useState(false);
-  const [drawingInfoTarget, setDrawingInfoTarget] = useState("");
-  const [drawingInfoRefreshToken, setDrawingInfoRefreshToken] = useState(0);
-  const [drawingInfoRefreshEventAt, setDrawingInfoRefreshEventAt] = useState(0);
   const [standardsOpen, setStandardsOpen] = useState(false);
   const [standardsTarget, setStandardsTarget] = useState("");
   const [standardsRefreshToken, setStandardsRefreshToken] = useState(0);
@@ -280,10 +275,6 @@ export default function Page() {
   // chiếu. Màn hình này hiện là subscriber duy nhất; khi từng panel được migrate
   // sang route, chúng tự đăng ký thay vì nhận refreshToken qua props.
   useAcadEvents(DAEMON, (event) => {
-    const invalidateDrawingInfo = () => {
-      setDrawingInfoRefreshToken((token) => token + 1);
-      setDrawingInfoRefreshEventAt((current) => Math.max(current, event.at));
-    };
     setAcadLive({
       activeDoc: event.activeDoc,
       last: `${event.type}${event.detail ? ": " + event.detail : ""}`,
@@ -291,13 +282,10 @@ export default function Page() {
     if (event.type.startsWith("doc")) {
       loadDocs();
       loadDrawDocs();
-      setDrawingInfoTarget(event.activeDoc);
-      invalidateDrawingInfo();
       setStandardsTarget(event.activeDoc);
       setStandardsRefreshToken((token) => token + 1);
     }
     if (event.type === "drawingModified" || event.type === "pluginLoaded") {
-      invalidateDrawingInfo();
       setStandardsRefreshToken((token) => token + 1);
     }
     if (event.type === "drawingModified" && autoBomRef.current) refreshBom();   // BOM tự cập nhật khi vẽ
@@ -1265,12 +1253,12 @@ export default function Page() {
             title="Bóc khối lượng, lập dự toán, quản lý hiện trường và AI">
             ◇ Tiền thi công
           </button>
-          <button className="pillbtn" onClick={() => {
-            setDrawingInfoTarget("");
-            setDrawingInfoOpen(true);
-          }} title="Đọc toàn bộ thông tin của bản vẽ đang active trong AutoCAD">
+          {/* Màn hình này đã chuyển sang route mới `/drawing-info` — panel cũ
+              đã xoá. Dẫn đi thay vì mở lại một bản sao. */}
+          <a className="pillbtn" href="/drawing-info/"
+            title="Đọc toàn bộ thông tin của bản vẽ đang active trong AutoCAD">
             ▦ Hồ sơ bản vẽ
-          </button>
+          </a>
           <button className="pillbtn" onClick={() => {
             setStandardsTarget(drawTarget);
             setStandardsOpen(true);
@@ -1326,10 +1314,9 @@ export default function Page() {
                 <button className="drawing-empty-open" onClick={() => openPreconstruction()}>
                   ◇ Mở Preconstruction Workspace
                 </button>
-                <button className="drawing-empty-open" onClick={() => {
-                  setDrawingInfoTarget("");
-                  setDrawingInfoOpen(true);
-                }}>▦ Xem hồ sơ bản vẽ đang active</button>
+                <a className="drawing-empty-open" href="/drawing-info/">
+                  ▦ Xem hồ sơ bản vẽ đang active
+                </a>
                 <button className="drawing-empty-open" onClick={() => openReviewWorkspace("documents")}>
                   ▤ Mở PDF & Review Workspace
                 </button>
@@ -1644,16 +1631,6 @@ export default function Page() {
           </div>
         </div>
       )}
-
-      <DrawingInfoPanel
-        open={drawingInfoOpen}
-        daemon={DAEMON}
-        initialTarget={drawingInfoTarget}
-        refreshToken={drawingInfoRefreshToken}
-        refreshEventAt={drawingInfoRefreshEventAt}
-        onClose={() => setDrawingInfoOpen(false)}
-        onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
-      />
 
       <DrawingStandardsPanel
         open={standardsOpen}

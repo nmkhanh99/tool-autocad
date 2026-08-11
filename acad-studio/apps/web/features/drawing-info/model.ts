@@ -90,6 +90,11 @@ export function normalize(payload: JsonRecord | null): JsonRecord {
     dictionaries: Array.isArray(payload.dictionaries) ? payload.dictionaries : nested.dictionaries ?? [],
     xrefs: Array.isArray(payload.xrefs) ? payload.xrefs : nested.xrefs ?? [],
     selection,
+    /* Danh mục đối tượng CHỈ có ở dạng lồng — daemon không nâng nó lên gốc như
+       `tables.layers`. Bỏ qua là mất hẳn bảng duyệt đối tượng. */
+    selectionCatalog: Object.keys(record(payload.selectionCatalog)).length
+      ? payload.selectionCatalog
+      : nested.selectionCatalog ?? {},
     selectionScope: Object.keys(record(payload.selectionScope)).length
       ? payload.selectionScope
       : nested.selectionScope ?? {},
@@ -210,14 +215,44 @@ export function insUnitsLabel(value: number): string {
   return names[value] ?? "không rõ";
 }
 
-/** Bản vẽ có thay đổi chưa lưu không.
+/** Trạng thái lưu để hiển thị, lấy từ nguồn MỚI NHẤT.
  *
- * `dbmod` là cờ bit, **khác 0 là đã sửa**. Đọc nó như một con số đếm (kiểu
- * `dbmod === 1`) sẽ bỏ sót mọi loại sửa khác — trên bản vẽ as-built giá trị là
- * 24, tức đã sửa mà kiểm bằng `=== 1` sẽ báo là sạch.
+ * Đọc riêng hồ sơ là không đủ — hồ sơ chỉ đọc lại khi người dùng bấm. Sau lượt lưu
+ * trong AutoCAD, hồ sơ vẫn nói "có thay đổi chưa lưu" trong khi thanh tiêu đề,
+ * vốn đọc danh sách bản vẽ, đã nói "đã lưu". Hai chỗ trên cùng một màn hình nói
+ * ngược nhau về việc bản vẽ đã lưu chưa là lỗi tin cậy, không phải chi tiết nhỏ.
+ *
+ * Ưu tiên danh sách bản vẽ: nó nhẹ và tự nạp lại theo sự kiện reactor.
+ *
+ * `modified: null` nghĩa là **không biết** — plugin bản cũ không phát `dbmod`.
+ * Phải hiển thị khác "đã lưu": một nhãn "đã lưu" sai trên bản vẽ chưa lưu là
+ * đúng thứ dẫn tới mất dữ liệu khi người dùng khởi động lại AutoCAD.
  */
-export function isModified(raw: JsonRecord): boolean {
-  return num(record(normalize(raw).document).dbmod) !== 0;
+export function savedState(
+  payload: JsonRecord | null,
+  docs: readonly { instance?: string; dbmod?: number }[],
+  /** Danh sách bản vẽ có phải là câu trả lời MỚI NHẤT không. `false` khi lượt
+   * đọc `/docs` gần nhất hỏng — danh sách vẫn còn đó nhưng đã không tin được. */
+  docsAlive: boolean,
+): { dbmod: number | null; modified: boolean | null } {
+  /* Không xác minh được thì nói KHÔNG BIẾT, kể cả khi hồ sơ có một con số. Đây
+     là ca mất dữ liệu: nhãn "đã lưu" sai làm người dùng đóng AutoCAD và mất
+     phần chưa lưu. Một nhãn "không biết" thừa chỉ gây phiền. */
+  if (!docsAlive) return { dbmod: null, modified: null };
+  const doc = record(normalize(payload).document);
+  const instance = str(doc.instance);
+  const live = instance ? docs.find((d) => d.instance === instance) : undefined;
+  /* Có bản ghi sống thì nó là NGUỒN DUY NHẤT — thiếu `dbmod` ở đó là "không
+     biết", không phải cái cớ để quay về con số cũ trong hồ sơ. Lùi về hồ sơ chỉ
+     đúng khi không tìm thấy bản ghi sống nào để mà so. */
+  const raw = live ? live.dbmod : doc.dbmod;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return { dbmod: null, modified: null };
+  }
+  /* `dbmod` là CỜ BIT, không phải bộ đếm: khác 0 là có thay đổi chưa lưu. Đọc
+     nó như một con số đếm (kiểu `dbmod === 1`) sẽ bỏ sót mọi loại sửa khác —
+     trên bản vẽ as-built của dự án giá trị là 24. */
+  return { dbmod: raw, modified: raw !== 0 };
 }
 
 /** Khung bao của bản vẽ, **hoặc `null` nếu nó trộn các không gian**.
@@ -259,6 +294,128 @@ export function entityTotals(raw: JsonRecord): {
     blockRefs: num(counts.blockReferences),
     approxObjects: num(counts.approxObjects),
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * Danh mục đối tượng
+ * ------------------------------------------------------------------ */
+
+export type CatalogSubject = {
+  handle: string;
+  type: string;
+  layer: string;
+  blockName: string;
+};
+
+/** Trần của daemon cho lệnh chọn theo handle (`CAD_SELECTION_MAX_SUBJECTS`).
+ * Vượt trần là 400 — nói trước ở giao diện thay vì để người dùng tích 6.000 ô
+ * rồi mới biết. */
+export const MAX_PICK_HANDLES = 5_000;
+
+/** Bao nhiêu dòng một trang. Danh mục có thể tới hàng nghìn đối tượng; dựng hết
+ * một lúc là hàng nghìn node DOM cho một bảng người ta chỉ đọc vài dòng. */
+export const CATALOG_PAGE_SIZE = 100;
+
+/** Đối tượng đã quét được trong **không gian hiện hành**.
+ *
+ * ⚠️ Không phải mọi đối tượng của bản vẽ. `selectionScope.scanned` nói rõ phạm
+ * vi, và `complete: false` nghĩa là danh mục còn thiếu — xem `catalogNote()`. */
+export function catalogSubjects(raw: JsonRecord | null): CatalogSubject[] {
+  const catalog = record(normalize(raw).selectionCatalog);
+  const seen = new Set<string>();
+  const out: CatalogSubject[] = [];
+  for (const item of list(catalog.objects)) {
+    const row = record(item);
+    const handle = str(row.handle).trim();
+    /* Trùng handle là trùng ĐỐI TƯỢNG. Giữ cả hai làm số đếm sai và làm ô tích
+       thứ hai không bao giờ tích được (khoá React trùng). */
+    if (!handle || seen.has(handle)) continue;
+    seen.add(handle);
+    out.push({
+      handle,
+      type: str(row.type),
+      layer: str(row.layer),
+      blockName: str(row.blockName),
+    });
+  }
+  return out;
+}
+
+/** Lọc theo handle / kiểu / layer / tên block.
+ *
+ * So chữ thường theo `vi`: tên layer tiếng Việt có dấu, và `toLowerCase()` mặc
+ * định của JS không phải lúc nào cũng khớp cách người dùng gõ. */
+export function filterSubjects(
+  subjects: readonly CatalogSubject[],
+  query: string,
+): CatalogSubject[] {
+  const needle = query.trim().toLocaleLowerCase("vi");
+  if (!needle) return [...subjects];
+  return subjects.filter((s) =>
+    `${s.handle} ${s.type} ${s.layer} ${s.blockName}`.toLocaleLowerCase("vi").includes(needle));
+}
+
+/** Một trang của danh sách, và số trang. `page` bị kẹp vào khoảng hợp lệ —
+ * lọc xong mà trang hiện tại vượt quá số trang mới thì bảng trống trơn dù có
+ * kết quả. */
+export function pageOf<T>(
+  items: readonly T[],
+  page: number,
+  size = CATALOG_PAGE_SIZE,
+): { rows: T[]; page: number; pages: number; from: number } {
+  const pages = Math.max(1, Math.ceil(items.length / size));
+  const safe = Math.min(Math.max(0, page), pages - 1);
+  return {
+    rows: items.slice(safe * size, (safe + 1) * size),
+    page: safe,
+    pages,
+    from: safe * size,
+  };
+}
+
+/** Câu nói rõ danh mục này bao trùm tới đâu. Rỗng nghĩa là không có danh mục.
+ *
+ * `rows` là số dòng THẬT SỰ hiện ra — `catalogSubjects` đã bỏ dòng trùng handle
+ * và dòng không có handle. Nếu nó ít hơn `scanned` mà payload vẫn nói
+ * `complete: true` thì câu "đã quét đủ" là nói dối: bảng hiện 2 dòng trong khi
+ * khẳng định có đủ 3 đối tượng, và người dùng tin danh sách trước mắt là toàn
+ * bộ. Lệch bao nhiêu cũng phải hạ xuống CHƯA đủ.
+ */
+export function catalogNote(raw: JsonRecord | null, rows?: number): string {
+  const catalog = record(normalize(raw).selectionCatalog);
+  const space = str(catalog.space);
+  if (!space) return "";
+  const scanned = num(catalog.scanned);
+  const shown = typeof rows === "number" ? rows : scanned;
+  const complete = catalog.complete === true && shown >= scanned;
+  const dropped = scanned > shown
+    ? ` ${scanned - shown} dòng bị bỏ vì trùng handle hoặc thiếu handle.`
+    : "";
+  return complete
+    /* "LÚC ĐỌC" — cùng lý do như `selectionScopeNote`: đổi tab Model/Layout
+       không có tín hiệu nào tới được màn hình này. */
+    ? `${shown} đối tượng trong không gian ${space} — không gian AutoCAD mở lúc `
+      + "đọc hồ sơ này."
+    : `Mới quét ${scanned} đối tượng trong không gian ${space}; danh mục CHƯA đủ. `
+      + `Đối tượng thiếu không hiện ra ở đâu cả.${dropped}`;
+}
+
+/** Vì sao chưa chọn được tập đang tích — hoặc rỗng nếu chọn được. */
+export function pickBlockedReason(input: {
+  count: number;
+  staleNote: string;
+  guardReady: boolean;
+}): string {
+  /* Trả lại chính ghi chú, không thay bằng một câu chung: nay có BA lý do hồ sơ
+     không dùng được — sai bản vẽ, không có bản vẽ nào mở, và bản vẽ đã đổi sau
+     lượt đọc. Một câu đóng hộp cho cả ba thì hai trong ba là nói sai. */
+  if (input.staleNote) return input.staleNote;
+  if (!input.guardReady) return "Hồ sơ này không kèm mã phiên bản vẽ. Bấm “Đọc lại”.";
+  if (!input.count) return "Chưa tích đối tượng nào.";
+  if (input.count > MAX_PICK_HANDLES) {
+    return `Chọn tối đa ${MAX_PICK_HANDLES.toLocaleString("vi-VN")} đối tượng một lượt.`;
+  }
+  return "";
 }
 
 /* ------------------------------------------------------------------ *
@@ -426,6 +583,81 @@ export function staleDrawingNote(
     + `${name(active)}. Bấm “Đọc lại” để đọc bản vẽ đang mở.`;
 }
 
+/** Vì sao hồ sơ đang hiển thị KHÔNG còn dùng để chọn được — hoặc `null`.
+ *
+ * Gộp ba tình huống vào một chỗ vì chúng có chung hệ quả (chặn mọi thao tác) và
+ * chung cách gỡ (bấm "Đọc lại"), nhưng **không** chung lời giải thích:
+ *
+ *  1. `wrong-drawing` — AutoCAD đang ở một bản vẽ khác.
+ *  2. `closed` — bản vẽ của hồ sơ không còn mở. Tình huống này KHÔNG bắt được
+ *     bằng cách so tên tệp: đóng rồi mở lại đúng đường dẫn đó cho ra tên giống
+ *     hệt nhưng là một database khác, và guard `instance` của máy chủ sẽ từ
+ *     chối. So theo `instance` mới thấy.
+ *  3. `changed` — vẫn bản vẽ đó, nhưng đã bị sửa kể từ lượt đọc.
+ *
+ * Trả về `title` riêng cho từng loại. Một câu đóng hộp cho cả ba thì hai trong
+ * ba là nói sai — và đây là câu người dùng đọc để quyết định làm gì tiếp.
+ *
+ * So được nhờ `/docs` — lời gọi NHẸ, tự nạp lại theo sự kiện reactor — mang
+ * cùng cặp `instance`/`revision` với hồ sơ 350 KB, thứ chỉ đọc lại khi bấm.
+ */
+export type ProfileStale = {
+  kind: "wrong-drawing" | "closed" | "changed";
+  title: string;
+  note: string;
+};
+
+export function profileStaleReason(
+  payload: JsonRecord | null,
+  docs: readonly { file?: string; title?: string; active?: boolean; instance?: string; revision?: number }[],
+): ProfileStale | null {
+  const wrong = staleDrawingNote(payload, docs);
+  if (wrong) {
+    return { kind: "wrong-drawing", title: "Hồ sơ này không phải bản vẽ đang mở.", note: wrong };
+  }
+
+  const doc = record(normalize(payload).document);
+  const instance = str(doc.instance);
+  if (!instance || typeof doc.revision !== "number") return null;
+
+  const live = docs.find((d) => d.instance === instance);
+  if (!live) {
+    /* Danh sách RỖNG thì im: chưa đọc được `/docs` không phải bằng chứng bản vẽ
+       đã đóng. Trường hợp AutoCAD thật sự không mở bản vẽ nào đã có dải cảnh
+       báo riêng của nó. */
+    if (!docs.length) return null;
+    return {
+      kind: "closed",
+      title: "Bản vẽ của hồ sơ này không còn mở.",
+      note: "Có thể nó đã bị đóng, hoặc đã đóng rồi mở lại — mở lại cùng một tệp "
+        + "vẫn là một bản vẽ khác đối với AutoCAD. Bấm “Đọc lại”.",
+    };
+  }
+
+  /* Khớp `instance` nhưng KHÔNG phải bản vẽ đang hoạt động → vẫn là "sai bản
+     vẽ", dù `staleDrawingNote` không thấy gì. Ca có thật: hai bản vẽ chưa lưu
+     cùng mang tên `Drawing1.dwg`; không có đường dẫn để phân biệt nên so tên
+     thấy khớp, và nếu cả hai còn ở revision 0 thì so revision cũng khớp nốt.
+     Chỉ xét khi danh sách CÓ một bản hoạt động — không có bản nào active thì ta
+     không kết luận được gì. */
+  if (live.active !== true && docs.some((d) => d.active === true)) {
+    return {
+      kind: "wrong-drawing",
+      title: "Hồ sơ này không phải bản vẽ đang mở.",
+      note: "AutoCAD đang mở một bản vẽ khác trùng tên — bản vẽ chưa lưu không có "
+        + "đường dẫn để phân biệt. Bấm “Đọc lại”.",
+    };
+  }
+
+  if (typeof live.revision !== "number" || live.revision === doc.revision) return null;
+  return {
+    kind: "changed",
+    title: "Bản vẽ đã thay đổi sau lượt đọc này.",
+    note: "Danh mục và các số bên dưới không còn khớp với bản vẽ. Bấm “Đọc lại” "
+      + "trước khi chọn.",
+  };
+}
+
 /** Vì sao chưa đổi được sang bản vẽ này — hoặc chuỗi rỗng nếu đổi được.
  *
  * Đổi bản vẽ hoạt động là **lệnh ghi** theo backend (`activate-document` đi qua
@@ -457,6 +689,11 @@ export function selectionScopeNote(payload: JsonRecord | null): string {
   if (!space) return "";
   const scanned = num(scope.scanned);
   const complete = scope.complete !== false;
+  /* "LÚC ĐỌC", không phải "đang mở": hồ sơ chỉ đọc lại khi bấm, và đổi tab
+     Model/Layout trong AutoCAD KHÔNG có tín hiệu nhẹ nào để màn hình biết —
+     `/docs` không mang không gian, và bộ đếm revision không nhúc nhích vì đổi
+     tab không sửa đối tượng nào. Nên câu này không được quả quyết về hiện tại;
+     nó chỉ nói được về thời điểm đọc. */
   return `Chỉ chạm tới ${scanned} đối tượng trong không gian ${space} — không gian `
-    + `AutoCAD đang mở.${complete ? "" : " Danh mục còn chưa quét hết."}`;
+    + `AutoCAD mở LÚC ĐỌC hồ sơ này.${complete ? "" : " Danh mục còn chưa quét hết."}`;
 }

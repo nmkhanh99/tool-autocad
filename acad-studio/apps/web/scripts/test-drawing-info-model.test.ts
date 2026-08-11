@@ -12,10 +12,17 @@ import {
   actionLabel,
   activateBlockedReason,
   activeDocFile,
+  MAX_PICK_HANDLES,
+  catalogNote,
+  catalogSubjects,
+  filterSubjects,
+  pageOf,
+  profileStaleReason,
+  pickBlockedReason,
   actionSubjectNote,
   entityTotals,
   insUnitsLabel,
-  isModified,
+  savedState,
   layerColor,
   layerFlags,
   layerRows,
@@ -36,10 +43,35 @@ import {
 test("dbmod là CỜ BIT, khác 0 là đã sửa", () => {
   /* Bản vẽ as-built thật có `dbmod: 24`. Kiểm bằng `=== 1` sẽ báo là sạch, và
      người dùng đóng AutoCAD mất thay đổi mà app đã bảo là không có gì. */
-  assert.equal(isModified({ document: { dbmod: 24 } }), true);
-  assert.equal(isModified({ document: { dbmod: 1 } }), true);
-  assert.equal(isModified({ document: { dbmod: 0 } }), false);
-  assert.equal(isModified({}), false);
+  /* `dbmod` là cờ BIT: mọi giá trị khác 0 đều là "có thay đổi chưa lưu". */
+  assert.equal(savedState({ document: { dbmod: 24 } }, [], true).modified, true);
+  assert.equal(savedState({ document: { dbmod: 1 } }, [], true).modified, true);
+  assert.equal(savedState({ document: { dbmod: 0 } }, [], true).modified, false);
+
+  /* Thiếu `dbmod` là KHÔNG BIẾT, không phải "đã lưu" — plugin bản cũ không phát
+     trường này, và một nhãn "đã lưu" sai là đúng thứ dẫn tới mất dữ liệu. */
+  assert.equal(savedState({}, [], true).modified, null);
+  assert.equal(savedState({ document: {} }, [], true).modified, null);
+
+  /* Danh sách bản vẽ THẮNG hồ sơ: nó nhẹ và tự nạp lại theo sự kiện, còn hồ sơ
+     chỉ đọc khi bấm. Sau một lượt lưu, hồ sơ còn nói "chưa lưu" mà danh sách đã
+     nói "đã lưu" — lấy hồ sơ là để hai chỗ trên cùng màn hình nói ngược nhau. */
+  const profile = { document: { instance: "A", dbmod: 24 } };
+  assert.equal(savedState(profile, [{ instance: "A", dbmod: 0 }], true).modified, false);
+
+  /* Khác `instance` thì KHÔNG lấy: đó là trạng thái lưu của bản vẽ khác. */
+  assert.equal(savedState(profile, [{ instance: "B", dbmod: 0 }], true).modified, true);
+
+  /* Tìm thấy bản ghi sống mà nó thiếu `dbmod` → KHÔNG BIẾT, không lùi về con số
+     cũ trong hồ sơ. Có bản ghi sống nghĩa là nó mới hơn; thiếu trường chỉ nói
+     rằng plugin không phát, chứ không hồi sinh giá trị đã cũ. */
+  assert.equal(savedState(profile, [{ instance: "A" }], true).modified, null);
+
+  /* Lượt đọc `/docs` gần nhất HỎNG: danh sách cũ vẫn còn nhưng không tin được,
+     nên trạng thái lưu là KHÔNG BIẾT dù hồ sơ có một con số. Đây là ca mất dữ
+     liệu — nhãn "đã lưu" sai làm người dùng đóng AutoCAD và mất phần chưa lưu. */
+  assert.equal(savedState(profile, [{ instance: "A", dbmod: 0 }], false).modified, null);
+  assert.equal(savedState({ document: { dbmod: 0 } }, [], false).modified, null);
 });
 
 test("approxObjects KHÔNG phải số đối tượng", () => {
@@ -166,6 +198,144 @@ test("đơn vị INSUNITS theo bảng của AutoCAD", () => {
   assert.equal(insUnitsLabel(6), "mét");
   assert.equal(insUnitsLabel(0), "không đặt");
   assert.equal(insUnitsLabel(99), "không rõ");
+});
+
+/* ---------------- Danh mục đối tượng ---------------- */
+
+const catalogPayload = {
+  drawing: {
+    selectionCatalog: {
+      space: "01", scanned: 3, complete: true,
+      objects: [
+        { handle: "2204", type: "VIEWPORT", layer: "0" },
+        { handle: "A1", type: "INSERT", layer: "P-ThoatXi", blockName: "CUA-DI" },
+        { handle: "2204", type: "VIEWPORT", layer: "0" },
+      ],
+    },
+  },
+};
+
+test("danh mục chỉ có ở dạng lồng, và bỏ handle trùng", () => {
+  /* Trùng handle là trùng ĐỐI TƯỢNG: giữ cả hai làm số đếm sai và làm ô tích
+     thứ hai không bao giờ tích được (khoá React trùng). */
+  const rows = catalogSubjects(catalogPayload);
+  assert.deepEqual(rows.map((r) => r.handle), ["2204", "A1"]);
+  assert.equal(catalogSubjects(null).length, 0);
+});
+
+test("lọc theo handle, kiểu, layer và tên block", () => {
+  const rows = catalogSubjects(catalogPayload);
+  assert.deepEqual(filterSubjects(rows, "insert").map((r) => r.handle), ["A1"]);
+  assert.deepEqual(filterSubjects(rows, "cua-di").map((r) => r.handle), ["A1"]);
+  assert.deepEqual(filterSubjects(rows, "2204").map((r) => r.handle), ["2204"]);
+  assert.equal(filterSubjects(rows, "  ").length, 2);
+});
+
+test("phân trang kẹp trang vào khoảng hợp lệ", () => {
+  /* Lọc xong mà trang hiện tại vượt số trang mới thì bảng trống trơn dù có kết
+     quả — lỗi trông y hệt "không tìm thấy gì". */
+  const items = Array.from({ length: 250 }, (_, i) => i);
+  assert.deepEqual(pageOf(items, 0, 100).rows.length, 100);
+  assert.deepEqual(pageOf(items, 2, 100).rows, items.slice(200));
+  const over = pageOf(items, 99, 100);
+  assert.equal(over.page, 2);
+  assert.equal(over.pages, 3);
+  assert.equal(over.from, 200);
+  const under = pageOf(items, -5, 100);
+  assert.equal(under.page, 0);
+  /* Danh sách rỗng vẫn là một trang, không phải không trang nào. */
+  assert.equal(pageOf([], 0, 100).pages, 1);
+});
+
+test("danh mục chưa quét đủ phải nói ra", () => {
+  assert.match(catalogNote(catalogPayload), /3 đối tượng.*01/);
+  const partial = {
+    drawing: { selectionCatalog: { space: "Model", scanned: 5, complete: false, objects: [] } },
+  };
+  assert.match(catalogNote(partial), /CHƯA đủ/);
+  assert.equal(catalogNote(null), "");
+});
+
+test("phân biệt ba kiểu hồ sơ cũ, mỗi kiểu một lời giải thích", () => {
+  /* `document` nằm ở GỐC, không trong khối `drawing` lồng — đã đối chiếu với
+     phản hồi thật của daemon, không đoán. */
+  const payload = { document: { instance: "A", revision: 7, file: "/x.dwg" } };
+  const at = (revision: number, instance = "A") => [
+    { instance, revision, file: "/x.dwg", active: true },
+  ];
+
+  assert.equal(profileStaleReason(payload, at(7)), null);
+  assert.equal(profileStaleReason(payload, at(9))?.kind, "changed");
+
+  /* Revision LÙI cũng là đã đổi: UNDO về trước lượt đọc vẫn làm danh mục sai,
+     và bộ đếm của plugin không hứa chỉ tăng qua một lần đóng/mở database. */
+  assert.equal(profileStaleReason(payload, at(3))?.kind, "changed");
+
+  /* Đóng rồi mở lại CÙNG một tệp: tên khớp nên `staleDrawingNote` không thấy
+     gì, nhưng `instance` đã khác — guard của máy chủ sẽ từ chối. Phải bắt ở
+     đây, bằng `instance`, chứ không bằng tên tệp. */
+  const reopened = profileStaleReason(payload, at(0, "B"));
+  assert.equal(reopened?.kind, "closed");
+  assert.match(reopened?.note ?? "", /mở lại/);
+
+  /* AutoCAD đang ở bản vẽ KHÁC thì nói tên bản vẽ, không nói "đã thay đổi". */
+  const other = profileStaleReason(payload, [
+    { instance: "B", revision: 0, file: "/y.dwg", active: true },
+  ]);
+  assert.equal(other?.kind, "wrong-drawing");
+
+  /* Hai bản vẽ CHƯA LƯU cùng tên `Drawing1.dwg`: không có đường dẫn để phân
+     biệt nên so tên thấy khớp, và cả hai còn ở revision 0 nên so revision cũng
+     khớp. Chỉ cờ `active` mới phân biệt được. */
+  const unsaved = { document: { instance: "A", revision: 0, title: "Drawing1.dwg" } };
+  assert.equal(
+    profileStaleReason(unsaved, [
+      { instance: "A", revision: 0, title: "Drawing1.dwg", active: false },
+      { instance: "B", revision: 0, title: "Drawing1.dwg", active: true },
+    ])?.kind,
+    "wrong-drawing",
+  );
+  /* Không có bản nào active thì KHÔNG kết luận — thiếu dữ liệu, không phải bằng
+     chứng sai bản vẽ. */
+  assert.equal(
+    profileStaleReason(unsaved, [{ instance: "A", revision: 0, title: "Drawing1.dwg" }]),
+    null,
+  );
+
+  /* Ba tiêu đề phải KHÁC nhau — đó là lý do tách ba loại. */
+  const titles = new Set([reopened?.title, other?.title,
+    profileStaleReason(payload, at(9))?.title]);
+  assert.equal(titles.size, 3);
+
+  /* Thiếu dữ liệu thì im: danh sách rỗng không phải bằng chứng bản vẽ đã đóng,
+     và plugin bản cũ không phát `instance`/`revision`. Một cảnh báo bật vĩnh
+     viễn sẽ bị người dùng học cách bỏ qua. */
+  assert.equal(profileStaleReason(payload, []), null);
+  assert.equal(profileStaleReason(payload, [{ instance: "A" }]), null);
+  assert.equal(profileStaleReason({ document: {} }, at(9)), null);
+  assert.equal(profileStaleReason(null, at(9)), null);
+});
+
+test("nói trước vì sao chưa chọn được tập đã tích", () => {
+  const ok = { count: 3, staleNote: "", guardReady: true };
+  assert.equal(pickBlockedReason(ok), "");
+  assert.match(pickBlockedReason({ ...ok, count: 0 }), /Chưa tích/);
+  assert.match(pickBlockedReason({ ...ok, guardReady: false }), /mã phiên/);
+  /* Ghi chú đi thẳng ra ngoài, không bị thay bằng một câu chung: ba lý do khác
+     nhau — sai bản vẽ, không có bản vẽ nào mở, bản vẽ đã đổi sau lượt đọc — thì
+     một câu dùng chung sẽ nói sai ở hai trong ba. */
+  assert.equal(
+    pickBlockedReason({ ...ok, staleNote: "Bản vẽ đã thay đổi kể từ lượt đọc này." }),
+    "Bản vẽ đã thay đổi kể từ lượt đọc này.",
+  );
+  /* Hồ sơ không dùng được được xét TRƯỚC số lượng: tích 0 đối tượng trên một hồ
+     sơ đã cũ thì cái cần nói là hồ sơ cũ, không phải "chưa tích gì". */
+  assert.match(
+    pickBlockedReason({ ...ok, count: 0, staleNote: "Hồ sơ cũ." }),
+    /Hồ sơ cũ/,
+  );
+  /* Trần của DAEMON, không phải của giao diện — vượt là 400. */
+  assert.match(pickBlockedReason({ ...ok, count: MAX_PICK_HANDLES + 1 }), /tối đa/);
 });
 
 /* ---------------- Bộ tạo chọn ---------------- */

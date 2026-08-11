@@ -25,6 +25,7 @@ import { Button } from "../../../components/ui/Button";
 import { Tag } from "../../../components/ui/Tag";
 import { ConfirmSheet } from "../../../components/ui/ConfirmSheet";
 import { useDrawingInfo } from "../../../features/drawing-info/useDrawingInfo";
+import { ObjectCatalog } from "../../../features/drawing-info/ObjectCatalog";
 import {
   SelectionBuilder,
   type SelectionDraft,
@@ -36,7 +37,7 @@ import {
   activeDocFile,
   entityTotals,
   insUnitsLabel,
-  isModified,
+  savedState,
   layerColor,
   layerFlags,
   layerRows,
@@ -44,10 +45,11 @@ import {
   normalize,
   operationTarget,
   record,
-  staleDrawingNote,
+  profileStaleReason,
   typeBars,
   usableExtents,
 } from "../../../features/drawing-info/model";
+import { prepareSelectHandles } from "../../../features/staged-ops/selectHandles";
 import {
   applyStagedOp,
   prepareStagedOp,
@@ -55,7 +57,8 @@ import {
   stagedErrorText,
 } from "../../../features/staged-ops/prepareApplyReject";
 import type { StagedOp } from "../../../features/staged-ops/types";
-import { DAEMON_BASE } from "../../../lib/daemon/endpoints";
+import { DAEMON_BASE, endpoints } from "../../../lib/daemon/endpoints";
+import { daemonFailureText, daemonRecord } from "../../../lib/daemon/client";
 
 export default function DrawingInfoPage() {
   const info = useDrawingInfo(DAEMON_BASE);
@@ -67,10 +70,21 @@ export default function DrawingInfoPage() {
   const [pending, setPending] = useState<
     | { kind: "scope"; op: StagedOp; draft: SelectionDraft }
     | { kind: "activate"; op: StagedOp; title: string }
+    | { kind: "handles"; op: StagedOp; count: number }
     | null
   >(null);
   const [docs, setDocs] = useState<AcadDocument[]>([]);
   const [docsAlive, setDocsAlive] = useState(false);
+  /* Lời gọi `/docs` đã về CHƯA. Tách khỏi `docsAlive`: lúc mới mở, hai giá trị
+     "chưa hỏi xong" và "hỏi xong, plugin chết" đều là `false`, nên chỉ nhìn
+     `docsAlive` thì màn hình báo AutoCAD chưa phản hồi trong lúc câu hỏi còn
+     đang bay — kèm nút "Mở AutoCAD" cho một AutoCAD đang chạy bình thường. */
+  const [docsSettled, setDocsSettled] = useState(false);
+  /* Có lời gọi `/docs` đang bay không. Khác `docsSettled`: sau một lần hỏng,
+     mỗi sự kiện `pluginLoaded` mở một lượt hỏi lại — và trong lúc lượt đó chưa
+     về, kết luận "AutoCAD chưa phản hồi" là kết luận CŨ. */
+  const [docsPending, setDocsPending] = useState(true);
+  const [rawOpen, setRawOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -93,18 +107,58 @@ export default function DrawingInfoPage() {
      kiện kế tiếp. Trên một màn hình mà bản vẽ hoạt động quyết định mọi lệnh ghi
      đi đâu, đó không phải nhấp nháy giao diện. */
   const docsSequence = useRef(0);
+  const [opening, setOpening] = useState(false);
+  /* Ô lỗi RIÊNG cho nút "Mở AutoCAD". Dùng chung `error` với bộ tạo chọn thì
+     một lần mở hỏng hiện ra dưới nhãn "Không chuẩn bị được" ở cột bên kia — đọc
+     ra như thao tác ghi hỏng, trong khi chưa có thao tác nào được tạo. */
+  const [openError, setOpenError] = useState("");
+  /* Ô lỗi RIÊNG cho lượt chọn theo handle — cùng lý do như `openError`: nút ở
+     danh mục thì lỗi cũng phải hiện ở danh mục. */
+  const [pickError, setPickError] = useState("");
+  const openAutoCAD = useCallback(async () => {
+    setOpening(true);
+    setOpenError("");
+    try {
+      await daemonRecord(await fetch(endpoints.acadOpen(DAEMON_BASE), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        /* Không kèm `new: true`: tạo một bản vẽ trống là ghi ra một tệp scratch,
+           và người dùng ở đây chỉ muốn mở lại AutoCAD để đọc bản vẽ của họ. */
+        body: JSON.stringify({}),
+      }));
+    } catch (failure) {
+      setOpenError(daemonFailureText(failure));
+    } finally {
+      setOpening(false);
+    }
+  }, []);
+
   const loadDocs = useCallback(() => {
     const ticket = ++docsSequence.current;
+    setDocsPending(true);
     fetchDocs(DAEMON_BASE)
       .then((snapshot) => {
         if (ticket !== docsSequence.current) return;
-        setDocs(snapshot.docs);
+        /* CHỈ ghi đè khi plugin thật sự trả lời. Daemon trả HTTP 200 kèm
+           `{alive:false, docs:[]}` khi plugin im — nên nhánh này, chứ không
+           phải `catch`, mới là cửa mà một lượt hỏng đi qua. Ghi đè ở đây là xoá
+           sạch danh sách đúng lúc ta biết ít nhất về AutoCAD. */
+        if (snapshot.alive) setDocs(snapshot.docs);
         setDocsAlive(snapshot.alive);
+        setDocsSettled(true);
+        setDocsPending(false);
       })
       .catch(() => {
         if (ticket !== docsSequence.current) return;
-        setDocs([]);
+        /* GIỮ danh sách cũ, chỉ hạ cờ sống — cùng lối với `useDrawingInfo`. Một
+           lượt đọc hỏng KHÔNG phải bằng chứng AutoCAD không còn bản vẽ nào.
+           Nguy hiểm cụ thể: `move-to-layer` chạy xong phát `drawingModified`,
+           lượt đọc do sự kiện đó mở có thể về SAU lượt của `reloadAll` và hỏng;
+           xoá sạch ở đây là ném đi một câu trả lời đúng vừa nhận, rồi báo mất
+           kết nối ngay sau một thao tác THÀNH CÔNG. */
         setDocsAlive(false);
+        setDocsSettled(true);
+        setDocsPending(false);
       });
   }, []);
   useEffect(() => { loadDocs(); }, [loadDocs]);
@@ -115,14 +169,60 @@ export default function DrawingInfoPage() {
      Danh sách bản vẽ là lời gọi NHẸ, khác hẳn hồ sơ 350 KB — nên nạp lại nó
      theo sự kiện là được, còn hồ sơ thì vẫn để người dùng bấm. */
   useAcadEvents(DAEMON_BASE, (event) => {
-    if (event.type.startsWith("doc") || event.type === "pluginLoaded") loadDocs();
+    /* `drawingModified` cũng phải nạp lại: `/docs` là nơi DUY NHẤT màn hình này
+       thấy được revision hiện tại của bản vẽ, và revision là thứ cho biết danh
+       mục đối tượng đã già. Lời gọi nhẹ, plugin chỉ phát sự kiện này một lần
+       mỗi lệnh (gom cờ dirty), nên không có chuyện dội.
+
+       `drawingSaved` cũng vậy, và không thừa: nó đến từ `saveComplete` của
+       database reactor, không đi qua `commandEnded`. Một lượt lưu tự động hay
+       QSAVE từ menu không phát `drawingModified`, nên bỏ nó ra là `dbmod` trên
+       màn hình treo ở "chưa lưu" và revision đứng lại ở số cũ. */
+    if (event.type.startsWith("doc")
+      || event.type === "pluginLoaded"
+      || event.type === "drawingModified"
+      || event.type === "drawingSaved") loadDocs();
   });
 
   /* Bản vẽ đang hoạt động lấy từ DANH SÁCH bản vẽ, không từ hồ sơ: hai nguồn
      đọc ở hai thời điểm, và danh sách mới hơn. Lấy từ hồ sơ thì ô chọn hiện bản
      vẽ cũ sau khi người dùng đổi tab trong AutoCAD. */
   const activeFile = activeDocFile(docs) || operationTarget(payload);
-  const staleNote = staleDrawingNote(payload, docs);
+  /* CHỈ chẩn đoán khi danh sách bản vẽ còn tin được. Từ lúc `loadDocs` giữ lại
+     danh sách cũ khi đọc hỏng, danh sách đó có thể mô tả một trạng thái AutoCAD
+     đã qua — đem so với hồ sơ sẽ cho ra một chẩn đoán tự tin mà sai, kiểu "bạn
+     đang ở bản vẽ khác" trong khi thật ra ta không biết gì cả. Không biết thì
+     nói không biết: `blockNote` bên dưới vẫn chặn, chỉ là chặn bằng lý do đúng. */
+  const stale = docsAlive ? profileStaleReason(payload, docs) : null;
+  /* Con đường chuỗi cho các component con: chúng chỉ cần biết CÓ chặn hay không
+     và câu để hiện. Tiêu đề riêng chỉ dùng cho dải cảnh báo ở đây. */
+  const staleNote = stale ? `${stale.title} ${stale.note}` : "";
+  const saved = savedState(payload, docs, docsAlive);
+  /* Plugin sống mà danh sách bản vẽ RỖNG: AutoCAD đang chạy nhưng không mở bản
+     vẽ nào. `profileStaleReason` cố tình im ở đây — danh sách rỗng không phân
+     biệt được "chưa đọc được" với "không có bản vẽ nào", nên nó nhường cho dải
+     cảnh báo riêng bên dưới, thứ có `docsAlive` để phân biệt hai chuyện đó. */
+  const noDocuments = docsAlive && docs.length === 0 && !info.loading;
+  /* MỘT lý do chặn cho mọi nơi ghi. Danh sách bản vẽ là thứ DUY NHẤT màn hình
+     này dùng để biết hồ sơ còn khớp bản vẽ không — nên khi nó chưa về hoặc đọc
+     hỏng, câu trả lời không phải "khớp", mà là "chưa biết". Để bấm được trong
+     quãng đó là mời người dùng ăn một lỗi `drawing_stale` từ máy chủ. */
+  /* Daemon đòi ĐÚNG MỘT bản vẽ hoạt động. Không có cái nào, hoặc có nhiều hơn
+     một, là trạng thái ta không hiểu — và mọi lệnh ghi sẽ bị từ chối. Chặn ở
+     đây thay vì để người dùng bấm rồi ăn lỗi từ máy chủ. */
+  const activeCount = docs.filter((d) => d.active === true).length;
+  const blockNote = staleNote
+    || (noDocuments ? "AutoCAD không mở bản vẽ nào." : "")
+    || (docsAlive && docs.length && activeCount !== 1
+      ? `AutoCAD đang mở ${docs.length} bản vẽ nhưng không xác định được bản nào `
+        + "đang hoạt động. Bấm vào một tab bản vẽ trong AutoCAD rồi bấm “Đọc lại”."
+      : "")
+    || (!docsAlive
+      ? "Chưa đọc được danh sách bản vẽ từ AutoCAD, nên không kiểm được hồ sơ "
+        + "còn khớp bản vẽ hay không."
+      : docsPending
+        ? "Đang kiểm tra lại bản vẽ — chờ một nhịp rồi chọn."
+        : "");
 
   const startActivate = useCallback(async (file: string) => {
     /* Chốt thứ hai, ở tầng logic: ô chọn đã khoá khi `busy`, nhưng một thẻ xác
@@ -152,9 +252,47 @@ export default function DrawingInfoPage() {
     }
   }, [docs, activeFile, docsAlive, busy, pending, info.refreshing]);
 
+  /* Đọc lại là đọc lại TẤT CẢ. Chỉ gọi `info.reload()` thì khi danh sách bản vẽ
+     đang rỗng vì lỡ một sự kiện `docOpened`, hồ sơ mới về được nhưng `docs` vẫn
+     rỗng — màn hình tiếp tục nói "AutoCAD không mở bản vẽ nào" và khoá mọi thứ
+     cho tới khi có một sự kiện khác. Nút gỡ kẹt mà không gỡ được. */
+  const reloadAll = useCallback(() => {
+    info.reload();
+    loadDocs();
+  }, [info, loadDocs]);
+
+  const guard = useMemo(() => {
+    const doc = record(normalize(payload).document);
+    const instance = typeof doc.instance === "string" ? doc.instance : "";
+    const revision = typeof doc.revision === "number" ? doc.revision : null;
+    return instance && revision !== null ? { instance, revision } : null;
+  }, [payload]);
+
+  const pickHandles = useCallback(async (handles: string[]) => {
+    if (busy || pending || info.refreshing || blockNote) return;
+    setBusy(true);
+    setPickError("");
+    try {
+      const op = await prepareSelectHandles(DAEMON_BASE, {
+        target: operationTarget(payload),
+        handles,
+        /* Guard lấy từ CHÍNH hồ sơ đã sinh ra danh mục handle này. Ghép handle
+           của lượt đọc này với guard của lượt khác là mở ra khoảng thời gian
+           giữa hai lượt — bản vẽ đổi trong quãng đó thì handle trỏ sang đối
+           tượng khác mà guard vẫn hợp lệ. */
+        guard,
+      });
+      setPending({ kind: "handles", op, count: handles.length });
+    } catch (failure) {
+      setPickError(stagedErrorText(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, pending, info.refreshing, blockNote, payload, guard]);
+
   const prepare = useCallback(async (draft: SelectionDraft) => {
     /* Chốt ở tầng logic, khớp với lý do khoá nút — xem `SelectionBuilder`. */
-    if (busy || pending || info.refreshing || staleNote) return;
+    if (busy || pending || info.refreshing || blockNote) return;
     setBusy(true);
     setError("");
     try {
@@ -178,7 +316,7 @@ export default function DrawingInfoPage() {
     } finally {
       setBusy(false);
     }
-  }, [payload, busy, pending, info.refreshing, staleNote]);
+  }, [payload, busy, pending, info.refreshing, blockNote]);
 
   const confirm = useCallback(async () => {
     if (!pending) return;
@@ -188,9 +326,9 @@ export default function DrawingInfoPage() {
       setPending(null);
       /* Bản vẽ vừa đổi — hồ sơ trên màn hình đã cũ. Đọc lại để bảng layer và số
          đếm không mô tả một trạng thái không còn nữa. Đổi bản vẽ hoạt động thì
-         phải đọc lại CẢ danh sách bản vẽ, vì cờ `active` vừa chuyển chỗ. */
-      info.reload();
-      if (pending.kind === "activate") loadDocs();
+         phải đọc lại CẢ danh sách bản vẽ, vì cờ `active` vừa chuyển chỗ —
+         `reloadAll` làm cả hai. */
+      reloadAll();
     } catch (failure) {
       setError(stagedErrorText(failure));
       /* Apply là one-shot: hỏng thì id đó chết hẳn. Giữ thẻ xác nhận là mời
@@ -215,22 +353,76 @@ export default function DrawingInfoPage() {
       }
       actions={
         <>
-          {payload && isModified(payload) ? <Tag>chưa lưu</Tag> : null}
-          <Button onClick={info.reload} disabled={info.refreshing}>
+          {saved.modified ? <Tag>chưa lưu</Tag> : null}
+          <Button onClick={reloadAll} disabled={info.refreshing}>
             {info.refreshing ? "Đang đọc…" : "Đọc lại"}
           </Button>
         </>
       }
     >
       <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
-        {staleNote ? (
+        {stale ? (
           <div className="banner" data-tone="hard">
             <span className="bm" />
             <span className="bt">
-              <b>Hồ sơ này không phải bản vẽ đang mở.</b> {staleNote}
+              <b>{stale.title}</b> {stale.note}
             </span>
             <span className="actions">
-              <Button onClick={info.reload} disabled={info.refreshing}>Đọc lại</Button>
+              <Button onClick={reloadAll} disabled={info.refreshing}>Đọc lại</Button>
+            </span>
+          </div>
+        ) : null}
+
+        {/* Không đọc được hồ sơ VÀ plugin không phản hồi thì gần như luôn là
+            "AutoCAD chưa chạy". Panel legacy có nút mở AutoCAD ngay tại chỗ;
+            xoá panel mà không mang nó sang là bắt người dùng quay về màn hình
+            cũ chỉ để khởi động lại — một ngõ cụt tôi tự tạo ra khi dọn dẹp. */}
+        {/* HAI trạng thái khác nhau, và gộp chúng là nói sai một trong hai:
+            plugin không phản hồi (AutoCAD chưa chạy) so với plugin phản hồi
+            nhưng KHÔNG có bản vẽ nào mở.
+            Trường hợp thứ hai nguy hiểm hơn: `drawing-info` trả
+            `active_document_not_found`, hook giữ lại hồ sơ của lượt trước, và
+            màn hình tiếp tục trưng bảng layer của một bản vẽ đã đóng như thể nó
+            vẫn đang mở. */}
+        {noDocuments ? (
+          <div className="banner" data-tone="hard">
+            <span className="bm" />
+            <span className="bt">
+              <b>AutoCAD không mở bản vẽ nào.</b>{" "}
+              {docsPending
+                ? "Đang kiểm tra lại…"
+                : payload
+                  ? "Nội dung dưới đây là hồ sơ của lượt đọc TRƯỚC, không phải bản vẽ nào đang mở."
+                  : "Mở một bản vẽ trong AutoCAD rồi bấm Đọc lại."}
+              {openError ? ` Không mở được AutoCAD: ${openError}` : ""}
+            </span>
+            <span className="actions">
+              <Button onClick={() => void openAutoCAD()} disabled={opening}>
+                {opening ? "Đang mở…" : "Mở AutoCAD"}
+              </Button>
+              <Button onClick={reloadAll} disabled={info.refreshing}>Đọc lại</Button>
+            </span>
+          </div>
+        ) : docsSettled && !docsAlive && !info.loading ? (
+          /* GIỮ dải cảnh báo trong lúc hỏi lại, chỉ đổi chữ. Ẩn nó đi rồi hiện
+             lại sau mỗi lượt hỏi là một nhịp nháy, và nháy thì đọc ra như đã
+             kết nối được. Nói "đang kiểm tra lại" là đúng cả hai vế: kết luận
+             cũ vẫn là AutoCAD chưa phản hồi, và câu trả lời mới chưa về. */
+          <div className="banner" data-tone="hard">
+            <span className="bm" />
+            <span className="bt">
+              <b>AutoCAD chưa phản hồi.</b>{" "}
+              {docsPending
+                ? "Đang kiểm tra lại…"
+                : payload
+                  ? "Nội dung dưới đây là lượt đọc trước đó."
+                  : "Chưa đọc được hồ sơ nào — hãy mở AutoCAD rồi đọc lại."}
+              {openError ? ` Không mở được AutoCAD: ${openError}` : ""}
+            </span>
+            <span className="actions">
+              <Button onClick={() => void openAutoCAD()} disabled={opening || docsPending}>
+                {opening ? "Đang mở…" : "Mở AutoCAD"}
+              </Button>
             </span>
           </div>
         ) : null}
@@ -256,8 +448,10 @@ export default function DrawingInfoPage() {
                   <dt>Revision database</dt><dd>{String(doc.revision ?? "—")}</dd>
                   <dt>Trạng thái lưu</dt>
                   <dd>
-                    dbmod = {String(doc.dbmod ?? "—")}
-                    {payload ? (isModified(payload) ? " · có thay đổi chưa lưu" : " · đã lưu") : ""}
+                    dbmod = {saved.dbmod ?? "—"}
+                    {saved.modified === null
+                      ? " · không đọc được trạng thái lưu"
+                      : saved.modified ? " · có thay đổi chưa lưu" : " · đã lưu"}
                   </dd>
                   <dt>Chỉ đọc</dt><dd>{doc.readOnly === true ? "có" : "không"}</dd>
                 </dl>
@@ -425,6 +619,21 @@ export default function DrawingInfoPage() {
                 </div>
               </section>
 
+              <ObjectCatalog
+                payload={payload}
+                /* Số lượt đọc, KHÔNG phải `collectedAt`: dấu thời gian của
+                   plugin chỉ tới giây, nên đọc lại hai lần trong cùng một giây
+                   cho cùng một khoá và danh mục giữ nguyên tập đã tích của lượt
+                   trước — handle cũ đi kèm guard mới. */
+                snapshotKey={String(info.readId)}
+                staleNote={blockNote}
+                guardReady={!!guard}
+                busy={busy}
+                profileLoading={info.refreshing}
+                error={pickError}
+                onPick={(handles) => void pickHandles(handles)}
+              />
+
               <section className="panel">
                 <header>
                   <h2>Từ điển đối tượng có tên</h2>
@@ -436,6 +645,52 @@ export default function DrawingInfoPage() {
                   </p>
                 </div>
               </section>
+              {/* JSON thô. Không phải để người dùng đọc — để khi màn hình nói
+                  một đằng và AutoCAD một nẻo thì có chỗ đối chiếu, thay vì phải
+                  mở terminal gọi `curl`. Mặc định đóng: nó dài hàng nghìn dòng
+                  và không ai cần nó cho việc thường ngày. */}
+              {/* `open` phải là STATE, không để `<details>` tự quản: nội dung
+                  bên trong vẫn được React dựng dù khối đang đóng, và
+                  `JSON.stringify` một payload 350 KB ở mỗi lần render là cái giá
+                  trả cho một khối không ai mở. */}
+              <details
+                className="panel"
+                open={rawOpen}
+                onToggle={(event) => setRawOpen((event.target as HTMLDetailsElement).open)}
+              >
+                <summary
+                  style={{
+                    padding: "var(--s3) var(--s4)",
+                    cursor: "pointer",
+                    fontSize: 13,
+                    fontWeight: 620,
+                  }}
+                >
+                  Dữ liệu thô (JSON)
+                </summary>
+                <div style={{ padding: "0 var(--s4) var(--s4)" }}>
+                  <p className="hint" style={{ marginBottom: "var(--s2)" }}>
+                    Nguyên văn phản hồi của <span className="mono">GET /api/acad/drawing-info</span>.
+                    Dùng để đối chiếu khi màn hình và AutoCAD nói khác nhau.
+                  </p>
+                  <pre
+                    className="mono"
+                    style={{
+                      maxHeight: 420,
+                      overflow: "auto",
+                      fontSize: 11.5,
+                      lineHeight: 1.55,
+                      padding: "var(--s3)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--r-2)",
+                      background: "var(--bg)",
+                      whiteSpace: "pre",
+                    }}
+                  >
+                    {rawOpen && payload ? JSON.stringify(payload, null, 2) : "—"}
+                  </pre>
+                </div>
+              </details>
             </div>
           </div>
 
@@ -445,7 +700,9 @@ export default function DrawingInfoPage() {
             activeFile={activeFile}
             busy={busy}
             profileLoading={info.refreshing}
-            staleNote={staleNote}
+            /* Không có bản vẽ nào mở cũng là một dạng "hồ sơ không khớp thực
+               tế": mọi thao tác bên dưới sẽ nhắm vào một bản vẽ đã đóng. */
+            staleNote={blockNote}
             error={error}
             onPrepare={(draft) => void prepare(draft)}
             onActivate={(file) => void startActivate(file)}
@@ -471,6 +728,26 @@ export default function DrawingInfoPage() {
           <p className="hint">
             Không sửa bản vẽ nào. Nhưng nó đổi <b>thứ mà mọi lệnh ghi sau đó nhắm
             vào</b> — kể cả lệnh chuẩn bị từ màn hình khác.
+          </p>
+        </ConfirmSheet>
+      ) : pending?.kind === "handles" ? (
+        <ConfirmSheet
+          title="Chọn đối tượng trong AutoCAD"
+          mode="selection"
+          target={pending.op.target}
+          summary={`Đổi bộ chọn của AutoCAD sang ${pending.op.count ?? pending.count} đối tượng.`}
+          confirmLabel="Xác nhận & chọn"
+          busy={busy}
+          onConfirm={() => void confirm()}
+          onCancel={() => {
+            if (busy) return;
+            void rejectStagedOp(DAEMON_BASE, pending.op);
+            setPending(null);
+          }}
+        >
+          <p className="hint">
+            {pending.count} đối tượng đã tích trong danh mục. Thao tác này{" "}
+            <b>không sửa gì trong bản vẽ</b>.
           </p>
         </ConfirmSheet>
       ) : pending ? (

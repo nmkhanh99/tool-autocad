@@ -73,6 +73,12 @@ export const endpoints = {
   /** Ghi manifest. Khi `approved: true` thì phải kèm token ở trên. */
   lispManifest: (base: string, id: string) =>
     `${trim(base)}/api/acad/lisp/${encodeURIComponent(id)}/manifest`,
+  /** Mở AutoCAD (và tuỳ chọn một bản vẽ, hoặc một bản vẽ trống mới).
+   *
+   * Không ghi vào bản vẽ nào — nhưng nó KHỞI CHẠY một ứng dụng, nên vẫn là
+   * hành động có hệ quả nhìn thấy được. */
+  acadOpen: (base: string) => `${trim(base)}/api/acad/open`,
+
   /** Hồ sơ đầy đủ của bản vẽ đang mở: bảng layer/block/layout/style, biến hệ
    * thống, từ điển, xref, khung bao.
    *

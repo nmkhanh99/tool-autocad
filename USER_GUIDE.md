@@ -270,11 +270,86 @@ thư mục nào thì danh mục rỗng dù trên đĩa có script.
 
 **Vẫn còn ở màn hình cũ:** nhờ agent phân tích rồi đề xuất manifest.
 
+### Thông tin bản vẽ (`/drawing-info`)
+
+Hồ sơ đầy đủ của bản vẽ AutoCAD đang mở: tệp, đơn vị, khung bao, bảng layer,
+đếm đối tượng theo kiểu, layout, xref, từ điển.
+
+**Chỉ đọc một lần khi mở màn hình.** Đây là lượt đọc nặng nhất của app — trên
+bản vẽ as-built của dự án nó trả về 350 KB và quét toàn bộ bảng ký hiệu. Nó
+**không** tự làm mới, vì làm mới theo nhịp sẽ khiến AutoCAD giật trong lúc bạn
+đang vẽ. Muốn số mới thì bấm **Đọc lại**.
+
+Hệ quả bạn phải biết: mọi con số trên màn hình này là **ảnh chụp tại thời điểm
+đọc**. Danh sách bản vẽ thì tự cập nhật theo sự kiện, nên khi hai thứ lệch nhau
+màn hình sẽ nói ra và khoá các nút ghi lại — chứ không để bạn bấm rồi ăn lỗi.
+
+Ba câu cảnh báo bạn sẽ gặp, và ý nghĩa:
+
+- **"Hồ sơ này không phải bản vẽ đang mở"** — bạn đã đổi sang bản vẽ khác trong
+  AutoCAD. Cũng hiện khi hai bản vẽ **chưa lưu** trùng tên, vì bản vẽ chưa lưu
+  không có đường dẫn để phân biệt.
+- **"Bản vẽ của hồ sơ này không còn mở"** — bản vẽ đã bị đóng. Đóng rồi mở lại
+  cùng một tệp cũng tính, vì với AutoCAD đó là một bản vẽ khác.
+- **"Bản vẽ đã thay đổi sau lượt đọc này"** — bạn đã sửa gì đó kể từ lúc đọc.
+
+Cả ba đều gỡ bằng một nút **Đọc lại**.
+
+#### Khung bao có thể bị giấu đi
+
+Khi bản vẽ có đối tượng ở **nhiều không gian**, ô khung bao ghi "không dùng
+được" thay vì in ra một cặp toạ độ. Lý do: AutoCAD gộp cả Model lẫn layout vào
+một cặp min/max, mà Model ở toạ độ bản vẽ còn layout tính bằng mm trên giấy —
+cặp số ấy không mô tả cái gì có thật. Xem khung bao theo từng không gian ở
+**Khung bản vẽ**.
+
+#### Danh mục đối tượng
+
+Bảng liệt kê từng đối tượng: handle, kiểu, layer, tên block. Lọc theo bất kỳ cột
+nào, phân trang 100 dòng, tích nhiều rồi bấm **Chọn N đối tượng trong AutoCAD**.
+
+Đây là thứ **Khung bản vẽ** không làm được: ở đó bạn chọn *một* đối tượng bằng
+cách bấm vào hình nó. Ở đây bạn với tới được cả những đối tượng không nhìn thấy
+hoặc nằm chồng lên nhau.
+
+Ba giới hạn phải biết:
+
+- **Chỉ có không gian hiện hành.** Daemon quét đúng không gian AutoCAD đang mở
+  *lúc đọc*. Một bản vẽ 10.000 đối tượng mà đang ở layout thì danh mục có thể
+  chỉ 10 dòng — trông y hệt một bản vẽ trống. Đổi tab Model/Layout trong AutoCAD
+  **không** được app phát hiện; phải tự bấm Đọc lại.
+- **Có thể CHƯA đủ.** Nếu ghi chú nói "danh mục CHƯA đủ" thì lượt quét đã dừng
+  giữa chừng, và đối tượng thiếu không hiện ra ở đâu cả.
+- **Tối đa 5.000 handle một lượt** — giới hạn của daemon.
+
+Chọn là **hai pha** như mọi lệnh chạm vào AutoCAD: bấm → xác nhận → AutoCAD
+chọn. Nó không sửa đối tượng nào, chỉ đổi bộ chọn của phiên AutoCAD.
+
+#### Đổi bản vẽ hoạt động
+
+Ô chọn bản vẽ ở cột phải đổi bản vẽ đang hoạt động của AutoCAD. Đây là **lệnh
+ghi** dù nó không sửa đối tượng nào — vì nó đổi thứ mà mọi lệnh ghi sau đó nhắm
+vào.
+
+#### Trạng thái lưu
+
+Dòng "Trạng thái lưu" có thể ghi **"không đọc được trạng thái lưu"**. Đó là chủ
+ý: khi app không xác minh được, nó nói không biết thay vì đoán "đã lưu" — một
+nhãn "đã lưu" sai là đúng thứ khiến bạn đóng AutoCAD và mất phần chưa lưu.
+
+#### Dữ liệu thô (JSON)
+
+Khối gập ở cuối trang in nguyên phản hồi của máy chủ. Dùng khi màn hình và
+AutoCAD nói khác nhau và bạn cần biết bên nào sai.
+
 ### Các màn hình còn lại
 
-Chưa dựng. Thứ tự dự kiến: Khung bản vẽ · Thông tin bản vẽ ·
-Kiểm tra · Hồ sơ tiêu chuẩn · Thay đổi chờ duyệt · Bóc tách · Kết nối AutoCAD ·
-Xuất bản PDF · Xử lý thư mục · Đồng bộ CadWeb · Tổng quan · Trợ lý AI.
+Chưa dựng. Thứ tự dự kiến: Kiểm tra · Hồ sơ tiêu chuẩn · Thay đổi chờ duyệt ·
+Bóc tách · Kết nối AutoCAD · Xuất bản PDF · Xử lý thư mục · Đồng bộ CadWeb ·
+Tổng quan · Trợ lý AI.
+
+Riêng **Khung bản vẽ** (`/workspace`) đã dựng ở giai đoạn 5 nhưng chưa có mục
+hướng dẫn riêng ở đây — sẽ bổ sung sau.
 
 ---
 

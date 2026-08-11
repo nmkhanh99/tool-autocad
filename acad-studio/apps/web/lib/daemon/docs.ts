@@ -19,6 +19,10 @@ export type AcadDocument = {
   title?: string;
   file?: string;
   active?: boolean;
+  /** Mã phiên của bản vẽ trong tiến trình AutoCAD này. So `revision` giữa hai
+   * nguồn chỉ có nghĩa khi CÙNG một `instance`: bộ đếm revision là của một
+   * database cụ thể, hai bản vẽ khác nhau có thể cùng đứng ở số 7. */
+  instance?: string;
   /** Revision của bản vẽ, do plugin cấp. Không phải revision snapshot CadWeb
    * và không phải content-hash hồ sơ — bốn thứ này không so sánh được với nhau. */
   revision?: number;

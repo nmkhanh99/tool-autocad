@@ -100,9 +100,10 @@ export function SelectionBuilder({
        chắn hỏng — để bấm được rồi báo lỗi là một ngõ cụt. Hai, danh sách layer
        và block bên dưới là của bản vẽ cũ, nên kể cả khi gửi đi được thì người
        dùng cũng đang chọn từ một danh sách không thuộc bản vẽ họ nghĩ. */
-    : staleNote
-      ? "Hồ sơ này không phải bản vẽ AutoCAD đang mở. Bấm “Đọc lại” trước."
-      : prepareBlockedReason({ payload, scope, value, action, targetLayer });
+    /* Hiện CHÍNH ghi chú, không thay bằng một câu cứng: hồ sơ có thể cũ vì ba
+       lý do khác nhau — sai bản vẽ, bản vẽ đã đóng, bản vẽ đã bị sửa — và câu
+       "không phải bản vẽ đang mở" chỉ đúng với một trong ba. */
+    : staleNote || prepareBlockedReason({ payload, scope, value, action, targetLayer });
   const note = selectionScopeNote(payload);
   const scoped = action === "select";
 

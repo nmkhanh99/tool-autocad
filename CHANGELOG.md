@@ -1,6 +1,168 @@
 # CHANGELOG
 
-## 2026-08-11
+## 2026-08-11 — Giai đoạn 6: xoá `DrawingInfoPanel` legacy
+
+### Known — một phát hiện được ghi nhận, không sửa
+
+**Không gộp các lượt đọc `/docs` chồng nhau.** Codex chỉ ra: một lượt đọc do sự
+kiện mở có thể về sau lượt của "Đọc lại"; nếu lượt sau timeout thì `docsAlive`
+hạ xuống `false` ngay sau một thao tác thành công, và màn hình khoá lại. Không
+sửa vì đó là hành vi ĐÚNG theo thiết kế hiện tại: lượt hỏi gần nhất hỏng nghĩa
+là ta không biết, và màn hình này cố tình fail-closed khi không biết. Nó tự khỏi
+ở sự kiện kế tiếp. Thêm một tầng gom lời gọi để đổi lấy một khoảng khoá vài giây
+là không đáng.
+
+### Removed — `DrawingInfoPanel` legacy (1.789 dòng TSX + 184 quy tắc CSS)
+
+Panel đầu tiên bị xoá trong đợt migrate. Trước khi xoá đã port nốt hai chức năng
+cuối sang `/drawing-info`:
+
+- **Danh mục đối tượng** — lọc theo handle/kiểu/layer/tên block, phân trang 100
+  dòng, tích nhiều rồi chọn cả tập trong AutoCAD. Đây là thứ `/workspace` không
+  làm được: ở đó chọn **một** đối tượng bằng cách bấm vào hình nó; ở đây với tới
+  được cả những đối tượng không nhìn thấy hoặc nằm chồng lên nhau.
+- **JSON thô** — để đối chiếu khi màn hình và AutoCAD nói khác nhau, thay vì
+  phải mở terminal gọi `curl`.
+
+Đã chạy thật trọn đường: tích một MLINE trong danh mục → xác nhận → đọc lại
+`drawing-info` thấy `selected: 1`, handle `12181`, đúng đối tượng đã tích.
+
+CSS xoá theo ba lượt (rule đơn → selector ghép → đệ quy vào `@media`), chỉ xoá
+quy tắc mà **mọi** class `drawing-*` trong đó thuộc riêng panel này.
+`.drawing-empty-open` giữ lại vì `page.tsx` còn dùng. `globals.css` 3.511 → 3.130
+dòng.
+
+24 assert trong `test-contract.mjs` nói về kiến trúc cache-snapshot của panel đã
+chết theo nó. **Năm** bất biến còn giá trị được chuyển sang trỏ vào màn hình mới
+— chúng nói về dữ liệu và về an toàn, không về kiến trúc.
+
+### Fixed — hai mươi chín lỗi của lượt này (Codex review, mười hai vòng)
+
+- **Handle giữ qua lượt đọc khác (P1).** Handle của AutoCAD **cục bộ theo bản
+  vẽ**. Giữ tập đã tích qua một lượt "Đọc lại" hay một lần đổi bản vẽ là gửi
+  handle của bản vẽ CŨ kèm guard của bản vẽ MỚI — guard hợp lệ, và cùng handle
+  đó ở bản vẽ mới trỏ sang một đối tượng hoàn toàn khác.
+- **Bản vá đầu của lỗi trên vẫn thủng**, vì nó nhận diện lượt đọc bằng
+  `collectedAt` của plugin — dấu thời gian chỉ tới **giây**. Đọc lại hai lần
+  trong cùng một giây cho cùng một khoá, và tập đã tích không bị xoá. Nay dùng
+  số thứ tự lượt đọc của `useDrawingInfo`, thứ vốn đã có và không lặp lại.
+- **Mất nút "Mở AutoCAD" khi xoá panel.** Panel cũ có nó ngay tại chỗ; xoá mà
+  không mang sang là bắt người dùng quay về màn hình cũ chỉ để khởi động lại.
+  Một ngõ cụt tôi tự tạo ra khi dọn dẹp.
+- **JSON thô `stringify` cả khi khối đang đóng.** Chính một assert cũ của panel
+  legacy chỉ ra: nó bảo "chỉ dựng khi được mở", còn bản của tôi thì không.
+  350 KB `JSON.stringify` ở mỗi lần render cho một khối không ai mở.
+- **Tích cả trang vượt trần 5.000 handle**, làm nút ghi khoá lại cho tới khi
+  người dùng tự bỏ tích từng cái.
+- **Đổi tập đã tích trong lúc đang chuẩn bị** — thao tác chờ mang tập cũ còn màn
+  hình hiện tập mới. Lần khoá đầu sót nút **"Bỏ tích"**: ô tích thì khoá, nút
+  xoá cả tập thì không, nên người dùng vẫn xác nhận được một hộp thoại trong khi
+  màn hình sau lưng nói mình chưa chọn gì.
+- **Nút chọn vẫn bấm được trong lúc đọc lại hồ sơ**, và bấm thì không có gì xảy
+  ra.
+- **Dải "AutoCAD chưa phản hồi" hiện khi `/docs` còn đang bay.** Điều kiện chỉ
+  chờ lượt đọc hồ sơ, không chờ lời gọi danh sách bản vẽ — mà lúc mới mở, "chưa
+  hỏi xong" và "hỏi xong, plugin chết" đều là `false`. Kết quả: báo AutoCAD chết
+  kèm nút "Mở AutoCAD" cho một AutoCAD đang chạy bình thường. Bản vá đầu vẫn
+  thiếu vế thứ hai: sau một lần hỏng, mỗi sự kiện `pluginLoaded` mở một lượt hỏi
+  lại, và trong lúc lượt đó chưa về thì kết luận trên màn hình là kết luận cũ.
+  Nay dải cảnh báo **ở nguyên** nhưng đổi chữ thành "đang kiểm tra lại…" — ẩn
+  rồi hiện lại là một nhịp nháy, mà nháy thì đọc ra như đã kết nối được.
+- **Danh mục không biết bản vẽ đã bị sửa sau lượt đọc.** Hồ sơ chỉ đọc lại khi
+  bấm, nên danh mục có thể già hơn bản vẽ hàng chục thao tác — handle của một
+  đối tượng vừa bị xoá vẫn nằm đó, tích được. Máy chủ vẫn chặn
+  (`drawing_stale`), nên không phải lỗ hổng ghi nhầm; nhưng để người dùng tích
+  40 dòng rồi mới ăn một lỗi từ máy chủ là bắt họ trả giá cho thứ màn hình biết
+  trước. Nay so `revision` của hồ sơ với `revision` trong `/docs` — lời gọi nhẹ,
+  đã tự nạp lại theo sự kiện reactor, và nay nghe thêm `drawingModified`.
+- **Lỗi "Mở AutoCAD" hiện dưới nhãn "Không chuẩn bị được"** ở cột bên kia, vì nó
+  dùng chung ô lỗi với bộ tạo thao tác. Đọc ra như một lệnh ghi hỏng, trong khi
+  chưa có thao tác nào được tạo.
+- **Hai câu nói sai về hiện tại.** "Chỉ chạm tới N đối tượng trong không gian X
+  — không gian AutoCAD **đang mở**" là một điều màn hình không biết: đổi tab
+  Model/Layout không sửa đối tượng nào nên revision không nhúc nhích, và `/docs`
+  không mang không gian. Sửa thành "không gian AutoCAD mở **lúc đọc** hồ sơ
+  này" — thứ duy nhất nói được có căn cứ.
+- **Lý do chặn là một câu đóng hộp cho ba tình huống khác nhau.** "Hồ sơ này
+  không phải bản vẽ AutoCAD đang mở" bị dùng cho cả "sai bản vẽ", "không có bản
+  vẽ nào mở" và "bản vẽ đã đổi" — hai trong ba là nói sai. Nay trả lại chính ghi
+  chú đã tính ra. Câu cứng đó còn nằm ở HAI chỗ nữa — dải cảnh báo của trang và
+  bộ tạo thao tác; cả hai đã sửa theo.
+- **Đóng rồi mở lại CÙNG một tệp không bị bắt.** Tên tệp khớp nên "sai bản vẽ"
+  không thấy gì, revision của database mới lại bắt đầu từ 0 nên "đã thay đổi"
+  cũng không. Nhưng với AutoCAD đó là một database khác, và guard `instance` của
+  máy chủ từ chối. Nay so theo `instance`: hồ sơ trỏ tới một `instance` không
+  còn trong danh sách nghĩa là bản vẽ đó đã đóng. Ba tình huống hồ sơ cũ gộp vào
+  một hàm `profileStaleReason`, mỗi loại một tiêu đề riêng.
+- **Nút "Đọc lại" không gỡ được kẹt.** Nó chỉ đọc lại hồ sơ. Khi danh sách bản
+  vẽ đang rỗng vì lỡ một sự kiện `docOpened`, hồ sơ mới về được nhưng `docs` vẫn
+  rỗng — màn hình tiếp tục nói "AutoCAD không mở bản vẽ nào" và khoá mọi thứ cho
+  tới khi có một sự kiện khác. Nay đọc lại cả hai nguồn.
+- **Dải "AutoCAD không mở bản vẽ nào" cũng kết luận trong lúc đang hỏi lại** —
+  cùng lỗi với dải "chưa phản hồi", ở dải bên cạnh. Nay cũng nói "đang kiểm tra
+  lại…".
+- **Trạng thái lưu đọc từ hồ sơ, không từ danh sách bản vẽ.** Sau một lượt lưu
+  trong AutoCAD, thanh tiêu đề (đọc danh sách) nói "đã lưu" còn dòng "Trạng thái
+  lưu" (đọc hồ sơ) vẫn nói "có thay đổi chưa lưu" — hai chỗ trên cùng một màn
+  hình nói ngược nhau. Nay cả hai lấy từ danh sách bản vẽ, khớp theo `instance`.
+  Nhân đó sửa luôn một lỗi đã được ghi thành quy tắc trong `docs.ts` nhưng chưa
+  thực thi: **thiếu `dbmod` là KHÔNG BIẾT**, không phải "đã lưu" — plugin bản cũ
+  không phát trường này, và một nhãn "đã lưu" sai trên bản vẽ chưa lưu là đúng
+  thứ dẫn tới mất dữ liệu khi khởi động lại AutoCAD.
+- **Hai lời gọi `/docs` chồng nhau sau khi đổi bản vẽ hoạt động** — `reloadAll`
+  đã gọi rồi mà lời gọi cũ vẫn còn. Lượt về trước bị `docsSequence` bỏ đi, và
+  nếu lượt sau timeout thì màn hình rơi vào trạng thái mất kết nối ngay sau một
+  lần đổi bản vẽ THÀNH CÔNG.
+- **Đọc `/docs` hỏng thì xoá sạch danh sách bản vẽ.** Cùng lỗi mà
+  `useDrawingInfo` đã tránh từ đầu ("GIỮ hồ sơ cũ") nhưng `loadDocs` không làm
+  theo. Kịch bản cụ thể: `move-to-layer` chạy xong phát `drawingModified`, lượt
+  đọc do sự kiện đó mở về SAU lượt của "Đọc lại" và hỏng — câu trả lời đúng vừa
+  nhận bị ném đi, và màn hình báo mất kết nối ngay sau một thao tác THÀNH CÔNG.
+  Nay chỉ hạ cờ sống, giữ nguyên danh sách.
+- **Chọn được trong lúc chưa biết hồ sơ còn khớp không.** Danh sách bản vẽ là
+  thứ DUY NHẤT màn hình dùng để kiểm độ tươi của hồ sơ, nhưng nút chọn không hề
+  soi nó — plugin chết hoặc lượt đọc đang bay thì vẫn bấm được, rồi ăn một lỗi
+  `drawing_stale` từ máy chủ. Nay gộp mọi lý do chặn vào một giá trị `blockNote`
+  dùng chung cho cả danh mục lẫn bộ tạo thao tác.
+- **Danh mục tự nhận là "đã đủ" trong khi đã bỏ bớt dòng.** `catalogSubjects`
+  loại dòng trùng handle và dòng thiếu handle, nhưng câu ghi chú vẫn đọc thẳng
+  `scanned` và `complete` từ payload — bảng hiện 2 dòng mà khẳng định có đủ 3
+  đối tượng. Nay ghi chú tính từ số dòng THẬT, và lệch bao nhiêu cũng hạ xuống
+  "CHƯA đủ" kèm số dòng đã bỏ.
+- **Lỗi của lượt chọn hiện ở panel khác.** Cùng lỗi với nút "Mở AutoCAD": nút ở
+  danh mục mà phản hồi lại nằm dưới nhãn "Không chuẩn bị được" ở cột bên kia.
+  Danh mục nay có ô lỗi riêng.
+- **Không chặn khi AutoCAD không có ĐÚNG MỘT bản vẽ hoạt động.** Daemon đòi đúng
+  một, và sẽ từ chối mọi lệnh ghi khi không có hoặc có nhiều hơn một — nhưng
+  giao diện vẫn cho bấm. Nay chặn tại chỗ với hướng dẫn cụ thể.
+- **Danh sách bản vẽ vẫn bị xoá sạch — qua cửa còn lại.** Bản vá trước chỉ chặn
+  nhánh `catch`, nhưng daemon trả **HTTP 200** kèm `{alive:false, docs:[]}` khi
+  plugin im, nên lượt hỏng đi qua nhánh THÀNH CÔNG. Nay chỉ ghi đè danh sách khi
+  plugin thật sự trả lời.
+- **Hai bản vẽ chưa lưu trùng tên không phân biệt được.** Bản vẽ chưa lưu không
+  có đường dẫn, nên hai `Drawing1.dwg` mở cùng lúc cho ra tên khớp; nếu cả hai
+  còn ở revision 0 thì so revision cũng khớp nốt, và màn hình trưng hồ sơ của
+  bản vẽ KHÔNG hoạt động như thể nó là bản đang mở. Nay khớp `instance` chưa đủ
+  — phải là bản vẽ đang hoạt động.
+- **Trạng thái lưu vẫn đọc danh sách đã không tin được nữa (P1).** Cùng lỗi với
+  mục ngay dưới nhưng tôi chỉ sửa một nửa: chặn phần chẩn đoán, quên phần trạng
+  thái lưu. Đây là nửa nguy hiểm hơn — hiện "đã lưu" khi thật ra không biết là
+  làm người dùng đóng AutoCAD và mất phần chưa lưu. Nay `savedState` nhận thêm
+  `docsAlive` và trả "không biết" khi lượt đọc gần nhất hỏng, kể cả khi hồ sơ có
+  sẵn một con số.
+- **Chẩn đoán "hồ sơ cũ" dựa trên danh sách bản vẽ đã cũ** — hệ quả trực tiếp
+  của bản vá ngay trên. Từ lúc `loadDocs` giữ lại danh sách khi đọc hỏng, danh
+  sách đó có thể mô tả một trạng thái AutoCAD đã qua, và đem so với hồ sơ cho ra
+  một chẩn đoán tự tin mà sai, kiểu "bạn đang ở bản vẽ khác" trong khi thật ra
+  không biết gì cả. Nay chỉ chẩn đoán khi `docsAlive`; không biết thì nói không
+  biết.
+- **`savedState` lùi về con số cũ khi bản ghi sống thiếu `dbmod`.** Tìm thấy bản
+  ghi sống nghĩa là nó mới hơn; thiếu trường chỉ nói plugin không phát, không
+  phải cái cớ để hồi sinh giá trị đã cũ trong hồ sơ.
+- **Bỏ sót sự kiện `drawingSaved`.** Nó đến từ `saveComplete` của database
+  reactor, không đi qua `commandEnded`, nên một lượt lưu tự động hay QSAVE từ
+  menu không phát `drawingModified`. Hệ quả: `dbmod` treo ở "chưa lưu" và
+  revision đứng lại ở số cũ cho tới lần bấm "Đọc lại" tiếp theo.
 
 ### Added — `/drawing-info` đổi được bản vẽ đang hoạt động
 
@@ -44,7 +206,7 @@ hình mới chưa có: **lọc + phân trang danh mục đối tượng**, **xem
 **bộ chọn bản vẽ** (phần này đã làm xong ở lượt này). Xoá khi chưa port là mất
 tính năng, không phải dọn dẹp.
 
-## 2026-08-11
+## 2026-08-11 — D2: cảnh báo màn hình dựng thử
 
 ### Added — dải "BẢN DỰNG THỬ" cho hai màn hình không có backend
 
@@ -83,7 +245,7 @@ Script còn chặn hai kiểu hỏng đã xảy ra thật trong chính lượt n
   vào hàng footer 24px. Script nay đòi mọi `grid-template-rows` của hai panel đó
   bắt đầu bằng `auto`.
 
-## 2026-08-11
+## 2026-08-11 — Giai đoạn 6: màn hình `/drawing-info`
 
 ### Added — màn hình `/drawing-info`
 
@@ -152,7 +314,7 @@ Chiều kiểm mới tìm ra một va chạm **có sẵn**: `.check` của desig
 (`inline-flex`) trúng vào `<td class="check">` của bảng standards legacy. Đổi tên
 phía legacy thành `.selcell`, đúng như thông điệp của chính guardrail.
 
-## 2026-08-11
+## 2026-08-11 — Giai đoạn 5: chọn trong AutoCAD từ khung xem
 
 ### Added — "Chọn trong AutoCAD" từ khung xem
 
@@ -201,7 +363,7 @@ command` sau nhiều lần khởi động lại bằng script; cửa sổ bản 
 Đó là trạng thái môi trường, không phải mã — nhưng chưa có bằng chứng chạy thật
 cho pha ghi.
 
-## 2026-08-11
+## 2026-08-11 — Giai đoạn 5: VIEWPORT và MTEXT
 
 ### Added — VIEWPORT có viền thật, MTEXT có căn lề và nhiều dòng
 

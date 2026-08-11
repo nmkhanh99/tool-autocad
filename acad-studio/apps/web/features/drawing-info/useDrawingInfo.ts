@@ -14,6 +14,12 @@ import type { JsonRecord } from "./model";
 
 export type DrawingInfoState = {
   data: JsonRecord | null;
+  /** Số thứ tự của lượt đọc đang hiển thị, tăng dần và không lặp lại.
+   *
+   * Người gọi cần nó để biết "hồ sơ trên màn hình đã là của một lượt đọc khác".
+   * Dấu thời gian của plugin KHÔNG làm được việc đó: nó chỉ tới giây, nên hai
+   * lượt đọc trong cùng một giây trông y hệt nhau. */
+  readId: number;
   loading: boolean;
   refreshing: boolean;
   error: string;
@@ -22,6 +28,7 @@ export type DrawingInfoState = {
 
 export function useDrawingInfo(daemon: string): DrawingInfoState {
   const [data, setData] = useState<JsonRecord | null>(null);
+  const [readId, setReadId] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -41,6 +48,7 @@ export function useDrawingInfo(daemon: string): DrawingInfoState {
       );
       if (stale()) return;
       setData(body as JsonRecord);
+      setReadId(ticket);
     } catch (failure) {
       if (stale()) return;
       /* GIỮ hồ sơ cũ. Xoá nó vì một lần đọc hỏng sẽ làm bộ tạo chọn mất hết
@@ -58,5 +66,5 @@ export function useDrawingInfo(daemon: string): DrawingInfoState {
     void load();
   }, [load]);
 
-  return { data, loading, refreshing, error, reload: () => void load() };
+  return { data, readId, loading, refreshing, error, reload: () => void load() };
 }

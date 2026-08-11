@@ -277,10 +277,24 @@ route, như `blocks.module.css` vừa làm.
 - **Giai đoạn 6** — `/drawing-info` **đã xong (2026-08-11)**; còn tách `/review`
   và `/standards`.
 
-  **Chưa xoá được `DrawingInfoPanel` legacy (1.789 dòng).** Đã rà từng chức năng:
-  bộ chọn bản vẽ (`activate-document`) đã port sang màn hình mới, nhưng còn
-  **lọc + phân trang danh mục đối tượng** và **xem JSON thô** thì chưa. Xoá khi
-  chưa port là mất tính năng chứ không phải dọn dẹp.
+  **`DrawingInfoPanel` legacy đã XOÁ (2026-08-11)** — panel đầu tiên trong đợt
+  migrate. Ba chức năng cuối đã port trước khi xoá: bộ chọn bản vẽ, danh mục đối
+  tượng (lọc + phân trang + chọn cả tập), và JSON thô. Cùng với 184 quy tắc CSS
+  và 24 assert contract chết theo; 5 bất biến còn giá trị chuyển sang màn hình
+  mới.
+
+  **Khoảng trống đã biết — đổi tab Model/Layout.** Danh mục đối tượng chỉ quét
+  không gian hiện hành, nên đổi tab trong AutoCAD làm danh mục nói về không gian
+  cũ. Màn hình KHÔNG phát hiện được: `/docs` không mang không gian, và bộ đếm
+  revision không tăng vì đổi tab không sửa đối tượng nào. Guard máy chủ cũng chỉ
+  soi `instance` + `revision`, không soi không gian. Hiện xử lý bằng lời — mọi
+  câu về phạm vi nói "lúc đọc" thay vì "đang mở". Muốn bắt thật thì phải thêm
+  không gian hiện hành vào payload `/docs` của plugin, tức sửa ObjectARX và dựng
+  lại.
+
+  **Cách làm cho các panel sau:** rà TỪNG chức năng của panel cũ trước, port cái
+  còn thiếu, chạy thật, rồi mới xoá. Lượt này suýt xoá sớm vì tưởng màn hình mới
+  đã đủ.
 
   Phần đã xong mang theo một sự thật của backend mà mọi màn hình ghi khác cũng
   phải biết: `select` chạy theo **phạm vi**, còn `move-to-layer` chạy trên **bộ
