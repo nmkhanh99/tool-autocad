@@ -1,5 +1,7 @@
 "use client";
 
+import { PrototypeBanner } from "../components/ui/PrototypeBanner";
+
 import {
   useEffect,
   useMemo,
@@ -516,6 +518,10 @@ export default function PreconstructionPanel({
     }}>
       <section ref={panelRef} className="precon-panel" role="dialog" aria-modal={action ? undefined : true}
         aria-labelledby="precon-title" tabIndex={-1}>
+        {/* Quyết định D2 của ROADMAP. Màn hình này gọi KHÔNG một API nào — toàn
+            bộ khối lượng, đơn giá, tiến độ, vấn đề hiện trường đều là hằng số.
+            Không tắt được: xem `PrototypeBanner`. */}
+        <PrototypeBanner what="Màn hình Preconstruction" />
         <header className="precon-head">
           <div className="precon-identity">
             <div className="precon-mark">P</div>

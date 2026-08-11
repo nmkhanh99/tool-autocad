@@ -1,5 +1,7 @@
 "use client";
 
+import { PrototypeBanner } from "../components/ui/PrototypeBanner";
+
 import {
   useEffect,
   useMemo,
@@ -873,6 +875,14 @@ export default function DocumentReviewPanel({
     }}>
       <section ref={workspaceRef} className="review-panel" role="dialog" aria-modal="true"
         aria-labelledby="review-workspace-title" tabIndex={-1}>
+        {/* Quyết định D2 của ROADMAP. Màn hình này gọi ĐÚNG MỘT API — đọc
+            `INSUNITS` để biết đơn vị; danh sách tài liệu, markup, mọi số đo và
+            cả bản vẽ trong khung xem đều là hằng số viết cứng. Không tắt được:
+            xem `PrototypeBanner`. */}
+        <PrototypeBanner
+          what="Màn hình PDF & Review"
+          real="đơn vị đo của bản vẽ đang mở"
+        />
         <header className="review-head">
           <div className="review-identity">
             <div className="review-mark">R</div>

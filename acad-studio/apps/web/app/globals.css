@@ -1090,7 +1090,9 @@ a.hfix { display: inline-flex; align-items: center; }
   --review-cyan: #4bc7d5;
   position: relative; width: min(1580px, calc(100vw - 24px)); height: min(980px, calc(100vh - 24px));
   min-width: 0; min-height: 0; display: grid;
-  grid-template-rows: 70px 46px minmax(0, 1fr) 26px; overflow: hidden;
+  /* Hàng `auto` đầu tiên là dải "bản dựng thử" (quyết định D2). Không thêm nó
+     thì banner chiếm mất hàng của header và cả lưới trượt đi một dòng. */
+  grid-template-rows: auto 70px 46px minmax(0, 1fr) 26px; overflow: hidden;
   color: var(--review-text); background: var(--review-bg); border: 1px solid #354553;
   border-radius: 14px; box-shadow: 0 34px 110px rgba(0, 0, 0, .72);
   font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -1635,7 +1637,9 @@ a.hfix { display: inline-flex; align-items: center; }
 }
 
 @media (max-width: 700px) {
-  .review-panel { grid-template-rows: 58px 43px minmax(0, 1fr) 24px; }
+  /* `auto` đầu tiên: dải bản dựng thử. Bỏ sót ở override responsive thì
+     banner chiếm hàng header, thân bị nén vào hàng footer 24px. */
+  .review-panel { grid-template-rows: auto 58px 43px minmax(0, 1fr) 24px; }
   .review-head { padding: 7px 9px; }
   .review-mark { width: 34px; height: 34px; }
   .review-identity span, .review-identity p { display: none; }
@@ -2415,7 +2419,8 @@ a.hfix { display: inline-flex; align-items: center; }
   --precon-red: #e46f72;
   isolation: isolate; position: relative; width: min(1500px, calc(100vw - 20px));
   height: min(940px, calc(100vh - 20px)); min-width: 0; min-height: 0;
-  display: grid; grid-template-rows: 70px minmax(0, 1fr) 27px; overflow: hidden;
+  /* Hàng `auto` đầu tiên: dải "bản dựng thử" — xem `.review-panel`. */
+  display: grid; grid-template-rows: auto 70px minmax(0, 1fr) 27px; overflow: hidden;
   color: var(--precon-text); background: var(--precon-bg); border: 1px solid #354651;
   border-radius: 14px; box-shadow: 0 34px 110px rgba(0, 0, 0, .74);
   font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -3305,7 +3310,7 @@ a.hfix { display: inline-flex; align-items: center; }
 @keyframes precon-notice-in { from { opacity: 0; transform: translate(-50%, 7px); } }
 
 @media (max-width: 1180px) {
-  .precon-panel { grid-template-rows: 66px minmax(0, 1fr) 26px; }
+  .precon-panel { grid-template-rows: auto 66px minmax(0, 1fr) 26px; }
   .precon-body { grid-template-columns: 194px minmax(0, 1fr); }
   .precon-local { display: none; }
   .precon-scroll { padding: 18px 19px 30px; }
@@ -3403,7 +3408,7 @@ a.hfix { display: inline-flex; align-items: center; }
 }
 
 @media (max-width: 640px) {
-  .precon-panel { grid-template-rows: 56px minmax(0, 1fr) 24px; }
+  .precon-panel { grid-template-rows: auto 56px minmax(0, 1fr) 24px; }
   .precon-head { gap: 8px; padding: 7px 8px; }
   .precon-mark { width: 34px; height: 34px; font-size: 15px; }
   .precon-identity > div > span,

@@ -338,11 +338,17 @@ rồi khởi động lại AutoCAD.
 ## Technical Debt
 
 - **21% web app là prototype không backend.** `PreconstructionPanel` (1.089 dòng
-  TSX + 1.118 dòng CSS, **0** lời gọi API) và `DocumentReviewPanel` (1.348 dòng,
+  TSX + 1.118 dòng CSS, **0** lời gọi API) và `DocumentReviewPanel` (1.358 dòng,
   **1** lời gọi, chỉ đọc `INSUNITS`; mọi số đo là hằng số). Theo **D2** thì giữ
   và gắn banner "bản dựng thử" cấp route, không tắt được. Điều kiện thoát: chỉ
   gỡ banner khi có endpoint thật. **Không refactor** — refactor làm chúng trông
   đã hoàn thiện, đúng thứ nguy hiểm nhất: người dùng tin vào con số bịa.
+
+  **Banner đã gắn (2026-08-11)**, kèm `pnpm check:prototype` canh nó: danh sách
+  hai màn hình này là hợp đồng, kiểm cả hai chiều, bóc chú thích trước khi tìm
+  (bọc vào comment không qua được), và đòi lưới của hai panel chừa hàng cho
+  banner ở **mọi** khổ màn hình. Gỡ một tên khỏi danh sách phải sửa mục này
+  trong cùng lượt.
 - **Nghi vấn ở `buildCreateBlockLisp` — chưa xác minh, chưa sửa.** Sau khi chạy
   `-BLOCK` (lệnh này **xoá** các đối tượng đã chọn), LISP làm
   `(setq acadlib:ref (entlast))` rồi `CHPROP` đối tượng đó sang layer mặc định

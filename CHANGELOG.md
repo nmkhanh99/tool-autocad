@@ -2,6 +2,45 @@
 
 ## 2026-08-11
 
+### Added — dải "BẢN DỰNG THỬ" cho hai màn hình không có backend
+
+Thi hành **quyết định D2** của `ROADMAP.md` — đã chốt từ lâu nhưng chưa làm.
+
+`PreconstructionWorkspace` gọi **0** API; `PDF & Review Workspace` gọi **1** (chỉ
+để đọc `INSUNITS`). Mọi khối lượng, đơn giá, danh sách tài liệu, danh sách markup
+và cả bản vẽ trong khung xem đều là **hằng số viết cứng** — kể cả con số
+"1.115.576.347 đ" ở ô dự toán và "18,60 m²" cạnh một mặt bằng. Trước lượt này
+không có một dòng nào trên màn hình nói ra điều đó.
+
+Đó không phải một tính năng chưa xong. Đó là một màn hình **nói dối**, và nó
+nguy hiểm hơn một màn hình trống: kỹ sư mở ra, thấy số, chép vào hồ sơ.
+
+Dải cảnh báo **không tắt được** — cho tắt là biến nó thành một cú bấm phiền toái
+người ta bỏ qua trong ba giây đầu.
+
+### Added — `check:prototype`, guardrail canh chính dải cảnh báo đó
+
+Dải cảnh báo là thứ dễ bị gỡ nhất trong repo: nó xấu, chiếm chỗ, và "ai cũng biết
+rồi". Ràng buộc phải nằm ở chỗ máy kiểm được.
+
+Bản đầu đếm `fetch(` và coi "dưới 2 lời gọi" là chưa có backend — **báo nhầm ngay
+hai chỗ**: `CadWebViewerPanel` nhận dữ liệu qua prop (viewer thuần, không gọi API
+là kiến trúc đúng), và `DrawingInfoPanel` gọi một lời gọi tới một endpoint trả về
+toàn bộ hồ sơ. Một script hay báo sai sẽ bị nới lỏng cho tới lúc vô dụng, nên
+ràng buộc đổi sang bám vào **danh sách đã quyết định** ở D2, kiểm cả hai chiều.
+
+Script còn chặn hai kiểu hỏng đã xảy ra thật trong chính lượt này:
+
+- **Bọc banner vào comment vẫn qua được** nếu chỉ tìm chuỗi thô. Nay bóc chú
+  thích trước khi tìm — và đã thử phá để chắc là nó bắt.
+- **Quên hàng lưới ở override responsive.** Hai panel là lưới hàng cố định; thêm
+  banner là thêm một hàng. Bản gốc đã sửa nhưng **ba override responsive thì
+  chưa**, nên ở khổ màn hình hẹp banner chiếm hàng header và thân panel bị nén
+  vào hàng footer 24px. Script nay đòi mọi `grid-template-rows` của hai panel đó
+  bắt đầu bằng `auto`.
+
+## 2026-08-11
+
 ### Added — màn hình `/drawing-info`
 
 Giai đoạn 6, phần đầu. Hồ sơ đầy đủ của bản vẽ đang mở: tệp và phiên bản, đơn vị
