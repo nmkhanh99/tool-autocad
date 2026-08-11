@@ -36,6 +36,7 @@
  */
 import { useMemo, useState } from "react";
 import { WriteButton } from "../../components/ui/WriteButton";
+import type { AcadDocument } from "../../lib/daemon/docs";
 import {
   SELECTION_ACTIONS,
   SELECTION_SCOPES,
@@ -59,12 +60,23 @@ export type SelectionDraft = {
 };
 
 export function SelectionBuilder({
-  payload, busy, error, onPrepare,
+  payload, docs, activeFile, busy, profileLoading, staleNote, error, onPrepare, onActivate,
 }: {
   payload: JsonRecord | null;
+  /** Bản vẽ đang mở trong AutoCAD. Một phần tử thì không có gì để đổi. */
+  docs: readonly AcadDocument[];
+  /** Đường dẫn bản vẽ mà hồ sơ trên màn hình đang mô tả. */
+  activeFile: string;
   busy: boolean;
+  /** Hồ sơ đang được đọc lại. Khác `busy`: không có thao tác nào đang chạy,
+   * nhưng nội dung trên màn hình đang mô tả một bản vẽ đã cũ. */
+  profileLoading: boolean;
+  /** Hồ sơ trên màn hình đang mô tả một bản vẽ KHÁC bản vẽ AutoCAD đang mở.
+   * Rỗng = khớp. */
+  staleNote: string;
   error: string;
   onPrepare: (draft: SelectionDraft) => void;
+  onActivate: (file: string) => void;
 }) {
   const [scope, setScope] = useState<SelectionScopeKind>("layer");
   const [value, setValue] = useState("");
@@ -76,7 +88,21 @@ export function SelectionBuilder({
     [payload, scope],
   );
   const layers = useMemo(() => (payload ? layerRows(payload) : []), [payload]);
-  const blocked = prepareBlockedReason({ payload, scope, value, action, targetLayer });
+  /* Đang đọc lại hồ sơ thì danh sách layer/block trên màn hình còn là của bản
+     vẽ TRƯỚC. Cho chuẩn bị lúc này là để người dùng chọn "layer A" của bản vẽ
+     cũ rồi gửi lên với đích là bản vẽ cũ, trong khi họ tin mình đang làm việc
+     với bản vẽ vừa chuyển sang. */
+  const blocked = profileLoading
+    ? "Đang đọc lại hồ sơ bản vẽ — danh sách bên dưới còn là của bản vẽ trước."
+    /* Hồ sơ mô tả bản vẽ khác bản vẽ đang mở: CHẶN, không chỉ cảnh báo. Hai lý
+       do độc lập. Một, daemon **bắt buộc** đích của `select`/`move-to-layer`
+       phải là bản vẽ đang hoạt động (`requireActive`), nên lượt chuẩn bị chắc
+       chắn hỏng — để bấm được rồi báo lỗi là một ngõ cụt. Hai, danh sách layer
+       và block bên dưới là của bản vẽ cũ, nên kể cả khi gửi đi được thì người
+       dùng cũng đang chọn từ một danh sách không thuộc bản vẽ họ nghĩ. */
+    : staleNote
+      ? "Hồ sơ này không phải bản vẽ AutoCAD đang mở. Bấm “Đọc lại” trước."
+      : prepareBlockedReason({ payload, scope, value, action, targetLayer });
   const note = selectionScopeNote(payload);
   const scoped = action === "select";
 
@@ -90,6 +116,36 @@ export function SelectionBuilder({
             bản vẽ chỉ đổi sau khi bạn xác nhận.
           </p>
         </div>
+
+        {/* Đổi bản vẽ hoạt động đứng RIÊNG, trên cùng: nó không thao tác trên
+            đối tượng nào mà đổi thứ mọi thao tác bên dưới nhắm vào. Gộp nó vào
+            danh sách thao tác là mời người dùng chọn "phạm vi: layer A" rồi bấm
+            một nút đổi cả bản vẽ. */}
+        {docs.length > 1 ? (
+          <div className="field">
+            <label htmlFor="sel-doc">Bản vẽ đang thao tác</label>
+            <select
+              className="select"
+              id="sel-doc"
+              value={activeFile}
+              /* Khoá khi đang chuẩn bị một thao tác khác: hai lượt chuẩn bị
+                 chạy song song thì lượt về sau ghi đè `pending`, thẻ xác nhận
+                 mô tả cái này còn thao tác kia bị bỏ rơi ở máy chủ. */
+              disabled={busy || profileLoading}
+              onChange={(event) => onActivate(event.target.value)}
+            >
+              {docs.map((doc) => (
+                <option key={doc.file || doc.title} value={doc.file || doc.title || ""}>
+                  {doc.title || doc.file}{doc.active ? " · đang hoạt động" : ""}
+                </option>
+              ))}
+            </select>
+            <span className="hint">
+              Đổi bản vẽ là một lệnh <b>hai pha</b> — nó đổi thứ mọi thao tác
+              bên dưới nhắm vào, nên vẫn phải xác nhận.
+            </span>
+          </div>
+        ) : null}
 
         <div className="field">
           <label htmlFor="sel-action">Thao tác</label>

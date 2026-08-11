@@ -274,7 +274,12 @@ export const SELECTION_SCOPES = ["layer", "block"] as const;
 export type SelectionScopeKind = (typeof SELECTION_SCOPES)[number];
 
 /** Thao tác `/selection/prepare` nhận. Bộ mẫu có "đặt màu theo layer" — backend
- * không có, và sẽ không có cho tới khi ai đó viết nó. */
+ * không có, và sẽ không có cho tới khi ai đó viết nó.
+ *
+ * `activate-document` KHÔNG nằm ở đây: nó không thao tác trên đối tượng nào cả
+ * mà đổi **bản vẽ đang hoạt động**, nên nó có ô riêng ở đầu màn hình chứ không
+ * chung một danh sách với hai thao tác kia. Gộp chung là mời người dùng chọn
+ * "phạm vi: layer A" rồi bấm một nút đổi cả bản vẽ. */
 export const SELECTION_ACTIONS = ["select", "move-to-layer"] as const;
 export type SelectionActionKind = (typeof SELECTION_ACTIONS)[number];
 
@@ -388,6 +393,54 @@ export function prepareBlockedReason(input: {
      đọc một mã lỗi sau khi đã bấm. */
   if (target?.locked) return `Layer đích ${input.targetLayer} đang khoá.`;
   if (target?.frozen) return `Layer đích ${input.targetLayer} đang đóng băng.`;
+  return "";
+}
+
+/** Bản vẽ AutoCAD đang hoạt động, theo **danh sách bản vẽ** — không theo hồ sơ.
+ *
+ * Hai nguồn này đọc ở hai thời điểm khác nhau: hồ sơ là ảnh chụp nặng đọc một
+ * lần, còn danh sách bản vẽ nhẹ và mới hơn. Người dùng đổi tab trong AutoCAD
+ * sau khi trang tải thì hai nguồn lệch nhau, và nguồn MỚI HƠN mới là sự thật.
+ */
+export function activeDocFile(docs: readonly { file?: string; title?: string; active?: boolean }[]): string {
+  const active = docs.find((doc) => doc.active === true);
+  return (active?.file || active?.title || "").trim();
+}
+
+/** Hồ sơ trên màn hình có còn nói về bản vẽ AutoCAD đang mở không.
+ *
+ * Rỗng nghĩa là khớp. Khác rỗng là cả trang — bảng layer, số đếm, bộ tạo thao
+ * tác — đang mô tả một bản vẽ KHÁC với bản vẽ AutoCAD đang ở. Không nói ra thì
+ * người dùng chuẩn bị một thao tác dựa trên bảng layer của bản vẽ A và ghi vào
+ * bản vẽ B.
+ */
+export function staleDrawingNote(
+  payload: JsonRecord | null,
+  docs: readonly { file?: string; title?: string; active?: boolean }[],
+): string {
+  const shown = operationTarget(payload);
+  const active = activeDocFile(docs);
+  if (!shown || !active || shown === active) return "";
+  const name = (s: string) => s.split("/").pop() || s;
+  return `Hồ sơ dưới đây đọc từ ${name(shown)}, nhưng AutoCAD đang ở `
+    + `${name(active)}. Bấm “Đọc lại” để đọc bản vẽ đang mở.`;
+}
+
+/** Vì sao chưa đổi được sang bản vẽ này — hoặc chuỗi rỗng nếu đổi được.
+ *
+ * Đổi bản vẽ hoạt động là **lệnh ghi** theo backend (`activate-document` đi qua
+ * `/selection/prepare`), dù nó không sửa đối tượng nào. Lý do: nó đổi thứ mà
+ * MỌI lệnh ghi sau đó nhắm vào — chọn nhầm ở đây là mọi thứ sau đó ghi nhầm bản
+ * vẽ.
+ */
+export function activateBlockedReason(input: {
+  target: string;
+  activeFile: string;
+  alive: boolean;
+}): string {
+  if (!input.alive) return "Plugin AcadBridge chưa phản hồi.";
+  if (!input.target) return "Chưa chọn bản vẽ.";
+  if (input.target === input.activeFile) return "Bản vẽ này đang là bản vẽ hoạt động.";
   return "";
 }
 

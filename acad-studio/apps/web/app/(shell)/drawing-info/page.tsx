@@ -18,7 +18,7 @@
  * hình học **trực tiếp** từ plugin và vẽ được cả dimension lẫn hatch. Giữ câu đó
  * là nói sai về chính app.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "../../../components/shell/AppShell";
 import { Button } from "../../../components/ui/Button";
@@ -29,7 +29,11 @@ import {
   SelectionBuilder,
   type SelectionDraft,
 } from "../../../features/drawing-info/SelectionBuilder";
+import { fetchDocs, type AcadDocument } from "../../../lib/daemon/docs";
+import { useAcadEvents } from "../../../features/acad-connection/events";
 import {
+  activateBlockedReason,
+  activeDocFile,
   entityTotals,
   insUnitsLabel,
   isModified,
@@ -40,6 +44,7 @@ import {
   normalize,
   operationTarget,
   record,
+  staleDrawingNote,
   typeBars,
   usableExtents,
 } from "../../../features/drawing-info/model";
@@ -56,7 +61,16 @@ export default function DrawingInfoPage() {
   const info = useDrawingInfo(DAEMON_BASE);
   const payload = info.data;
 
-  const [pending, setPending] = useState<{ op: StagedOp; draft: SelectionDraft } | null>(null);
+  /* Thẻ xác nhận mang theo CẢ thao tác lẫn thứ nó mô tả. Đọc lại state lúc thẻ
+     hiện ra là mô tả một thứ khác với thứ sắp chạy — người dùng có thể đã bấm
+     tiếp trong lúc chờ máy chủ. */
+  const [pending, setPending] = useState<
+    | { kind: "scope"; op: StagedOp; draft: SelectionDraft }
+    | { kind: "activate"; op: StagedOp; title: string }
+    | null
+  >(null);
+  const [docs, setDocs] = useState<AcadDocument[]>([]);
+  const [docsAlive, setDocsAlive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -73,7 +87,74 @@ export default function DrawingInfoPage() {
   const dictionaries = Array.isArray(view.dictionaries) ? view.dictionaries : [];
   const xrefs = Array.isArray(view.xrefs) ? view.xrefs : [];
 
+  /* Số thứ tự lượt đọc. Sự kiện reactor tới thành chùm (mở bản vẽ phát vài cái
+     liền nhau), nên nhiều lượt đọc chạy chồng nhau; lượt cũ về SAU sẽ ghi đè
+     trạng thái mới hơn, và ô chọn lẫn dải cảnh báo trỏ nhầm bản vẽ cho tới sự
+     kiện kế tiếp. Trên một màn hình mà bản vẽ hoạt động quyết định mọi lệnh ghi
+     đi đâu, đó không phải nhấp nháy giao diện. */
+  const docsSequence = useRef(0);
+  const loadDocs = useCallback(() => {
+    const ticket = ++docsSequence.current;
+    fetchDocs(DAEMON_BASE)
+      .then((snapshot) => {
+        if (ticket !== docsSequence.current) return;
+        setDocs(snapshot.docs);
+        setDocsAlive(snapshot.alive);
+      })
+      .catch(() => {
+        if (ticket !== docsSequence.current) return;
+        setDocs([]);
+        setDocsAlive(false);
+      });
+  }, []);
+  useEffect(() => { loadDocs(); }, [loadDocs]);
+  /* Đọc MỘT LẦN lúc mở là không đủ: người dùng đổi tab trong AutoCAD sau đó thì
+     ô chọn vẫn đánh dấu bản vẽ cũ và dải cảnh báo "hồ sơ không phải bản vẽ đang
+     mở" không bao giờ hiện — đúng tình huống nó sinh ra để bắt.
+     Dùng lại đúng cơ chế của shell: nghe sự kiện reactor thay vì dò theo nhịp.
+     Danh sách bản vẽ là lời gọi NHẸ, khác hẳn hồ sơ 350 KB — nên nạp lại nó
+     theo sự kiện là được, còn hồ sơ thì vẫn để người dùng bấm. */
+  useAcadEvents(DAEMON_BASE, (event) => {
+    if (event.type.startsWith("doc") || event.type === "pluginLoaded") loadDocs();
+  });
+
+  /* Bản vẽ đang hoạt động lấy từ DANH SÁCH bản vẽ, không từ hồ sơ: hai nguồn
+     đọc ở hai thời điểm, và danh sách mới hơn. Lấy từ hồ sơ thì ô chọn hiện bản
+     vẽ cũ sau khi người dùng đổi tab trong AutoCAD. */
+  const activeFile = activeDocFile(docs) || operationTarget(payload);
+  const staleNote = staleDrawingNote(payload, docs);
+
+  const startActivate = useCallback(async (file: string) => {
+    /* Chốt thứ hai, ở tầng logic: ô chọn đã khoá khi `busy`, nhưng một thẻ xác
+       nhận đang mở cũng là một thao tác chưa xong — chồng lên nó là bỏ rơi một
+       operation ở máy chủ. */
+    if (busy || pending || info.refreshing) return;
+    const doc = docs.find((d) => (d.file || d.title) === file);
+    const blocked = activateBlockedReason({
+      target: file,
+      activeFile,
+      alive: docsAlive,
+    });
+    if (blocked) { setError(blocked); return; }
+    setBusy(true);
+    setError("");
+    try {
+      const op = await prepareStagedOp(
+        DAEMON_BASE,
+        { action: "activate-document", target: file },
+        { action: "activate-document", fallbackCount: 1 },
+      );
+      setPending({ kind: "activate", op, title: doc?.title || file });
+    } catch (failure) {
+      setError(stagedErrorText(failure));
+    } finally {
+      setBusy(false);
+    }
+  }, [docs, activeFile, docsAlive, busy, pending, info.refreshing]);
+
   const prepare = useCallback(async (draft: SelectionDraft) => {
+    /* Chốt ở tầng logic, khớp với lý do khoá nút — xem `SelectionBuilder`. */
+    if (busy || pending || info.refreshing || staleNote) return;
     setBusy(true);
     setError("");
     try {
@@ -91,13 +172,13 @@ export default function DrawingInfoPage() {
         },
         { action: draft.action },
       );
-      setPending({ op, draft });
+      setPending({ kind: "scope", op, draft });
     } catch (failure) {
       setError(stagedErrorText(failure));
     } finally {
       setBusy(false);
     }
-  }, [payload]);
+  }, [payload, busy, pending, info.refreshing, staleNote]);
 
   const confirm = useCallback(async () => {
     if (!pending) return;
@@ -106,8 +187,10 @@ export default function DrawingInfoPage() {
       await applyStagedOp(DAEMON_BASE, pending.op);
       setPending(null);
       /* Bản vẽ vừa đổi — hồ sơ trên màn hình đã cũ. Đọc lại để bảng layer và số
-         đếm không mô tả một trạng thái không còn nữa. */
+         đếm không mô tả một trạng thái không còn nữa. Đổi bản vẽ hoạt động thì
+         phải đọc lại CẢ danh sách bản vẽ, vì cờ `active` vừa chuyển chỗ. */
       info.reload();
+      if (pending.kind === "activate") loadDocs();
     } catch (failure) {
       setError(stagedErrorText(failure));
       /* Apply là one-shot: hỏng thì id đó chết hẳn. Giữ thẻ xác nhận là mời
@@ -116,7 +199,7 @@ export default function DrawingInfoPage() {
     } finally {
       setBusy(false);
     }
-  }, [pending, info]);
+  }, [pending, info, loadDocs]);
 
   return (
     <AppShell
@@ -140,6 +223,18 @@ export default function DrawingInfoPage() {
       }
     >
       <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {staleNote ? (
+          <div className="banner" data-tone="hard">
+            <span className="bm" />
+            <span className="bt">
+              <b>Hồ sơ này không phải bản vẽ đang mở.</b> {staleNote}
+            </span>
+            <span className="actions">
+              <Button onClick={info.reload} disabled={info.refreshing}>Đọc lại</Button>
+            </span>
+          </div>
+        ) : null}
+
         {info.error ? (
           <div className="banner" data-tone="hard">
             <span className="bm" />
@@ -346,14 +441,39 @@ export default function DrawingInfoPage() {
 
           <SelectionBuilder
             payload={payload}
+            docs={docs}
+            activeFile={activeFile}
             busy={busy}
+            profileLoading={info.refreshing}
+            staleNote={staleNote}
             error={error}
             onPrepare={(draft) => void prepare(draft)}
+            onActivate={(file) => void startActivate(file)}
           />
         </div>
       </div>
 
-      {pending ? (
+      {pending?.kind === "activate" ? (
+        <ConfirmSheet
+          title="Đổi bản vẽ đang hoạt động"
+          mode="selection"
+          target={pending.op.target}
+          summary={`AutoCAD sẽ chuyển sang ${pending.title}.`}
+          confirmLabel="Xác nhận & chuyển"
+          busy={busy}
+          onConfirm={() => void confirm()}
+          onCancel={() => {
+            if (busy) return;
+            void rejectStagedOp(DAEMON_BASE, pending.op);
+            setPending(null);
+          }}
+        >
+          <p className="hint">
+            Không sửa bản vẽ nào. Nhưng nó đổi <b>thứ mà mọi lệnh ghi sau đó nhắm
+            vào</b> — kể cả lệnh chuẩn bị từ màn hình khác.
+          </p>
+        </ConfirmSheet>
+      ) : pending ? (
         <ConfirmSheet
           title={pending.draft.action === "select"
             ? "Chọn đối tượng trong AutoCAD"

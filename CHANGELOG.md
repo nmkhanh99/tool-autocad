@@ -2,6 +2,50 @@
 
 ## 2026-08-11
 
+### Added — `/drawing-info` đổi được bản vẽ đang hoạt động
+
+Bước bắt buộc trước khi xoá được `DrawingInfoPanel` legacy. Panel cũ có 5 chỗ
+dùng `activate-document`; màn hình mới thì chưa — xoá luôn là mất tính năng.
+
+Titlebar của shell mới đã chờ sẵn: tab bản vẽ ở đó cố tình **không bấm được**,
+kèm chú thích "cho tới khi luồng đó có màn hình". `/drawing-info` là chỗ đúng để
+chứa nó — đây là màn hình về "tôi đang xem bản vẽ nào".
+
+Ô chọn bản vẽ đứng **riêng**, trên cùng, không gộp vào danh sách thao tác: nó
+không chạm đối tượng nào mà đổi **thứ mọi thao tác bên dưới nhắm vào**.
+
+### Fixed — sáu lỗi cùng một họ: hai nguồn dữ liệu lệch nhau (Codex review)
+
+Hồ sơ bản vẽ là ảnh chụp nặng đọc một lần; danh sách bản vẽ nhẹ và mới hơn. Mọi
+lỗi dưới đây đều sinh ra từ chỗ hai nguồn đó lệch nhau:
+
+- **Ô chọn lấy bản vẽ hoạt động từ hồ sơ (P1).** Người dùng đổi tab trong AutoCAD
+  thì ô chọn vẫn đánh dấu bản vẽ cũ. Nay lấy từ danh sách bản vẽ — nguồn mới hơn.
+- **Danh sách bản vẽ chỉ đọc một lần lúc mở (P1).** Đổi tab sau đó thì không gì
+  cập nhật, và dải cảnh báo không bao giờ hiện — đúng tình huống nó sinh ra để
+  bắt. Nay nghe sự kiện reactor, dùng lại đúng cơ chế của shell.
+- **Cho chuẩn bị thao tác trong lúc hồ sơ đã cũ (P1).** Chặn hẳn, không chỉ cảnh
+  báo: daemon **bắt buộc** đích của `select`/`move-to-layer` là bản vẽ đang hoạt
+  động, nên lượt chuẩn bị chắc chắn hỏng — bấm được rồi báo lỗi là ngõ cụt.
+- **Cho chuẩn bị trong lúc đang đọc lại hồ sơ (P1).** Sau khi đổi bản vẽ,
+  `payload` còn là bản vẽ trước cho tới khi đọc xong; danh sách layer bên dưới
+  thuộc về bản vẽ cũ.
+- **Hai lượt chuẩn bị chạy song song.** Lượt về sau ghi đè thẻ xác nhận, lượt kia
+  bị bỏ rơi ở máy chủ.
+- **Lượt đọc danh sách bản vẽ về trái thứ tự.** Sự kiện reactor tới thành chùm.
+
+Thêm dải cảnh báo mới: **"Hồ sơ này không phải bản vẽ đang mở"** — cả trang, kể
+cả bảng layer và bộ tạo thao tác, đang mô tả một bản vẽ khác.
+
+### Known — `DrawingInfoPanel` legacy VẪN chưa xoá được
+
+Lượt trước tôi nói nó "bỏ được ngay". Sai. Rà lại thì panel cũ còn ba thứ màn
+hình mới chưa có: **lọc + phân trang danh mục đối tượng**, **xem JSON thô**, và
+**bộ chọn bản vẽ** (phần này đã làm xong ở lượt này). Xoá khi chưa port là mất
+tính năng, không phải dọn dẹp.
+
+## 2026-08-11
+
 ### Added — dải "BẢN DỰNG THỬ" cho hai màn hình không có backend
 
 Thi hành **quyết định D2** của `ROADMAP.md` — đã chốt từ lâu nhưng chưa làm.

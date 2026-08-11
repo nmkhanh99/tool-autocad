@@ -10,6 +10,8 @@ import test from "node:test";
 
 import {
   actionLabel,
+  activateBlockedReason,
+  activeDocFile,
   actionSubjectNote,
   entityTotals,
   insUnitsLabel,
@@ -24,6 +26,7 @@ import {
   scopeValues,
   selectedCount,
   selectionScopeNote,
+  staleDrawingNote,
   typeBars,
   usableExtents,
 } from "../features/drawing-info/model";
@@ -231,6 +234,41 @@ test("bản vẽ chỉ đọc VẪN chọn được, chỉ chặn ghi", () => {
   assert.match(
     prepareBlockedReason({ payload: readOnly, scope: "layer", value: "A", action: "move-to-layer", targetLayer: "A" }),
     /chỉ đọc/,
+  );
+});
+
+test("bản vẽ hoạt động lấy từ DANH SÁCH, không từ hồ sơ", () => {
+  /* Hai nguồn đọc ở hai thời điểm: hồ sơ là ảnh chụp nặng đọc một lần, danh
+     sách bản vẽ nhẹ và mới hơn. Lấy từ hồ sơ thì ô chọn hiện bản vẽ cũ sau khi
+     người dùng đổi tab trong AutoCAD. */
+  assert.equal(activeDocFile([{ file: "/a.dwg" }, { file: "/b.dwg", active: true }]), "/b.dwg");
+  assert.equal(activeDocFile([{ title: "Drawing1.dwg", active: true }]), "Drawing1.dwg");
+  assert.equal(activeDocFile([]), "");
+});
+
+test("nói ra khi hồ sơ đang mô tả một bản vẽ KHÁC bản vẽ đang mở", () => {
+  /* Không nói ra thì người dùng chuẩn bị thao tác dựa trên bảng layer của bản
+     vẽ A và ghi vào bản vẽ B. */
+  const payload = { document: { file: "/a/kien-truc.dwg" } };
+  const note = staleDrawingNote(payload, [{ file: "/a/ket-cau.dwg", active: true }]);
+  assert.match(note, /kien-truc\.dwg/);
+  assert.match(note, /ket-cau\.dwg/);
+  assert.equal(staleDrawingNote(payload, [{ file: "/a/kien-truc.dwg", active: true }]), "");
+  /* Chưa biết bản vẽ nào đang hoạt động thì ĐỪNG báo động: danh sách chưa tải
+     xong là chuyện bình thường lúc mở trang. */
+  assert.equal(staleDrawingNote(payload, []), "");
+});
+
+test("đổi bản vẽ hoạt động: nói trước vì sao chưa đổi được", () => {
+  /* Đổi bản vẽ là lệnh GHI theo backend dù không sửa đối tượng nào — nó đổi thứ
+     mà mọi lệnh ghi sau đó nhắm vào. */
+  const ok = { target: "/a/b.dwg", activeFile: "/a/c.dwg", alive: true };
+  assert.equal(activateBlockedReason(ok), "");
+  assert.match(activateBlockedReason({ ...ok, alive: false }), /chưa phản hồi/);
+  assert.match(activateBlockedReason({ ...ok, target: "" }), /Chưa chọn bản vẽ/);
+  assert.match(
+    activateBlockedReason({ ...ok, target: "/a/c.dwg" }),
+    /đang là bản vẽ hoạt động/,
   );
 });
 

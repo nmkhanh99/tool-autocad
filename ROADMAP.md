@@ -277,6 +277,11 @@ route, như `blocks.module.css` vừa làm.
 - **Giai đoạn 6** — `/drawing-info` **đã xong (2026-08-11)**; còn tách `/review`
   và `/standards`.
 
+  **Chưa xoá được `DrawingInfoPanel` legacy (1.789 dòng).** Đã rà từng chức năng:
+  bộ chọn bản vẽ (`activate-document`) đã port sang màn hình mới, nhưng còn
+  **lọc + phân trang danh mục đối tượng** và **xem JSON thô** thì chưa. Xoá khi
+  chưa port là mất tính năng chứ không phải dọn dẹp.
+
   Phần đã xong mang theo một sự thật của backend mà mọi màn hình ghi khác cũng
   phải biết: `select` chạy theo **phạm vi**, còn `move-to-layer` chạy trên **bộ
   chọn hiện tại của AutoCAD** và bỏ qua phạm vi hoàn toàn.
