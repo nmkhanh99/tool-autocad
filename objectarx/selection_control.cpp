@@ -28,6 +28,7 @@ extern std::wstring toWide(const std::string& s);
 extern std::string jsonEsc(const std::string& s);
 extern std::string acadDocumentInstanceToken(const AcApDocument* document);
 extern uint64_t acadDatabaseRevision(const AcDbDatabase* database);
+extern std::string currentSpaceName(AcDbDatabase* database);
 
 namespace {
 
@@ -41,6 +42,12 @@ struct Request {
     std::string documentInstance;
     std::string activeDocumentInstance;
     uint64_t databaseRevision = 0;
+    // Khong gian hien hanh LUC CHUAN BI, va co bao daemon CO gui hay khong.
+    // Hai thu tach roi vi giao thuc raw tra "" cho ca hai truong hop: khong gui
+    // (daemon ban cu) va gui chuoi rong (daemon biet la khong doc duoc).  Gop
+    // lai thi mot lan doc hong thanh giay phep di qua.
+    std::string currentSpace;
+    bool spaceKnown = false;
 };
 
 struct Subject {
@@ -294,6 +301,8 @@ static bool parseRequest(const std::map<std::string, std::string>& params,
     request.action = param(params, "action");
     request.documentInstance = param(params, "documentInstance");
     request.activeDocumentInstance = param(params, "activeDocumentInstance");
+    request.currentSpace = param(params, "currentSpace");
+    request.spaceKnown = param(params, "spaceKnown") == "1";
     if (!boundedToken(request.token, "token", error) ||
         !boundedToken(request.documentInstance, "documentInstance", error) ||
         !boundedToken(
@@ -346,6 +355,35 @@ static bool currentExactDocument(const Request& request, AcApDocument*& document
         error = "document_stale: active document changed";
         return false;
     }
+    // Doi tab Model/Layout giua luc daemon kiem va luc lenh nay THAT SU chay.
+    // Bo dem revision khong bat duoc: doi tab khong sua doi tuong nao, va quay
+    // lai mot layout da kich hoat truoc do thi khong con gi de dung lai.  Day la
+    // chot cuoi cung truoc khi cham vao ban ve.
+    if (request.spaceKnown) {
+        // Daemon CO gui, nhung chinh no khong doc duoc khong gian luc chuan bi.
+        if (request.currentSpace.empty()) {
+            error = "space_changed: prepared space was unreadable";
+            return false;
+        }
+        const std::string space = currentSpaceName(database);
+        // Rong o day KHONG phai "daemon ban cu" — daemon CO gui, nghia la no doi
+        // duoc kiem.  Rong nghia la khong mo duoc BTR cua khong gian hien hanh,
+        // tuc khong biet minh dang o dau.  Fail-OPEN luc do la cho mot lenh ghi
+        // chay ma khong ai biet no cham vao khong gian nao.
+        if (space.empty()) {
+            error = "space_changed: cannot read current space";
+            return false;
+        }
+        if (space != request.currentSpace) {
+            error = "space_changed: current space is " + space + ", prepared for "
+                  + request.currentSpace;
+            return false;
+        }
+    }
+    // Revision xet SAU khong gian: doi tab thuong keo revision nhay theo
+    // (AutoCAD dung lai viewport), nen de no chay truoc la bao "noi dung ban ve
+    // da thay doi" cho mot cu bam sang tab khac.  Ca hai deu tu choi, nen thu tu
+    // khong doi tinh an toan — no doi CAU TRA LOI.
     if (acadDatabaseRevision(database) != request.databaseRevision) {
         error = "drawing_stale: database revision changed";
         return false;

@@ -181,3 +181,28 @@ test("trường thiếu được chuẩn hoá thành chuỗi rỗng, không ph�
   );
   off();
 });
+
+test("mang theo số thứ tự và cờ phát lại", () => {
+  /* Hai trường này là cách DUY NHẤT phân biệt một cú đổi tab thật với một dòng
+     lịch sử daemon đẩy lại lúc mở kết nối. Dấu thời gian chỉ tới giây nên tự nó
+     không phân biệt được — và nơi nào huỷ thao tác theo sự kiện sẽ huỷ oan một
+     thao tác hợp lệ. */
+  FakeEventSource.reset();
+  const frames: AcadEvent[] = [];
+  const stop = subscribeAcadEvents("http://daemon", (event) => frames.push(event));
+  const source = FakeEventSource.last;
+
+  source.emit({ t: 1700000000, n: 7, type: "layoutSwitched", detail: "02" });
+  source.emit({ t: 1700000000, n: 7, type: "layoutSwitched", detail: "02", replay: true });
+  assert.equal(frames[0].seq, 7);
+  assert.equal(frames[0].replay, false);
+  assert.equal(frames[1].replay, true);
+
+  /* Plugin bản cũ không phát `n` → `0`. KHÔNG được bịa một số: hai sự kiện khác
+     nhau mà cùng khoá thì một cái bị bỏ, và đó là cái có thể đang cần chặn. */
+  source.emit({ t: 1700000001, type: "layoutSwitched", detail: "01" });
+  assert.equal(frames[2].seq, 0);
+  assert.equal(frames[2].replay, false);
+
+  stop();
+});

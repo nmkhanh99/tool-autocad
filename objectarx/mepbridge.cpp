@@ -310,10 +310,22 @@ void emitEvent(const char* type, const std::string& detail) {
         AcApDocument* d = acDocManager->mdiActiveDocument();
         if (d) active = toUtf8(d->docTitle());
     }
-    fprintf(f, "{\"t\":%ld,\"type\":\"%s\",\"detail\":\"%s\",\"activeDoc\":\"%s\"}\n",
-            (long)time(nullptr), type, jsonEsc(detail).c_str(), jsonEsc(active).c_str());
+    // `n` = so thu tu, duy nhat cho moi lan phat THAT.  Dau thoi gian chi toi
+    // giay nen hai su kien trong cung mot giay khong phan biet duoc — ma app
+    // phai phan biet, vi `/api/acad/events` phat lai 15 dong cuoi moi lan mo
+    // ket noi va mot ban phat lai KHONG duoc tinh la mot lan doi tab moi.
+    static unsigned long long gEventSeq = 0;
+    fprintf(f, "{\"t\":%ld,\"n\":%llu,\"type\":\"%s\",\"detail\":\"%s\",\"activeDoc\":\"%s\"}\n",
+            (long)time(nullptr), ++gEventSeq, type, jsonEsc(detail).c_str(),
+            jsonEsc(active).c_str());
     fclose(f);
 }
+
+/** Ten khong gian dang hien hanh, hoac chuoi rong neu khong doc duoc.
+ *  Dinh nghia o duoi, sau layoutNameFor(); khai bao o day vi writeDocs() dung
+ *  truoc no.  KHONG static: selection_control.cpp dung lai de kiem tra lan cuoi
+ *  ngay truoc khi chay lenh da xep hang. */
+std::string currentSpaceName(AcDbDatabase* db);
 
 // ============================ danh sach ban ve dang mo -> docs.json ============================
 static void writeDocs() {
@@ -337,6 +349,37 @@ static void writeDocs() {
                         jsonEsc(acadDocumentInstanceToken(d)) + "\"" +
                     ",\"revision\":" +
                         std::to_string(acadDatabaseRevision(d->database())) +
+                    // Khong gian HIEN HANH — CHI cho tai lieu vua active vua
+                    // current.
+                    //
+                    // Can no vi danh muc doi tuong chi quet MOT khong gian: doi
+                    // tab lam danh muc mo ta mot khong gian khong con hien
+                    // hanh, va lenh chon theo handle that bai voi "not a
+                    // top-level entity in current space".
+                    //
+                    // Da do tren may that: doi tab CO lam bo dem revision nhay
+                    // (0 -> 121 khi lan dau kich hoat layout 02 roi 03), vi
+                    // AutoCAD phai dung lai viewport. Nen ve nguyen tac
+                    // `revision` cung bat duoc — nhung no bat NHAM LY DO: nguoi
+                    // dung se doc "ban ve da thay doi" trong khi ho khong sua
+                    // gi.
+                    //
+                    // VI SAO BO HAN TRUONG NAY VOI TAI LIEU NEN, thay vi doc no:
+                    // doc database cua tai lieu khong-current phai LOCK truoc
+                    // (xem writeDrawingInfo/writeGeometry).  writeDocs() lai
+                    // chay tu trong reactor, noi lay lock la chuyen khong nen
+                    // lam.  Doc ma khong lock thi ObjectARX co the tra ve rong —
+                    // va rong o day nghia la "khong doc duoc", nen daemon se TU
+                    // CHOI moi thao tac tren tai lieu do, ke ca lenh activate
+                    // von la duong phuc hoi.  Bo han truong = "khong biet, va
+                    // khong can biet": chot khong gian chi co nghia cho tai lieu
+                    // dang duoc thao tac, ma daemon bat buoc do phai la tai lieu
+                    // active.
+                    (d == pActive && acDocManager &&
+                     d == acDocManager->curDocument()
+                        ? ",\"space\":\"" +
+                              jsonEsc(currentSpaceName(d->database())) + "\""
+                        : std::string()) +
                     // Bo han truong dbmod khi KHONG BIET — UI phan biet
                     // "khong doc duoc" voi "da luu".
                     (dbmodKnown
@@ -573,9 +616,6 @@ static std::string symbolName(AcDbObjectId id) {
     return out;
 }
 
-/** Ten khong gian dang hien hanh, hoac chuoi rong neu khong doc duoc. */
-static std::string currentSpaceName(AcDbDatabase* db);
-
 static std::string layoutNameFor(AcDbBlockTableRecord* btr) {
     if (!btr) return "";
     AcDbObjectId layoutId = btr->getLayoutId();
@@ -594,7 +634,7 @@ static std::string layoutNameFor(AcDbBlockTableRecord* btr) {
     return toUtf8(name.kwszPtr());
 }
 
-static std::string currentSpaceName(AcDbDatabase* db) {
+std::string currentSpaceName(AcDbDatabase* db) {
     if (!db) return "";
     AcDbBlockTableRecord* space = nullptr;
     if (acdbOpenObject(space, db->currentSpaceId(), AcDb::kForRead) != Acad::eOk || !space) {
@@ -4524,6 +4564,14 @@ public:
         emitEvent("commandEnded", toUtf8(cmd));
         // Lenh ket thuc + ban ve co thay doi -> bao app (de tu refresh BOM/BOQ live).
         if (gDirty) { gDirty = false; emitEvent("drawingModified", ""); }
+    }
+    // Doi tab Model/Layout. PHAI phat su kien: gui truong `space` trong /docs
+    // van chua du, vi app chi HOI /docs khi co su kien — con doi tab thi khong
+    // sua doi tuong nao (revision dung yen) va co the lam bang mot cu bam chuot
+    // vao tab, khong qua lenh nao. Khong co su kien nay thi tin hieu co ma
+    // khong ai danh thuc de doc.
+    void layoutSwitched(const ACHAR* newLayoutName) override {
+        emitEvent("layoutSwitched", toUtf8(newLayoutName));
     }
 };
 // Database reactor: gom moi thay doi entity (them/sua/xoa) -> danh dau dirty (KHONG lam gi nang

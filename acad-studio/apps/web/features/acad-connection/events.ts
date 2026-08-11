@@ -27,6 +27,17 @@ export type AcadEvent = {
   detail: string;
   /** Giây epoch. Daemon lúc gửi mili giây, lúc gửi giây — đã chuẩn hoá. */
   at: number;
+  /** Số thứ tự do plugin cấp, duy nhất cho mỗi lần phát THẬT (`0` = plugin bản
+   * cũ không phát). Cần nó để phân biệt tin mới với tin phát lại: dấu thời gian
+   * chỉ tới giây, mà `/api/acad/events` đẩy lại 15 dòng cuối mỗi lần mở kết
+   * nối. Bộ đếm đặt lại khi plugin nạp lại, nên phải ghép với `at` mới duy nhất
+   * qua cả một lần khởi động lại AutoCAD. */
+  seq: number;
+  /** Khung này là LỊCH SỬ đẩy lại lúc mở kết nối, không phải việc vừa xảy ra.
+   * Do daemon gắn — phía này không suy ra được. Nơi nào HUỶ thao tác theo sự
+   * kiện phải bỏ qua khung phát lại; nơi nào chỉ nạp lại dữ liệu thì dùng bình
+   * thường. */
+  replay: boolean;
 };
 
 type Listener = (event: AcadEvent) => void;
@@ -63,6 +74,12 @@ function busFor(daemon: string): Bus {
       activeDoc: String(parsed.activeDoc || ""),
       detail: String(parsed.detail || ""),
       at: secondsOf(parsed.t),
+      /* `0` khi plugin bản cũ không phát — nơi dùng phải tự lo cho trường hợp
+         đó, chứ không được coi mọi sự kiện là cùng một sự kiện. */
+      seq: Number.isSafeInteger(Number(parsed.n)) && Number(parsed.n) > 0
+        ? Number(parsed.n)
+        : 0,
+      replay: parsed.replay === true,
     };
     // Một listener ném lỗi không được làm câm các listener còn lại.
     for (const listener of [...listeners]) {

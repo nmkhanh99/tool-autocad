@@ -302,6 +302,58 @@ test("phân biệt ba kiểu hồ sơ cũ, mỗi kiểu một lời giải thíc
     null,
   );
 
+  /* Đổi tab Model/Layout: bản vẽ y nguyên, revision y nguyên, chỉ không gian
+     đổi. Trước khi plugin phát `space` trong `/docs` thì không cách nào bắt
+     được ca này — nay bắt được. */
+  const scoped = {
+    document: { instance: "A", revision: 7, file: "/x.dwg" },
+    drawing: { selectionCatalog: { space: "01", scanned: 2, objects: [] } },
+  };
+  assert.equal(
+    profileStaleReason(scoped, [
+      { instance: "A", revision: 7, file: "/x.dwg", active: true, space: "Model" },
+    ])?.kind,
+    "space-changed",
+  );
+  /* Chỉ có `selectionScope`, không có `selectionCatalog` — daemon đọc được cả
+     hai, nên giao diện cũng phải. Đọc lệch nhau là hai bên bất đồng về việc "hồ
+     sơ này thuộc không gian nào". */
+  const scopeOnly = {
+    document: { instance: "A", revision: 7, file: "/x.dwg" },
+    drawing: { selectionScope: { space: "01" } },
+  };
+  assert.equal(
+    profileStaleReason(scopeOnly, [
+      { instance: "A", revision: 7, file: "/x.dwg", active: true, space: "Model" },
+    ])?.kind,
+    "space-changed",
+  );
+
+  /* Cùng không gian thì không báo. */
+  assert.equal(
+    profileStaleReason(scoped, [
+      { instance: "A", revision: 7, file: "/x.dwg", active: true, space: "01" },
+    ]),
+    null,
+  );
+  /* `space: ""` là KHÔNG ĐỌC ĐƯỢC, không phải thiếu trường: plugin có trả lời
+     nhưng không mở được BTR của không gian hiện hành. Daemon từ chối thao tác
+     lúc đó, nên giao diện cũng phải chặn — cho bấm là hứa một thứ máy chủ sẽ
+     khước từ. */
+  const unreadable = profileStaleReason(scoped, [
+    { instance: "A", revision: 7, file: "/x.dwg", active: true, space: "" },
+  ]);
+  assert.equal(unreadable?.kind, "space-changed");
+  assert.match(unreadable?.title ?? "", /Không đọc được/);
+
+  /* Plugin bản cũ không phát `space` → im, không đoán. */
+  assert.equal(
+    profileStaleReason(scoped, [
+      { instance: "A", revision: 7, file: "/x.dwg", active: true },
+    ]),
+    null,
+  );
+
   /* Ba tiêu đề phải KHÁC nhau — đó là lý do tách ba loại. */
   const titles = new Set([reopened?.title, other?.title,
     profileStaleReason(payload, at(9))?.title]);

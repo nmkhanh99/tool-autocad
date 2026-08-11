@@ -5,6 +5,7 @@ import {
   CAD_SELECTION_TTL_MS,
   buildSelectionControlParams,
   cadSelectionRouter,
+  spaceMismatchReason,
 } from "../src/cadSelection.ts";
 import { byCapabilityId } from "../src/objectarx/catalog.ts";
 
@@ -1352,3 +1353,49 @@ for (const [staleGuard, code] of [
 }
 
 console.log("✓ cad selection: exact target, two-phase confirmation, full capture and stale guards");
+
+/* Chốt không gian Model/Layout.
+ *
+ * Ba mốc trong `cadSelection.ts` đều gọi hàm này, nên nó là chỗ duy nhất quyết
+ * định "cho qua hay từ chối". Điều dễ sai nhất — và đã sai thật hai lần trong
+ * cùng một lượt — là gộp "plugin bản cũ không phát trường này" với "plugin có
+ * trả lời nhưng không đọc được không gian". Cả hai đều rỗng, nhưng một cái là
+ * tương thích ngược, cái kia là AutoCAD không biết mình đang ở đâu. */
+{
+  /* Luật BẤT ĐỐI XỨNG. Đây là phần dễ sai nhất của cả chốt, và đã sai hai lần
+     theo hai chiều ngược nhau. */
+
+  // Chưa từng biết → cho qua. Ca có thật: nâng cấp daemon mà CHƯA nâng plugin.
+  // Plugin cũ không phát `space` trong `/docs` nhưng VẪN phát
+  // `selectionCatalog.space`, nên vế kia có giá trị. Từ chối ở đây là làm hỏng
+  // mọi `select` theo phạm vi và mọi `move-to-layer` trên một cấu hình hợp lệ.
+  assert.equal(spaceMismatchReason(undefined, undefined), null);
+  assert.equal(spaceMismatchReason(undefined, "Model"), null);
+
+  // Từng biết, giờ không → TỪ CHỐI. Một lần đọc hỏng, hoặc plugin bị HẠ CẤP
+  // giữa lúc chuẩn bị và lúc ghi — mà plugin cũ thì cũng không tự kiểm.
+  assert.ok(spaceMismatchReason("Model", undefined));
+
+  // Trùng nhau → cho qua.
+  assert.equal(spaceMismatchReason("Model", "Model"), null);
+  assert.equal(spaceMismatchReason("01", "01"), null);
+
+  // Lệch nhau → từ chối, và câu trả lời phải nói RA cả hai bên.
+  const drift = spaceMismatchReason("01", "Model");
+  assert.ok(drift && /Model/.test(drift) && /01/.test(drift), drift ?? "null");
+
+  // Rỗng = KHÔNG ĐỌC ĐƯỢC, không phải tương thích ngược. Đây là nhánh
+  // fail-closed; cho qua ở đây là để một lệnh ghi chạy mà không ai biết nó chạm
+  // vào không gian nào.
+  assert.ok(spaceMismatchReason("", "Model"));
+  assert.ok(spaceMismatchReason("01", ""));
+  assert.ok(spaceMismatchReason("", ""));
+
+  /* Tài liệu NỀN không có `space` (plugin cố ý bỏ, vì đọc database
+     không-current phải lock). Nơi gọi phải tự loại trừ bằng `document.active` —
+     hàm này không biết gì về chuyện đó, và nếu gọi nó cho một tài liệu nền thì
+     nó sẽ từ chối đúng cái lệnh `activate-document` dùng để đổi sang bản vẽ
+     đang cần. Ghi lại đây vì đã sập thật một lần. */
+
+  console.log("✓ chốt không gian: phân biệt thiếu trường với không đọc được");
+}

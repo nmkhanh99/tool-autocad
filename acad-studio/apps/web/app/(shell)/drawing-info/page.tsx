@@ -67,10 +67,16 @@ export default function DrawingInfoPage() {
   /* Thẻ xác nhận mang theo CẢ thao tác lẫn thứ nó mô tả. Đọc lại state lúc thẻ
      hiện ra là mô tả một thứ khác với thứ sắp chạy — người dùng có thể đã bấm
      tiếp trong lúc chờ máy chủ. */
+  /* `at` = giây epoch lúc BẮT ĐẦU chuẩn bị. Cần nó để phân biệt một lần đổi
+     không gian THẬT SỰ MỚI với một dòng log được phát lại: `/api/acad/events`
+     đẩy lại 15 dòng cuối mỗi lần mở kết nối, kể cả khi tự nối lại giữa phiên —
+     một cú đổi tab xảy ra lúc đường truyền đứt sẽ quay lại như tin mới và giết
+     một thao tác hoàn toàn hợp lệ. So mốc thời gian thì bản phát lại tự loại
+     mình ra, vì nó cũ hơn lúc chuẩn bị. */
   const [pending, setPending] = useState<
-    | { kind: "scope"; op: StagedOp; draft: SelectionDraft }
-    | { kind: "activate"; op: StagedOp; title: string }
-    | { kind: "handles"; op: StagedOp; count: number }
+    | { kind: "scope"; at: number; op: StagedOp; draft: SelectionDraft }
+    | { kind: "activate"; at: number; op: StagedOp; title: string }
+    | { kind: "handles"; at: number; op: StagedOp; count: number }
     | null
   >(null);
   const [docs, setDocs] = useState<AcadDocument[]>([]);
@@ -115,6 +121,11 @@ export default function DrawingInfoPage() {
   /* Ô lỗi RIÊNG cho lượt chọn theo handle — cùng lý do như `openError`: nút ở
      danh mục thì lỗi cũng phải hiện ở danh mục. */
   const [pickError, setPickError] = useState("");
+  /* Câu giải thích cho một thẻ xác nhận bị HUỶ TỰ ĐỘNG. Không dùng chung `error`
+     với bộ tạo thao tác: ô đó hiện dưới nhãn "Không chuẩn bị được", mà ở đây
+     không có gì chuẩn bị hỏng cả — thao tác đã chuẩn bị xong rồi mới bị huỷ, và
+     nó có thể đến từ danh mục chứ không phải bộ tạo. Đây là chuyện cấp trang. */
+  const [cancelNote, setCancelNote] = useState("");
   const openAutoCAD = useCallback(async () => {
     setOpening(true);
     setOpenError("");
@@ -177,11 +188,74 @@ export default function DrawingInfoPage() {
        `drawingSaved` cũng vậy, và không thừa: nó đến từ `saveComplete` của
        database reactor, không đi qua `commandEnded`. Một lượt lưu tự động hay
        QSAVE từ menu không phát `drawingModified`, nên bỏ nó ra là `dbmod` trên
-       màn hình treo ở "chưa lưu" và revision đứng lại ở số cũ. */
+       màn hình treo ở "chưa lưu" và revision đứng lại ở số cũ.
+
+       `layoutSwitched` là sự kiện DUY NHẤT cho việc đổi tab Model/Layout: bấm
+       chuột vào tab không qua lệnh nào, nên `commandEnded` không bắn. Danh mục
+       chỉ quét MỘT không gian, nên bỏ sự kiện này là để người dùng chọn từ một
+       danh sách thuộc không gian khác. */
     if (event.type.startsWith("doc")
       || event.type === "pluginLoaded"
       || event.type === "drawingModified"
-      || event.type === "drawingSaved") loadDocs();
+      || event.type === "drawingSaved"
+      || event.type === "layoutSwitched") loadDocs();
+
+    /* Đổi không gian phải chặn NGAY, không đợi `/docs` về. Trong quãng lượt đọc
+       còn bay, `stale` vẫn là giá trị cũ (null) nên effect trên chưa bắn, mà
+       thẻ xác nhận thì vẫn bấm được — và guard máy chủ không soi không gian nên
+       nó NHẬN. Đây là cửa sổ duy nhất trong màn hình này mà một thao tác sai có
+       thể đi lọt tới AutoCAD. */
+    /* Plugin nạp lại thì bộ đếm sự kiện của nó về 0, nên một khoá cũ có thể
+       trùng khoá mới trong cùng một giây — và cú đổi tab THẬT bị bỏ qua. Sự
+       kiện `pluginLoaded` là mốc duy nhất báo việc đó; xoá sạch khoá tại đây. */
+    /* KHÔNG xoá theo khung phát lại: nối lại kết nối sẽ đẩy lại `pluginLoaded`
+       cũ, và xoá lúc đó làm mất dấu những cú đổi tab đã xử lý — rồi bản phát
+       lại của chính chúng lại được tính là mới và huỷ oan một thao tác. */
+    if (event.type === "pluginLoaded" && !event.replay) {
+      seenSwitches.current.clear();
+    }
+
+    if (event.type !== "layoutSwitched") return;
+
+    /* Khung phát lại KHÔNG hẳn là chuyện cũ. Nếu SSE đứt trong lúc một thẻ xác
+       nhận đang mở, cú đổi tab THẬT xảy ra lúc đó nằm đúng trong 15 dòng được
+       đẩy lại khi nối lại — bỏ hết là để một thao tác đã hoá cũ vẫn bấm được.
+
+       Nên chỉ bỏ khi nó cũ hơn thao tác đang chờ, hoặc khi chẳng có thao tác
+       nào để cứu (lúc mở trang: cả 15 dòng đều là lịch sử, và xử lý chúng sẽ
+       dựng một cảnh báo cho việc đã xảy ra từ lâu). */
+    if (event.replay) {
+      const waiting = pendingRef.current;
+      if (!waiting || event.at < waiting.at) return;
+    }
+
+    /* Khoá theo SỐ THỨ TỰ khi plugin có phát: nó duy nhất cho mỗi lần đổi tab
+       thật, nên bản phát lại trùng khoá còn hai lần đổi khác nhau thì không —
+       kể cả khi rơi vào cùng một giây và cùng một layout. Ghép thêm `at` vì bộ
+       đếm đặt lại khi plugin nạp lại. Plugin bản cũ (`seq === 0`) lùi về khoá
+       cũ, thứ có thể va nhau trong cùng một giây; đó là hạn chế đã biết của
+       plugin cũ, không phải của cơ chế. */
+    const key = event.seq
+      ? `${event.at}#${event.seq}`
+      : `${event.at}|${event.detail}`;
+    if (seenSwitches.current.has(key)) return;
+    /* Chặn phình: chỉ cần đủ để phủ 15 dòng phát lại của mỗi lần mở kết nối. */
+    if (seenSwitches.current.size > 200) seenSwitches.current.clear();
+    seenSwitches.current.add(key);
+
+    if (event.at > lastSpaceSwitchAt.current) lastSpaceSwitchAt.current = event.at;
+
+    /* `event.at >= p.at`: chỉ huỷ khi cú đổi xảy ra SAU (hoặc trong cùng giây
+       với) lúc bắt đầu chuẩn bị. Cùng giây thì huỷ — thà huỷ thừa một thao tác
+       người dùng chuẩn bị lại được, còn hơn để lọt một thao tác chạy nhầm
+       không gian. */
+    const p = pendingRef.current;
+    if (p && cancellable(p.kind) && event.at >= p.at) {
+      dropPending(
+        `AutoCAD vừa chuyển sang không gian ${event.detail || "khác"}. `
+          + "Bấm “Đọc lại” rồi chuẩn bị lại.",
+      );
+    }
   });
 
   /* Bản vẽ đang hoạt động lấy từ DANH SÁCH bản vẽ, không từ hồ sơ: hai nguồn
@@ -244,7 +318,7 @@ export default function DrawingInfoPage() {
         { action: "activate-document", target: file },
         { action: "activate-document", fallbackCount: 1 },
       );
-      setPending({ kind: "activate", op, title: doc?.title || file });
+      setPending({ kind: "activate", at: nowSeconds(), op, title: doc?.title || file });
     } catch (failure) {
       setError(stagedErrorText(failure));
     } finally {
@@ -256,7 +330,70 @@ export default function DrawingInfoPage() {
      đang rỗng vì lỡ một sự kiện `docOpened`, hồ sơ mới về được nhưng `docs` vẫn
      rỗng — màn hình tiếp tục nói "AutoCAD không mở bản vẽ nào" và khoá mọi thứ
      cho tới khi có một sự kiện khác. Nút gỡ kẹt mà không gỡ được. */
+  /* Thẻ xác nhận đang mở KHÔNG được sống sót qua một lần hồ sơ hoá cũ.
+     Thao tác đã chuẩn bị mang theo mô tả của LÚC CHUẨN BỊ ("chọn 40 đối tượng ở
+     không gian 03"); người dùng đổi tab rồi bấm Xác nhận là chạy nó trên một
+     không gian khác. Guard máy chủ không cứu được ca này — nó soi `instance` +
+     `revision`, không soi không gian.
+
+     Ba điều kiện phải đúng, và mỗi cái đến từ một lỗi thật:
+
+     · KHÔNG huỷ thao tác `activate-document`. Đổi bản vẽ chính là đường PHỤC
+       HỒI khi hồ sơ hoá cũ — huỷ nó là bịt lối thoát duy nhất, và ô chọn bản vẽ
+       thành vô dụng cho tới khi người dùng tự đoán ra phải bấm "Đọc lại" trước.
+     · KHÔNG huỷ thao tác ĐANG chạy. `pending` vẫn còn trong lúc `applyStagedOp`
+       chờ; một `move-to-layer` thành công phát `drawingModified` → hồ sơ hoá cũ
+       → huỷ nhầm cái vừa chạy xong, và người dùng đọc "đã huỷ" cho một thao tác
+       máy chủ đã thực hiện.
+     · Huỷ ở MÁY CHỦ, không chỉ đóng thẻ — operation bỏ lại nằm trong hàng chờ
+       tới hết phiên. */
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  /* Ref, không phải state: nó chỉ để CHẶN, và một lần re-render thêm ở giữa
+     `applyStagedOp` là đúng thứ mở ra cửa sổ mà nó đang bịt. */
+  const applyingRef = useRef(false);
+  /* Giây epoch của lần đổi không gian GẦN NHẤT mà màn hình biết. Chặn theo
+     `pendingRef` là chưa đủ: giữa lúc bấm và lúc `/selection/prepare` trả lời,
+     `pending` vẫn còn NULL — đổi tab đúng trong quãng đó thì không nhánh nào
+     thấy gì, rồi thao tác về và mở một thẻ xác nhận mô tả không gian cũ. Ai
+     chuẩn bị thì chụp mốc bắt đầu, rồi so với giá trị này sau khi chờ.
+
+     Dùng MỐC THỜI GIAN chứ không phải bộ đếm, vì bộ đếm không phân biệt được
+     tin mới với tin phát lại — xem chú thích của `pending`. */
+  const lastSpaceSwitchAt = useRef(0);
+  /* Khoá danh tính của những sự kiện đã xử lý. Cần CẢ HAI cơ chế, vì mỗi cái bịt
+     một nửa khác nhau của cùng một lỗ:
+
+     · Mốc thời gian chỉ tới GIÂY, nên một bản phát lại rơi đúng giây người dùng
+       bấm chuẩn bị vẫn qua được phép so — khoá danh tính bắt nó.
+     · Khoá danh tính chỉ biết những gì TRANG NÀY đã nhận, nên một cú đổi tab
+       xảy ra lúc SSE đứt sẽ về như tin mới — mốc thời gian bắt nó.
+
+     Cái còn lại sau cùng: một lần đổi THẬT trong đúng giây bắt đầu chuẩn bị vẫn
+     huỷ. Đó là chiều an toàn — thà huỷ thừa một thao tác chuẩn bị lại được, còn
+     hơn để lọt một thao tác chạy nhầm không gian. */
+  const seenSwitches = useRef(new Set<string>());
+  const nowSeconds = () => Math.floor(Date.now() / 1_000);
+
+  const dropPending = useCallback((why: string) => {
+    const current = pendingRef.current;
+    if (!current) return;
+    void rejectStagedOp(DAEMON_BASE, current.op).catch(() => {});
+    setPending(null);
+    setCancelNote(why);
+  }, []);
+
+  const cancellable = (kind: string) => kind !== "activate" && !applyingRef.current;
+
+  useEffect(() => {
+    if (!stale || !pending || !cancellable(pending.kind)) return;
+    dropPending(
+      `${stale.title} Chuẩn bị lại sau khi bấm “Đọc lại”.`,
+    );
+  }, [stale, pending, dropPending]);
+
   const reloadAll = useCallback(() => {
+    setCancelNote("");
     info.reload();
     loadDocs();
   }, [info, loadDocs]);
@@ -272,6 +409,8 @@ export default function DrawingInfoPage() {
     if (busy || pending || info.refreshing || blockNote) return;
     setBusy(true);
     setPickError("");
+    setCancelNote("");
+    const startedAt = nowSeconds();
     try {
       const op = await prepareSelectHandles(DAEMON_BASE, {
         target: operationTarget(payload),
@@ -282,7 +421,17 @@ export default function DrawingInfoPage() {
            tượng khác mà guard vẫn hợp lệ. */
         guard,
       });
-      setPending({ kind: "handles", op, count: handles.length });
+      /* Đổi tab TRONG LÚC chờ máy chủ: thao tác vừa nhận mô tả không gian cũ,
+         nên vứt nó đi thay vì mở thẻ xác nhận. Huỷ ở máy chủ luôn. */
+      if (lastSpaceSwitchAt.current >= startedAt) {
+        void rejectStagedOp(DAEMON_BASE, op).catch(() => {});
+        setCancelNote(
+          "AutoCAD đổi không gian trong lúc đang chuẩn bị, nên thao tác vừa tạo đã "
+            + "bị huỷ. Bấm “Đọc lại” rồi chuẩn bị lại.",
+        );
+        return;
+      }
+      setPending({ kind: "handles", at: startedAt, op, count: handles.length });
     } catch (failure) {
       setPickError(stagedErrorText(failure));
     } finally {
@@ -295,6 +444,8 @@ export default function DrawingInfoPage() {
     if (busy || pending || info.refreshing || blockNote) return;
     setBusy(true);
     setError("");
+    setCancelNote("");
+    const startedAt = nowSeconds();
     try {
       const op = await prepareStagedOp(
         DAEMON_BASE,
@@ -310,7 +461,18 @@ export default function DrawingInfoPage() {
         },
         { action: draft.action },
       );
-      setPending({ kind: "scope", op, draft });
+      /* Cùng chốt như đường danh mục: `select` theo phạm vi cũng chỉ chạm tới
+         không gian hiện hành, nên đổi tab trong lúc chờ làm thao tác vừa nhận
+         mô tả một phạm vi khác thứ nó sẽ chạy lên. */
+      if (lastSpaceSwitchAt.current >= startedAt) {
+        void rejectStagedOp(DAEMON_BASE, op).catch(() => {});
+        setCancelNote(
+          "AutoCAD đổi không gian trong lúc đang chuẩn bị, nên thao tác vừa tạo đã "
+            + "bị huỷ. Bấm “Đọc lại” rồi chuẩn bị lại.",
+        );
+        return;
+      }
+      setPending({ kind: "scope", at: startedAt, op, draft });
     } catch (failure) {
       setError(stagedErrorText(failure));
     } finally {
@@ -321,6 +483,7 @@ export default function DrawingInfoPage() {
   const confirm = useCallback(async () => {
     if (!pending) return;
     setBusy(true);
+    applyingRef.current = true;
     try {
       await applyStagedOp(DAEMON_BASE, pending.op);
       setPending(null);
@@ -335,6 +498,7 @@ export default function DrawingInfoPage() {
          người dùng bấm lại một id đã hỏng. */
       setPending(null);
     } finally {
+      applyingRef.current = false;
       setBusy(false);
     }
   }, [pending, info, loadDocs]);
@@ -361,6 +525,16 @@ export default function DrawingInfoPage() {
       }
     >
       <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {cancelNote ? (
+          <div className="banner" data-tone="hard">
+            <span className="bm" />
+            <span className="bt"><b>Thao tác đang chờ đã bị huỷ.</b> {cancelNote}</span>
+            <span className="actions">
+              <Button onClick={() => setCancelNote("")}>Đã hiểu</Button>
+            </span>
+          </div>
+        ) : null}
+
         {stale ? (
           <div className="banner" data-tone="hard">
             <span className="bm" />

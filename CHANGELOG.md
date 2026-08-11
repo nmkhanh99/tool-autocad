@@ -1,5 +1,249 @@
 # CHANGELOG
 
+## 2026-08-11 — Bắt được việc đổi tab Model/Layout
+
+### Added — plugin phát không gian hiện hành và sự kiện `layoutSwitched`
+
+Gỡ khoảng trống đã ghi trong `ROADMAP.md` sáng nay. Danh mục đối tượng chỉ quét
+**một** không gian, nên đổi tab trong AutoCAD làm nó mô tả một không gian không
+còn hiện hành — và lệnh chọn theo handle sẽ hỏng với "not a top-level entity in
+current space". Trước đây màn hình không cách nào biết.
+
+Cần **hai** thứ, thiếu một cái là vô dụng:
+
+- **`space` trong `/docs`** (`writeDocs`, dùng lại `currentSpaceName` đã có).
+- **Sự kiện `layoutSwitched`** (`AcEditorReactor::layoutSwitched`). Gửi trường
+  `space` thôi vẫn chưa đủ: app chỉ HỎI `/docs` khi có sự kiện, mà bấm chuột vào
+  tab thì không qua lệnh nào. Không có sự kiện thì tín hiệu có mà không ai đánh
+  thức để đọc.
+
+**Một giả định của tôi đã bị phép đo bác bỏ.** Tôi viết trong `ROADMAP.md` sáng
+nay rằng "bộ đếm revision không tăng vì đổi tab không sửa đối tượng nào". Đo
+thật: đổi sang layout `02` rồi `03` làm revision nhảy **0 → 121**, vì AutoCAD
+phải dựng lại viewport. Nghĩa là `revision` cũng bắt được việc đổi tab — nhưng
+nó bắt **nhầm lý do**: người dùng sẽ đọc "bản vẽ đã thay đổi" trong khi họ không
+sửa gì, rồi đi tìm thay đổi không có thật. Nên `space-changed` được xét TRƯỚC
+`changed`, và trường `space` vẫn cần thiết vì nó nói đúng chuyện gì đã xảy ra.
+
+Giao diện: `profileStaleReason` thêm loại `space-changed` với lời riêng, so
+không gian mà **danh mục đã quét** (`selectionCatalog.space`) với không gian
+hiện tại trong `/docs`. Thiếu một trong hai vế thì im — plugin bản cũ không phát
+`space`.
+
+### Fixed — thẻ xác nhận sống sót qua một lần hồ sơ hoá cũ (Codex review)
+
+Thao tác đã chuẩn bị mang theo mô tả của **lúc chuẩn bị** ("chọn 40 đối tượng ở
+không gian 03"). Người dùng đổi tab rồi bấm Xác nhận là chạy nó trên một không
+gian khác. Guard máy chủ không cứu được: nó soi `instance` + `revision`, không
+soi không gian. Nay hồ sơ hoá cũ thì thao tác đang chờ bị **huỷ ở máy chủ** kèm
+câu giải thích, chứ không chỉ đóng thẻ (bỏ lại thì operation nằm trong hàng chờ
+tới hết phiên).
+
+Bản vá đầu của chính mục này lại sinh ra ba lỗi, hai P1 — Codex bắt được cả ba:
+
+- **P1 — chặn quá muộn.** Bản đầu chỉ dựa vào `stale`, mà `stale` chỉ đổi SAU
+  khi lượt đọc `/docs` về. Trong quãng đó thẻ xác nhận vẫn bấm được và máy chủ
+  vẫn nhận. Nay chặn **đồng bộ ngay tại sự kiện** `layoutSwitched`; đây là cửa
+  sổ duy nhất trong màn hình này mà một thao tác sai có thể đi lọt tới AutoCAD.
+- **P1 — chặn luôn đường phục hồi.** Đổi sang bản vẽ B làm hồ sơ hoá cũ; cách gỡ
+  đúng là chọn lại bản vẽ A trong ô chọn — nhưng việc đó tạo một thao tác
+  `activate-document`, và bản vá đầu huỷ nó ngay khi vừa tạo. Ô chọn bản vẽ trở
+  thành vô dụng, và lối thoát duy nhất bị bịt. Nay miễn trừ loại `activate`.
+- **P2 — huỷ nhầm thao tác ĐANG chạy.** `pending` vẫn còn trong lúc
+  `applyStagedOp` chờ; một `move-to-layer` thành công phát `drawingModified` →
+  hồ sơ hoá cũ → huỷ nhầm cái vừa chạy xong, và người dùng đọc "đã huỷ" cho một
+  thao tác máy chủ đã thực hiện. Nay có một pha "đang áp dụng" (ref, không phải
+  state — một lần re-render thêm ở giữa `applyStagedOp` là đúng thứ mở ra cửa sổ
+  mà nó đang bịt).
+
+Và bản vá của bản vá lại tái phạm một lỗi đã sửa sáng nay: câu giải thích đi vào
+ô lỗi dùng chung, nên nó hiện dưới nhãn **"Không chuẩn bị được"** ở cột bộ tạo
+thao tác — trong khi chẳng có gì chuẩn bị hỏng, thao tác đã chuẩn bị xong rồi
+mới bị huỷ, và nó có thể đến từ danh mục chứ không phải bộ tạo. Nay là một dải
+cảnh báo **cấp trang** riêng, có nút "Đã hiểu".
+
+Codex tìm thêm một P1 nữa trong bản vá đó: **lượt chuẩn bị ĐANG BAY không ai
+gác.** Giữa lúc bấm và lúc `/selection/prepare` trả lời, `pending` vẫn là `null`
+nên nhánh chặn bỏ qua nó — rồi thao tác về và mở một thẻ xác nhận mô tả không
+gian cũ. Nay có một bộ đếm **thế hệ không gian**: ai chuẩn bị thì chụp số đó
+trước khi chờ, và vứt kết quả (huỷ ở máy chủ) nếu nó đã đổi. Áp cho cả hai đường
+chuẩn bị — danh mục theo handle và bộ tạo theo phạm vi.
+
+Hai lỗi nhỏ hơn cùng đợt: chỉ so không gian khi bản ghi sống ĐANG hoạt động
+(không gian của một tài liệu nền không phải không gian AutoCAD đang mở, và một
+cảnh báo sai ở đây thì huỷ luôn thao tác đang chờ); và thêm `space` vào kiểu
+`OpenAcadDocument` phía daemon, không chỉ phía web.
+
+### Technical — đã kiểm gì, và CHƯA kiểm được gì
+
+Kiểm thật trên trình duyệt bằng cách bơm sự kiện `layoutSwitched` vào
+`events.jsonl` (daemon tail file này và đẩy qua SSE trong 500ms) — không đụng gì
+tới bản vẽ:
+
+- Đổi tab khi thẻ xác nhận **đang mở** → thẻ đóng ngay, dải cảnh báo cấp trang
+  hiện đúng câu. Đã lặp lại ba lần.
+- Đổi tab khi **không có** thao tác nào chờ → dải "AutoCAD đã chuyển sang không
+  gian X" hiện, nút ghi khoá, và cột bộ tạo thao tác cũng khoá cùng lý do.
+- Không gian thật không đổi → không cảnh báo sai.
+
+Ba lỗi nữa ở vòng sau, hai P1:
+
+- **P1 — daemon không biên dịch được.** `cadSelection.ts` định nghĩa
+  `OpenDocument = Required<Omit<OpenAcadDocument, "dbmod">>`, nên thêm một trường
+  **tuỳ chọn** vào `OpenAcadDocument` lại biến nó thành **bắt buộc** ở đó. Lỗi
+  hiện ra ở `completeDocument()` chứ không ở chỗ vừa sửa. Nguyên nhân gốc: lệnh
+  `pnpm verify` mà tôi vẫn chạy nằm ở **gói web** và không hề kiểm daemon. Đã
+  thêm `acad-studio/pnpm verify` chạy `typecheck:daemon` trước, và `DEVELOPMENT.md`
+  nay chỉ chạy từ `acad-studio/`.
+- **P1 — chốt không gian phải ở DAEMON, không chỉ ở giao diện.** Toàn bộ phần
+  trên phát hiện đổi tab qua sự kiện SSE — mà luồng đó **đứt được**, và lúc nó
+  đứt thì không còn gì chặn. Chốt apply của daemon soi `instance` + `revision`
+  nhưng không soi không gian, còn `selection_control.cpp` cũng không kiểm đối
+  tượng Pickfirst có thuộc không gian hiện hành hay không. Nay `DocumentGuard`
+  mang thêm `space`: daemon tự chụp lúc chuẩn bị và so lại lúc ghi, không phụ
+  thuộc vào kênh nào có thể chết. Mã lỗi mới `space_changed` kèm thái độ riêng ở
+  UI — `check:guards` bắt ngay khi tôi quên phần đó.
+
+  Bản vá đầu của chốt này là **no-op trong im lặng**, và đó là lỗi đáng nhớ nhất
+  đợt này: `completeDocument()` dựng lại object tài liệu mà **bỏ rơi** `space`,
+  nên `guard.space` luôn `undefined` và phép so luôn bị bỏ qua. Verify xanh,
+  review đọc thấy chốt, nhìn từ ngoài y hệt như đã có bảo vệ — mà nó không bao
+  giờ chạy. Cùng lượt còn hai lỗ nữa: ảnh chụp và `/docs` đọc ở hai thời điểm
+  nên `subjects` có thể đến từ không gian mới trong khi chốt mang không gian cũ
+  (`snapshotGuard` nay so cả hai); và giữa lúc daemon kiểm với lúc AutoCAD thật
+  sự chạy lệnh đã xếp hàng còn một quãng nữa — nay `currentSpace` đi cùng lệnh
+  và `selection_control.cpp` so lại lần cuối ngay trước khi chạm vào bản vẽ.
+
+  Rồi ba lỗ nữa, cùng một họ — **fail-OPEN khi không biết**:
+
+  · Plugin không mở được BTR của không gian hiện hành thì `currentSpaceName()`
+    trả chuỗi rỗng, và chốt native coi rỗng là "daemon bản cũ không gửi" rồi cho
+    qua. Nhưng daemon CÓ gửi — rỗng nghĩa là AutoCAD không biết mình đang ở đâu.
+  · Cùng lỗi ở tầng daemon: `completeDocument()` quy `""` về `undefined`, tức
+    gộp "plugin đọc hỏng" vào "plugin bản cũ". Nay tách hẳn: thiếu trường thì
+    cho qua, trường rỗng thì TỪ CHỐI. Một hàm `spaceMismatchReason()` duy nhất
+    cho cả ba mốc so, để lần sau không lệch nhau.
+  · `snapshotGuard` đọc `document.space` của ảnh chụp — mà `drawing-info` không
+    hề phát trường đó (`null` trên phản hồi thật); không gian đã quét nằm ở
+    `selectionCatalog`/`selectionScope`. Lại một chốt không bao giờ bắn.
+
+  Và một lỗi về **thứ tự**, không về tính đúng: phép so revision chạy trước phép
+  so không gian, nên đổi tab (vốn hay kéo revision nhảy theo) báo ra
+  `drawing_stale`. Người dùng đọc "nội dung bản vẽ đã thay đổi" rồi đi tìm một
+  thay đổi không có thật, trong khi việc họ vừa làm là bấm sang tab khác. Đã đo
+  đúng hiện tượng này khi thử bằng API: nhận `drawing_stale` cho một cú đổi tab.
+  Đã sửa ở CẢ HAI tầng — daemon và plugin.
+
+  Hai điều còn lại, đều là "rỗng không bằng thiếu":
+
+  · Giao diện cũng gộp `space: ""` vào "plugin bản cũ" như daemon từng gộp. Nay
+    cả hai tầng dùng chung một quy tắc, và có test khoá nó lại
+    (`spaceMismatchReason` ở daemon, `profileStaleReason` ở web).
+  · Khoá khử trùng lặp sự kiện là `(giây, tên layout)`, nên ba cú đổi trong cùng
+    một giây có thể va khoá và một cú bị bỏ. Nay plugin phát thêm **số thứ tự**
+    `n` cho mỗi lần phát thật — duy nhất theo đúng nghĩa, không phải suy đoán từ
+    dấu thời gian. Plugin bản cũ (`seq = 0`) lùi về khoá cũ.
+
+  Và một lỗi ObjectARX thuần: `writeDocs()` đọc database của **mọi** tài liệu
+  đang mở, kể cả tài liệu nền — mà đọc database không-current thì phải lấy lock
+  trước (`writeDrawingInfo`/`writeGeometry` đều làm). `writeDocs()` lại chạy từ
+  trong reactor, nơi lấy lock là chuyện không nên làm. Đọc mà không lock thì
+  ObjectARX có thể trả về rỗng — và theo quy tắc vừa dựng ở trên, rỗng nghĩa là
+  "không đọc được", nên daemon sẽ **từ chối mọi thao tác** trên tài liệu đó, kể
+  cả lệnh `activate-document` vốn là đường phục hồi. Nay chỉ phát `space` cho
+  tài liệu vừa active vừa current, và **bỏ hẳn trường** với tài liệu nền —
+  "không biết, và không cần biết": chốt không gian chỉ có nghĩa cho tài liệu
+  đang được thao tác, mà daemon bắt buộc đó phải là tài liệu active.
+
+  Cuối cùng, ba chỗ nữa cùng một họ với những cái trên:
+
+  · **Thiếu trường không phải lúc nào cũng là "plugin cũ".** Từ khi plugin cố ý
+    bỏ `space` với tài liệu nền, một lần `/docs` trả về thiếu trường cho tài
+    liệu ĐÍCH là dấu hiệu đọc hỏng — mà cả daemon lẫn plugin đều cho qua. Nay
+    `resolveDocument` trả thêm `spaceSupported` (có tài liệu nào phát `space`
+    không); plugin mới mà tài liệu đích thiếu trường thì TỪ CHỐI.
+  · **Thứ tự chốt ở nhánh chuẩn bị** vẫn để revision chạy trước — hai nhánh nói
+    hai câu khác nhau cho cùng một việc. Đã đồng bộ.
+  · **Khoá khử trùng lặp va nhau sau khi plugin nạp lại**, vì bộ đếm về 0. Nay
+    xoá sạch khoá khi thấy `pluginLoaded`.
+
+  Và vòng cuối, ba biến thể cuối cùng của cùng một luật:
+
+  · **Giao thức raw không phân biệt được "không gửi" với "gửi chuỗi rỗng"** —
+    `param()` bên plugin trả `""` cho cả hai. Nay có cờ hiện diện riêng
+    `spaceKnown`: có cờ nghĩa là daemon ĐÒI kiểm, và chuỗi rỗng lúc đó là "không
+    đọc được" nên plugin từ chối.
+  · **`selectionCatalog.space` rỗng** — chính lượt quét không biết nó quét không
+    gian nào — vẫn lọt qua giao diện.
+  · **Sự kiện phát lại rơi đúng giây người dùng bấm** thì `>=` không phân biệt
+    được, và một thao tác hợp lệ bị huỷ oan. Nay **daemon** gắn cờ `replay` cho
+    15 dòng nó đẩy lúc mở kết nối — chỉ máy chủ biết khung nào là lịch sử; phía
+    web không có cách nào suy ra. Có test cho cả `seq` lẫn `replay`.
+
+  Và vòng cuối cùng bắt được **hai hồi quy do chính vòng trước tôi gây ra** —
+  cả hai đều P1, và cái đầu lại đúng vào đường phục hồi:
+
+  · **Đổi bản vẽ bị chặn.** `activate-document` cố ý nhắm vào một tài liệu NỀN,
+    mà plugin cố ý không phát `space` cho tài liệu nền. Luật "một vế thiếu thì
+    từ chối" vừa dựng ở trên liền từ chối đúng cái lệnh dùng để đổi sang bản vẽ
+    đang cần. Nay chốt không gian chỉ xét khi đích là tài liệu đang hoạt động —
+    đó cũng là nơi duy nhất nó có nghĩa.
+  · **Hạ cấp plugin giữa chừng thì chốt tự tắt.** Cờ `spaceSupported` tôi thêm ở
+    vòng trước đọc trạng thái HIỆN TẠI, nên nạp lại một plugin bản cũ sau khi đã
+    chuẩn bị xong sẽ làm phép so bị bỏ qua — đúng lúc plugin cũ cũng không kiểm
+    gì. Nay bỏ hẳn cờ đó: chỉ cần một vế biết là phải so.
+  · Và khung `replay` KHÔNG hẳn là chuyện cũ: SSE đứt trong lúc thẻ xác nhận
+    đang mở thì cú đổi tab thật nằm đúng trong 15 dòng đẩy lại. Bỏ hết là để một
+    thao tác đã hoá cũ vẫn bấm được. Nay chỉ bỏ khung cũ hơn thao tác đang chờ.
+
+  Và một ca tương thích ngược tôi đã bỏ sót suốt: plugin cũ **không** phát
+  `space` trong `/docs` nhưng **vẫn** phát `selectionCatalog.space` — nên luật
+  "một vế thiếu thì từ chối" làm hỏng mọi `select` theo phạm vi và mọi
+  `move-to-layer` với ai chỉ nâng daemon mà chưa nâng plugin. Luật cuối cùng là
+  **bất đối xứng**: chưa từng biết thì cho qua, từng biết rồi mất thì từ chối.
+
+  Chốt không gian nay có test riêng trong `test:cad-selection`, và
+  `acad-studio/pnpm verify` chạy nó — đó là bộ test daemon DUY NHẤT trong
+  `verify`, thêm vào cùng lượt với `typecheck:daemon`.
+- **P1 — dữ liệu cá nhân trong repo.** Ba thư mục `cadweb-*-smoke/` chứa
+  `HKCU_V1.plist` — bản chụp registry AutoCAD có họ tên thật, danh sách bản vẽ
+  vừa mở và `SUBSCRIPTIONMACID`. Chưa từng được commit; đã thêm vào `.gitignore`.
+  Không xoá — file của người dùng. Cùng lượt: `React/RCTImageDownloader/Cache.db`
+  là cache URL của CoreFoundation do một app React Native đẻ ra ở thư mục làm
+  việc, cũng đã ignore.
+- **P2 — sự kiện phát lại giết thao tác hợp lệ.** `GET /api/acad/events` đẩy lại
+  **15 dòng cuối** mỗi lần mở kết nối, kể cả khi tự nối lại giữa phiên. Một cú
+  đổi tab xảy ra lúc đường truyền đứt sẽ quay lại như tin mới và huỷ một thao
+  tác vừa chuẩn bị, trong khi AutoCAD chẳng đổi gì.
+
+  Mất **ba** lượt mới đúng, và mỗi lượt hỏng vì tôi chọn MỘT cơ chế thay vì hai:
+  tập "đã thấy" chỉ biết những gì trang này nhận được, nên sự kiện xảy ra lúc
+  đứt kết nối vẫn lọt; đổi sang mốc thời gian thì lại chỉ tới **giây**, nên một
+  bản phát lại rơi đúng giây người dùng bấm vẫn qua được. Nay dùng cả hai — mỗi
+  cái bịt một nửa khác nhau của cùng một lỗ.
+
+  Còn lại một trường hợp, cố ý: một lần đổi THẬT trong đúng giây bắt đầu chuẩn
+  bị vẫn huỷ. Đó là chiều an toàn — thà huỷ thừa một thao tác chuẩn bị lại được,
+  còn hơn để lọt một thao tác chạy nhầm không gian.
+
+Đã kiểm thật cả hai chiều: bơm một sự kiện MỚI và một sự kiện **cũ 10 phút** vào
+cùng một lượt — thẻ xác nhận bị huỷ đúng bởi cái mới, cái cũ bị bỏ qua.
+
+**Chưa dựng lại được bằng thao tác thật:** nhánh so mốc sau khi chờ, tức
+đúng lúc `/selection/prepare` đang bay. Cửa sổ đó dưới một giây, và thí nghiệm
+cho thấy nó còn hẹp hơn nữa vì `blockNote` đã khoá nút sẵn trong suốt lượt đọc
+`/docs` — muốn lọt phải có `/docs` vừa xong tại thời điểm bấm, rồi đổi tab trước
+khi máy chủ trả lời. Chốt này là lớp phòng thủ thứ hai sau chốt đó; đã đọc kỹ mã
+nhưng chưa có ảnh chứng minh.
+
+### Technical
+
+- Đã kiểm trên máy thật: `/docs` trả `space: "Model"` cho bản vẽ trống và
+  `space: "01"` cho bản vẽ as-built — trường này thật và đổi theo từng tài liệu.
+- Reactor đã được xác nhận bắn trên AutoCAD 2027 Mac: bấm tab layout cho ra
+  `layoutSwitched` với `detail` là `02` rồi `03`, và `/docs` đổi theo sang
+  `space: "03"`.
+
 ## 2026-08-11 — Giai đoạn 6: xoá `DrawingInfoPanel` legacy
 
 ### Known — một phát hiện được ghi nhận, không sửa

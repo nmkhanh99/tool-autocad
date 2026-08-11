@@ -23,6 +23,16 @@ export type AcadDocument = {
    * nguồn chỉ có nghĩa khi CÙNG một `instance`: bộ đếm revision là của một
    * database cụ thể, hai bản vẽ khác nhau có thể cùng đứng ở số 7. */
   instance?: string;
+  /** Tên không gian AutoCAD đang mở cho bản vẽ này (Model, hoặc tên layout).
+   *
+   * Cần nó vì danh mục đối tượng chỉ quét **một** không gian. Đo trên máy thật:
+   * đổi tab CÓ làm `revision` nhảy (0 → 121 khi lần đầu kích hoạt layout) vì
+   * AutoCAD phải dựng lại viewport — nên `revision` cũng bắt được, nhưng nó bắt
+   * **nhầm lý do**: người dùng đọc "bản vẽ đã thay đổi" trong khi họ không sửa
+   * gì. Trường này nói đúng chuyện gì đã xảy ra.
+   *
+   * Thiếu trường = plugin bản cũ. Không suy ra được gì, và phải im. */
+  space?: string;
   /** Revision của bản vẽ, do plugin cấp. Không phải revision snapshot CadWeb
    * và không phải content-hash hồ sơ — bốn thứ này không so sánh được với nhau. */
   revision?: number;

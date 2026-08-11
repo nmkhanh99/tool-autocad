@@ -298,6 +298,9 @@ export type OpenAcadDocument = {
   /** 1 = có thay đổi chưa lưu, 0 = sạch. Thiếu trường này nghĩa là plugin đang
    * chạy là bản cũ hơn — UI phải coi là KHÔNG BIẾT, không được coi là đã lưu. */
   dbmod?: number;
+  /** Tên không gian đang hiện hành (Model, hoặc tên layout). Tín hiệu nhẹ duy
+   * nhất cho việc đổi tab Model/Layout. Thiếu trường = plugin bản cũ. */
+  space?: string;
 };
 
 /** Resolve one open document, preferring a full-path match over a title match. */
@@ -1234,11 +1237,23 @@ export function acadBridgeRouter(): Router {
     res.flushHeaders();
     const file = join(getBridgeDir(), "events.jsonl");
     let pos = 0;
-    const push = (chunk: string) =>
-      chunk.split("\n").filter(Boolean).forEach((l) => res.write(`data: ${l}\n\n`));
+    /* `replay` phải do ĐÂY gắn: chỉ máy chủ biết một khung là lịch sử hay là tin
+       vừa xảy ra. Phía web không có cách nào suy ra — dấu thời gian chỉ tới
+       giây, nên một dòng cũ phát lại trong cùng giây người dùng bấm trông y hệt
+       một sự kiện mới, và nơi nào huỷ thao tác theo sự kiện sẽ huỷ oan. */
+    const push = (chunk: string, replay = false) =>
+      chunk.split("\n").filter(Boolean).forEach((line) => {
+        let frame = line;
+        if (replay) {
+          try {
+            frame = JSON.stringify({ ...JSON.parse(line), replay: true });
+          } catch { /* không phải JSON — đẩy nguyên văn, client tự bỏ qua */ }
+        }
+        res.write(`data: ${frame}\n\n`);
+      });
     try {
       const all = readFileSync(file);
-      push(all.toString("utf8").split("\n").filter(Boolean).slice(-15).join("\n"));
+      push(all.toString("utf8").split("\n").filter(Boolean).slice(-15).join("\n"), true);
       pos = all.length;
     } catch { /* chưa có file */ }
     const timer = setInterval(() => {

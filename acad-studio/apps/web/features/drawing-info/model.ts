@@ -392,8 +392,7 @@ export function catalogNote(raw: JsonRecord | null, rows?: number): string {
     ? ` ${scanned - shown} dòng bị bỏ vì trùng handle hoặc thiếu handle.`
     : "";
   return complete
-    /* "LÚC ĐỌC" — cùng lý do như `selectionScopeNote`: đổi tab Model/Layout
-       không có tín hiệu nào tới được màn hình này. */
+    /* "LÚC ĐỌC" — cùng lý do như `selectionScopeNote`. */
     ? `${shown} đối tượng trong không gian ${space} — không gian AutoCAD mở lúc `
       + "đọc hồ sơ này."
     : `Mới quét ${scanned} đối tượng trong không gian ${space}; danh mục CHƯA đủ. `
@@ -593,7 +592,15 @@ export function staleDrawingNote(
  *     bằng cách so tên tệp: đóng rồi mở lại đúng đường dẫn đó cho ra tên giống
  *     hệt nhưng là một database khác, và guard `instance` của máy chủ sẽ từ
  *     chối. So theo `instance` mới thấy.
- *  3. `changed` — vẫn bản vẽ đó, nhưng đã bị sửa kể từ lượt đọc.
+ *  3. `space-changed` — vẫn bản vẽ đó, nhưng người dùng đã đổi tab
+ *     Model/Layout. Danh mục chỉ quét MỘT không gian, nên nó đang mô tả một
+ *     không gian không còn hiện hành — và lệnh chọn theo handle sẽ hỏng với
+ *     "not a top-level entity in current space". Xét TRƯỚC `changed`: đổi tab
+ *     thường làm `revision` nhảy theo (AutoCAD dựng lại viewport), nên nếu để
+ *     `changed` bắt trước thì người dùng đọc "bản vẽ đã thay đổi" trong khi họ
+ *     không sửa gì — đúng hiện tượng, sai nguyên nhân, và sai cách xử lý.
+ *  4. `changed` — vẫn bản vẽ đó, cùng không gian, nhưng đã bị sửa kể từ lượt
+ *     đọc.
  *
  * Trả về `title` riêng cho từng loại. Một câu đóng hộp cho cả ba thì hai trong
  * ba là nói sai — và đây là câu người dùng đọc để quyết định làm gì tiếp.
@@ -602,14 +609,17 @@ export function staleDrawingNote(
  * cùng cặp `instance`/`revision` với hồ sơ 350 KB, thứ chỉ đọc lại khi bấm.
  */
 export type ProfileStale = {
-  kind: "wrong-drawing" | "closed" | "changed";
+  kind: "wrong-drawing" | "closed" | "space-changed" | "changed";
   title: string;
   note: string;
 };
 
 export function profileStaleReason(
   payload: JsonRecord | null,
-  docs: readonly { file?: string; title?: string; active?: boolean; instance?: string; revision?: number }[],
+  docs: readonly {
+    file?: string; title?: string; active?: boolean;
+    instance?: string; revision?: number; space?: string;
+  }[],
 ): ProfileStale | null {
   const wrong = staleDrawingNote(payload, docs);
   if (wrong) {
@@ -647,6 +657,61 @@ export function profileStaleReason(
       note: "AutoCAD đang mở một bản vẽ khác trùng tên — bản vẽ chưa lưu không có "
         + "đường dẫn để phân biệt. Bấm “Đọc lại”.",
     };
+  }
+
+  /* Đổi tab Model/Layout. So không gian mà DANH MỤC đã quét, không phải một
+     trường nào khác của hồ sơ — chính nó quyết định các dòng đang hiện ra. Cả
+     hai vế thiếu thì im: plugin bản cũ không phát `space` trong `/docs`.
+     Phải đứng TRƯỚC phép so revision — xem ghi chú của kiểu `space-changed`. */
+  /* Hai nguồn, đúng thứ tự daemon dùng (`snapshotScannedSpace`). Chỉ đọc
+     `selectionCatalog` là bỏ sót phản hồi chỉ có `selectionScope` — và bỏ sót ở
+     đây nghĩa là màn hình vẫn cho bấm sau khi người dùng đã đổi tab. Hai bên
+     phải đọc GIỐNG NHAU, nếu không thì giao diện và máy chủ bất đồng về việc
+     "hồ sơ này thuộc không gian nào". */
+  const view = normalize(payload);
+  const scannedRaw = [view.selectionCatalog, view.selectionScope]
+    .map((source) => record(source).space)
+    .find((space) => typeof space === "string");
+  const scannedKnown = typeof scannedRaw === "string";
+  const scanned = str(scannedRaw);
+  if (live.active === true && scannedKnown && !scanned) {
+    /* Chính lượt quét không biết nó đã quét không gian nào. Cùng luật với vế
+       kia: rỗng là "không đọc được", không phải "không có trường". */
+    return {
+      kind: "space-changed",
+      title: "Không rõ danh mục dưới đây thuộc không gian nào.",
+      note: "Lượt quét không ghi được tên không gian, nên không kiểm được nó có "
+        + "khớp thứ AutoCAD đang mở hay không. Bấm “Đọc lại”.",
+    };
+  }
+  /* `live.active === true` là điều kiện BẮT BUỘC: không gian của một tài liệu
+     nền không phải không gian AutoCAD đang mở. Nhánh trên chỉ bắt "không active"
+     khi CÓ một tài liệu khác đang active; lúc `/docs` tạm thời không đánh dấu
+     tài liệu nào, `live` có thể là tài liệu nền — so không gian lúc đó cho ra
+     một cảnh báo sai, và cảnh báo sai ở đây thì huỷ luôn thao tác đang chờ. */
+  if (live.active === true && scanned && typeof live.space === "string") {
+    /* Chuỗi RỖNG không phải "plugin bản cũ" — thiếu hẳn trường mới là. Rỗng
+       nghĩa là plugin có trả lời nhưng không mở được BTR của không gian hiện
+       hành, tức AutoCAD không biết mình đang ở đâu. Daemon từ chối thao tác
+       trong trường hợp đó, nên để giao diện cho bấm là hứa một thứ máy chủ sẽ
+       khước từ. Cùng quy tắc với `spaceMismatchReason()` phía daemon. */
+    if (!live.space) {
+      return {
+        kind: "space-changed",
+        title: "Không đọc được không gian hiện hành của AutoCAD.",
+        note: `Danh mục dưới đây quét không gian ${scanned}, nhưng app không xác `
+          + "nhận được AutoCAD có còn ở đó không. Bấm “Đọc lại”.",
+      };
+    }
+    if (live.space !== scanned) {
+      return {
+        kind: "space-changed",
+        title: `AutoCAD đã chuyển sang không gian ${live.space}.`,
+        note: `Danh mục dưới đây quét không gian ${scanned}, nên nó không mô tả thứ `
+          + "bạn đang nhìn trong AutoCAD — và lệnh chọn sẽ hỏng vì đối tượng nằm ở "
+          + "không gian khác. Bấm “Đọc lại”.",
+      };
+    }
   }
 
   if (typeof live.revision !== "number" || live.revision === doc.revision) return null;
@@ -689,11 +754,10 @@ export function selectionScopeNote(payload: JsonRecord | null): string {
   if (!space) return "";
   const scanned = num(scope.scanned);
   const complete = scope.complete !== false;
-  /* "LÚC ĐỌC", không phải "đang mở": hồ sơ chỉ đọc lại khi bấm, và đổi tab
-     Model/Layout trong AutoCAD KHÔNG có tín hiệu nhẹ nào để màn hình biết —
-     `/docs` không mang không gian, và bộ đếm revision không nhúc nhích vì đổi
-     tab không sửa đối tượng nào. Nên câu này không được quả quyết về hiện tại;
-     nó chỉ nói được về thời điểm đọc. */
+  /* "LÚC ĐỌC", không phải "đang mở": câu này mô tả ẢNH CHỤP, và ảnh chụp thì
+     luôn thuộc về quá khứ. Việc phát hiện AutoCAD đã đổi sang không gian khác
+     là của `profileStaleReason` (so `space` trong `/docs`); nó dựng một dải
+     cảnh báo riêng thay vì làm câu này nói dối. */
   return `Chỉ chạm tới ${scanned} đối tượng trong không gian ${space} — không gian `
     + `AutoCAD mở LÚC ĐỌC hồ sơ này.${complete ? "" : " Danh mục còn chưa quét hết."}`;
 }

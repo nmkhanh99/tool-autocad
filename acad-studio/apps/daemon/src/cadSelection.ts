@@ -17,15 +17,37 @@ const HANDLE_RE = /^[0-9A-F]+$/;
 const SUBJECT_PREVIEW_LIMIT = 100;
 const MAX_OPERATIONS = 200;
 
-// `dbmod` cố ý ở ngoài `Required`: plugin bản cũ không phát trường này, và
-// thiếu nó nghĩa là KHÔNG BIẾT chứ không phải dữ liệu hỏng. Bốn trường còn lại
-// vẫn bắt buộc — thiếu chúng là phản hồi plugin không hợp lệ.
-type OpenDocument = Required<Omit<OpenAcadDocument, "dbmod">> & Pick<OpenAcadDocument, "dbmod">;
+// `dbmod` và `space` cố ý ở ngoài `Required`: plugin bản cũ không phát chúng, và
+// thiếu nghĩa là KHÔNG BIẾT chứ không phải dữ liệu hỏng. Bốn trường còn lại vẫn
+// bắt buộc — thiếu chúng là phản hồi plugin không hợp lệ.
+//
+// `Required<Omit<...>>` là một cái bẫy: mọi trường tuỳ chọn THÊM VÀO
+// `OpenAcadDocument` sau này đều tự động thành bắt buộc ở đây, và lỗi chỉ hiện
+// ra ở `completeDocument()` chứ không ở chỗ vừa sửa. Đã sập đúng một lần khi
+// thêm `space`.
+type OpenDocument =
+  Required<Omit<OpenAcadDocument, "dbmod" | "space">>
+  & Pick<OpenAcadDocument, "dbmod" | "space">;
 
 type DocumentGuard = {
   instance: string;
   revision: number;
   activeInstance: string;
+  /** Không gian hiện hành LÚC CHUẨN BỊ (Model, hoặc tên layout).
+   *
+   * Đổi tab Model/Layout không sửa đối tượng nào, nên `revision` KHÔNG hứa bắt
+   * được nó — trên máy thật nó có nhảy khi AutoCAD dựng lại viewport, nhưng đó
+   * là tác dụng phụ chứ không phải bảo đảm, và quay lại một layout đã kích hoạt
+   * trước đó thì không còn gì để dựng.
+   *
+   * Vì sao phải ở ĐÂY chứ không chỉ ở giao diện: màn hình phát hiện đổi tab qua
+   * sự kiện SSE, mà luồng đó đứt được. Chốt duy nhất không phụ thuộc vào một
+   * kênh có thể chết là chốt do chính daemon chụp lúc chuẩn bị và so lại lúc
+   * ghi.
+   *
+   * `undefined` khi plugin bản cũ không phát `space` — lúc đó không so, vì so
+   * với "không biết" thì mọi thao tác đều bị từ chối. */
+  space?: string;
 };
 
 type CatalogGuard = {
@@ -413,7 +435,80 @@ function completeDocument(value: OpenAcadDocument, label: string): OpenDocument 
     active: value.active === true,
     instance: nativeText(value.instance, `${label}.instance`, 128),
     revision: documentRevision(value.revision, label),
+    /* GIỮ `space` lại. Bỏ nó ở đây làm mọi chốt không gian phía dưới thành
+       no-op trong im lặng — `guard.space` luôn `undefined` nên phép so luôn bị
+       bỏ qua, và nhìn từ ngoài thì trông hệt như đã có chốt. Đã sập đúng một
+       lần: chốt viết xong, verify xanh, nhưng nó không bao giờ chạy.
+       `dbmod` KHÔNG cần giữ vì không chốt nào dùng tới nó.
+
+       Phân biệt HAI thứ mà cả hai đều "rỗng":
+         · thiếu hẳn trường  → plugin bản cũ, không có gì để so → `undefined`
+         · trường rỗng       → plugin CÓ trả lời nhưng không mở được BTR của
+                               không gian hiện hành, tức không biết mình đang ở
+                               đâu → giữ nguyên `""` để chốt phía dưới TỪ CHỐI
+       Gộp hai cái làm một là biến một lần đọc hỏng thành giấy phép đi qua. */
+    space: typeof value.space === "string" ? value.space.trim().slice(0, 256) : undefined,
   };
+}
+
+/** Vì sao hai không gian không dùng chung được — hoặc `null` nếu dùng được.
+ *
+ * `undefined` ở một trong hai vế = plugin bản cũ không phát `space`; không có
+ * gì để so nên cho qua, giống mọi trường tuỳ chọn khác.
+ *
+ * Chuỗi RỖNG thì ngược lại: plugin có trả lời nhưng không đọc được không gian
+ * hiện hành. Cho qua lúc đó là để một lệnh ghi chạy mà không ai biết nó chạm
+ * vào không gian nào — đúng thứ chốt này sinh ra để chặn.
+ */
+export function spaceMismatchReason(
+  prepared: string | undefined,
+  current: string | undefined,
+): string | null {
+  /* Luật BẤT ĐỐI XỨNG, và sự bất đối xứng đó là cả vấn đề:
+
+     `prepared === undefined` → chưa từng biết không gian nào để mà so. Hai
+     đường tới đây, cả hai đều hợp lệ: plugin bản cũ không phát `space` trong
+     `/docs` (nhưng VẪN phát `selectionCatalog.space`, nên vế kia có giá trị —
+     đây chính là ca nâng cấp daemon mà chưa nâng plugin), và tài liệu nền mà
+     plugin cố ý bỏ trường. Chặn ở đây là làm hỏng mọi thao tác trên một cấu
+     hình hợp lệ.
+
+     `current === undefined` trong khi `prepared` CÓ giá trị → ta từng biết, giờ
+     không. Đó là một lần đọc hỏng, hoặc plugin bị hạ cấp giữa lúc chuẩn bị và
+     lúc ghi — và plugin cũ thì cũng không tự kiểm. Cho qua lúc đó là để lệnh
+     ghi chạy mà không ai xác nhận nó chạm vào đâu. */
+  if (prepared === undefined) return null;
+  if (current === undefined) {
+    return "không xác định được không gian hiện hành của bản vẽ";
+  }
+  /* Có trường nhưng rỗng: plugin trả lời được nhưng không mở được BTR của không
+     gian hiện hành, tức AutoCAD không biết mình đang ở đâu. */
+  if (!prepared || !current) {
+    return "không đọc được không gian hiện hành của bản vẽ";
+  }
+  if (prepared === current) return null;
+  return `AutoCAD đang ở không gian ${current}, còn thao tác chuẩn bị cho `
+    + `không gian ${prepared}`;
+}
+
+/** Không gian mà lượt quét `drawing-info` ĐÃ quét. Hai đường vì payload plugin
+ *  phát cả dạng gốc lẫn dạng lồng — xem `normalize()` phía web. */
+function snapshotScannedSpace(
+  snapshot: DrawingInfoPluginSnapshot,
+): string | undefined {
+  const root = record(snapshot);
+  const nested = record(root.drawing);
+  for (const source of [root.selectionCatalog, root.selectionScope,
+    nested.selectionCatalog, nested.selectionScope]) {
+    const space = record(source).space;
+    /* Trả CẢ chuỗi rỗng. Đây là chỗ thứ ba trong cùng một lượt tôi suýt gộp
+       "plugin không đọc được" vào "plugin bản cũ" — bỏ qua rỗng ở đây làm
+       `snapshotGuard` nhận một ảnh chụp mà chính plugin không biết nó thuộc
+       không gian nào. `undefined` chỉ dành cho trường hợp KHÔNG NGUỒN NÀO có
+       khoá `space`. */
+    if (typeof space === "string") return space.trim();
+  }
+  return undefined;
 }
 
 function snapshotGuard(
@@ -435,6 +530,36 @@ function snapshotGuard(
       409,
     );
   }
+
+  /* Ảnh chụp và `/docs` đọc ở hai thời điểm.  Đổi tab giữa hai lượt đó không
+     làm revision nhúc nhích khi layout đã được kích hoạt trước đó, nên hai phép
+     so trên đều lọt — mà `subjects` thì đã lấy từ không gian MỚI trong khi
+     chốt mang không gian CŨ.  Quay về tab cũ trước khi ghi là chốt lúc apply
+     cũng lọt nốt, và thao tác chạy trên một tập đối tượng không ai nhìn thấy.
+     Bỏ qua khi một trong hai vế không biết (plugin bản cũ không phát). */
+  /* Không gian của ảnh chụp nằm ở `selectionCatalog`/`selectionScope`, KHÔNG ở
+     `document` — đã đối chiếu với phản hồi thật: `document.space` luôn `null`
+     trong `drawing-info`. Đọc nhầm chỗ thì chốt này không bao giờ bắn, và không
+     có gì báo cho biết. */
+  const snapshotSpace = snapshotScannedSpace(snapshot);
+  /* Không gian xét TRƯỚC revision — cùng lý do như ở nhánh apply: đổi tab
+     thường kéo revision nhảy theo, nên để revision chạy trước là báo "nội dung
+     bản vẽ đã thay đổi" cho một cú bấm sang tab khác, và người dùng đi tìm một
+     thay đổi không có thật. Hai nhánh phải nói CÙNG một câu cho cùng một việc. */
+  /* CHỈ xét khi đích là tài liệu đang hoạt động. `activate-document` cố ý nhắm
+     vào một tài liệu NỀN — mà plugin cố ý không phát `space` cho tài liệu nền
+     (đọc database không-current phải lock). So hai thứ đó là từ chối đúng cái
+     lệnh dùng để ĐỔI sang bản vẽ đang cần, tức bịt đường phục hồi. */
+  const snapshotDrift = document.active
+    ? spaceMismatchReason(document.space, snapshotSpace)
+    : null;
+  if (snapshotDrift) {
+    throw new SelectionApiError(
+      "space_changed",
+      `${snapshotDrift}; hãy quét lại`,
+      409,
+    );
+  }
   if (revision !== document.revision) {
     throw new SelectionApiError(
       "drawing_stale",
@@ -446,6 +571,7 @@ function snapshotGuard(
     instance,
     revision,
     activeInstance: activeDocument.instance,
+    space: document.space,
   };
 }
 
@@ -463,6 +589,7 @@ function listDocumentGuard(
     instance: document.instance,
     revision: document.revision,
     activeInstance: activeDocument.instance,
+    space: document.space,
   };
 }
 
@@ -548,6 +675,19 @@ export function buildSelectionControlParams(input: {
     databaseRevision: input.guard.revision,
     activeDocumentInstance: input.guard.activeInstance,
   };
+  /* Không gian phải đi CÙNG lệnh, không dừng ở daemon.  Giữa lúc daemon đọc
+     `/docs` và lúc AutoCAD thật sự chạy lệnh đã xếp hàng còn một quãng nữa —
+     đổi tab đúng trong quãng đó thì mọi chốt phía trên đều đã qua. Plugin so
+     lại ngay trước khi chạy; thiếu tham số này thì plugin bỏ qua, nên daemon
+     mới vẫn chạy được với plugin cũ. */
+  /* Giao thức raw chỉ có chuỗi, và `param()` bên plugin trả "" cho khoá thiếu —
+     nên giá trị rỗng KHÔNG phân biệt được với không gửi. Gửi kèm một cờ hiện
+     diện riêng: có cờ = daemon đòi kiểm, và lúc đó chuỗi rỗng nghĩa là "không
+     đọc được", tức phải TỪ CHỐI chứ không phải bỏ qua. */
+  if (input.guard.space !== undefined) {
+    params.spaceKnown = "1";
+    params.currentSpace = input.guard.space;
+  }
   if (input.scope) {
     params.scopeKind = input.scope.kind;
     if (input.scope.kind === "layer" || input.scope.kind === "block") {
@@ -684,6 +824,16 @@ async function nativeCall(
       throw new SelectionApiError(
         "document_stale",
         "Phiên bản vẽ hoặc bản vẽ active đã thay đổi; hãy tạo thao tác lại",
+        409,
+      );
+    }
+    /* Chốt cuối của plugin, chạy ngay trước khi chạm vào bản vẽ. Phải xét TRƯỚC
+       `drawing_stale`: hai chuỗi không giao nhau, nhưng đặt sau một regex rộng
+       hơn là cách một mã lỗi âm thầm biến mất khi ai đó nới regex kia. */
+    if (/space_changed/i.test(diagnostic)) {
+      throw new SelectionApiError(
+        "space_changed",
+        "AutoCAD đã chuyển sang không gian khác; hãy tạo thao tác lại",
         409,
       );
     }
@@ -844,7 +994,11 @@ export function cadSelectionRouter(
         409,
       );
     }
-    return { document, activeDocument, exactTarget };
+    return {
+      document,
+      activeDocument,
+      exactTarget,
+    };
   }
 
   async function drawingSnapshot(
@@ -1047,6 +1201,7 @@ export function cadSelectionRouter(
         instance: document.instance,
         revision: document.revision,
         activeInstance: activeDocument.instance,
+        space: document.space,
       };
       const subjects = await captureCurrent(
         document,
@@ -1282,6 +1437,21 @@ export function cadSelectionRouter(
         throw new SelectionApiError(
           "document_stale",
           "Phiên bản vẽ hoặc bản vẽ active đã thay đổi; thao tác đã tự hủy",
+          409,
+        );
+      }
+      // Không gian xét TRƯỚC revision.  Cả hai đều từ chối thao tác, nên thứ tự
+      // không đổi tính an toàn — nó đổi CÂU TRẢ LỜI.  Đổi tab thường kéo theo
+      // revision nhảy (AutoCAD dựng lại viewport), nên để revision chạy trước
+      // là người dùng đọc "nội dung bản vẽ đã thay đổi" rồi đi tìm một thay đổi
+      // không có thật, trong khi việc họ vừa làm là bấm sang tab khác.
+      const spaceDrift = document.active
+        ? spaceMismatchReason(operation.guard.space, document.space)
+        : null;
+      if (spaceDrift) {
+        throw new SelectionApiError(
+          "space_changed",
+          `${spaceDrift}; thao tác đã tự hủy`,
           409,
         );
       }

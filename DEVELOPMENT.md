@@ -135,10 +135,23 @@ cd app && python3 cli.py info /đường/dẫn/ban-ve.dwg
 Chạy **tất cả** trước mỗi commit:
 
 ```bash
-cd acad-studio/apps/web && pnpm verify
+cd acad-studio && pnpm verify
 ```
 
+Chạy từ `acad-studio/`, KHÔNG từ `apps/web/`. Bản ở gói web không kiểm daemon,
+và một lỗi kiểu thật đã lọt qua đúng khe đó: thêm một trường tuỳ chọn vào
+`OpenAcadDocument` làm `cadSelection.ts` không biên dịch được, mà `verify` của
+web vẫn xanh. Nay `acad-studio/pnpm verify` chạy `typecheck:daemon` trước rồi
+mới tới `verify` của web.
+
 `verify` chạy lần lượt:
+
+| Lệnh | Kiểm cái gì |
+|------|-------------|
+| `pnpm typecheck:daemon` | `tsc --noEmit` trên gói daemon |
+| `pnpm --filter @acad/daemon test:cad-selection` | Hai pha, chốt độ tươi, chốt không gian Model/Layout |
+
+rồi chuyển sang gói web:
 
 | Lệnh | Kiểm cái gì |
 |------|-------------|
@@ -494,6 +507,117 @@ Chưa có tài liệu đầy đủ. Nguồn đáng tin hiện tại:
 - Định dạng `.cadweb`: `CADWEB-ARCHITECTURE.md`
 - Hợp đồng bridge với plugin: `README.md` §"Shared bridge contract"
 - Kiểu dữ liệu API: `acad-studio/apps/daemon/src/*.ts`
+
+### `/api/acad/docs` — danh sách bản vẽ đang mở
+
+Lời gọi NHẸ, khác hẳn `drawing-info` (350 KB). Đây là nguồn "mới nhất" của màn
+hình `/drawing-info`: hồ sơ chỉ đọc lại khi người dùng bấm, còn danh sách này tự
+nạp theo sự kiện reactor. Mọi phép so "hồ sơ còn khớp bản vẽ không" đều dựa vào
+nó.
+
+Plugin dựng payload trong `writeDocs()` (`objectarx/mepbridge.cpp`); kiểu phía
+daemon là `OpenAcadDocument`, phía web là `AcadDocument` (`lib/daemon/docs.ts`).
+
+| Trường | Ý nghĩa | Thiếu thì sao |
+|---|---|---|
+| `title`, `file` | Tên và đường dẫn. Bản vẽ **chưa lưu** có `file` rỗng | — |
+| `active` | Bản vẽ đang hoạt động. Daemon đòi đúng **một** | UI chặn mọi lệnh ghi |
+| `instance` | Mã phiên của database trong tiến trình AutoCAD | Không so được độ tươi |
+| `revision` | Bộ đếm sửa đổi của database | Không bắt được "đã sửa" |
+| `dbmod` | 1 = chưa lưu, 0 = sạch | **KHÔNG BIẾT**, không phải "đã lưu" |
+| `space` | Không gian hiện hành (Model hoặc tên layout) | Không bắt được đổi tab |
+
+Ba trường cuối là tuỳ chọn vì plugin bản cũ không phát chúng. **Thiếu phải hiểu
+là "không biết", không được suy ra giá trị mặc định** — xem `savedState()` và
+`profileStaleReason()` trong `features/drawing-info/model.ts`.
+
+> `OpenDocument` trong `cadSelection.ts` là `Required<Omit<OpenAcadDocument,
+> "dbmod" | "space">>`. Mọi trường tuỳ chọn thêm vào sau này **phải** được loại
+> ra khỏi `Omit` đó, nếu không nó tự động thành bắt buộc và daemon không biên
+> dịch được.
+
+### Sự kiện reactor (`GET /api/acad/events`, SSE)
+
+Plugin ghi `~/Acad-Bridge/events.jsonl`; daemon tail file đó mỗi 500 ms và đẩy
+qua SSE. Các loại mà `/drawing-info` nghe:
+
+| Sự kiện | Nguồn trong plugin | Vì sao cần |
+|---|---|---|
+| `docOpened` / `docClosed` / `docActivated` | `AcApDocManagerReactor` | Danh sách bản vẽ đổi |
+| `drawingModified` | `commandEnded` + cờ dirty của DB reactor | Revision đã nhảy |
+| `drawingSaved` | `AcRxEventReactor::saveComplete` | KHÔNG đi qua `commandEnded` |
+| `layoutSwitched` | `AcEditorReactor::layoutSwitched` | Bấm tab không qua lệnh nào |
+| `pluginLoaded` | Nạp plugin | Phục hồi sau khi AutoCAD khởi động lại |
+
+> **Kết nối SSE phát lại 15 dòng cuối** mỗi lần mở, kể cả khi tự nối lại giữa
+> phiên. Nơi nào coi một sự kiện là "vừa mới xảy ra" phải khử trùng lặp bằng
+> **cả hai** cách, vì mỗi cách chỉ bịt một nửa:
+>
+> - **Khoá danh tính** `(at, detail)` — bắt bản phát lại rơi đúng giây đang xét,
+>   thứ mà phép so mốc thời gian (chỉ tới giây) không phân biệt được.
+> - **Mốc thời gian** so với lúc bắt đầu thao tác — bắt sự kiện xảy ra trong lúc
+>   SSE đứt, thứ mà khoá danh tính không biết vì trang chưa từng nhận nó.
+>
+> Và daemon gắn `replay: true` cho đúng 15 dòng đó. **Chỉ máy chủ biết khung nào
+> là lịch sử** — phía web không suy ra được, vì dấu thời gian chỉ tới giây nên
+> một dòng cũ phát lại trong cùng giây người dùng bấm trông y hệt tin mới. Nơi
+> nào HUỶ thao tác theo sự kiện phải bỏ qua khung `replay`; nơi nào chỉ nạp lại
+> dữ liệu thì dùng bình thường.
+
+**Quy tắc chung, đã sai bảy lần trong một lượt:** với mọi trường tuỳ chọn của
+plugin, `undefined` (thiếu trường) và `""` (có trường nhưng rỗng) là HAI chuyện
+khác nhau — tương thích ngược và một lần đọc hỏng. Gộp chúng lại là biến lỗi đọc
+thành giấy phép đi qua. Giao thức raw xuống plugin không tự phân biệt được, nên
+phải kèm cờ hiện diện riêng (`spaceKnown`).
+
+### Trạng thái độ tươi của `/drawing-info`
+
+Màn hình này đọc **hai** nguồn ở hai thời điểm khác nhau, và gần như mọi lỗi
+từng gặp ở đây nằm ở khe giữa chúng:
+
+- `useDrawingInfo` — hồ sơ 350 KB, **chỉ** đọc khi mở màn hình và khi bấm "Đọc
+  lại". Lộ ra `readId` (số thứ tự lượt đọc, không lặp) để nơi khác biết hồ sơ
+  trên màn hình đã là của lượt đọc khác.
+- `loadDocs()` — danh sách bản vẽ, tự nạp theo các sự kiện ở bảng trên. Giữ bốn
+  trạng thái tách bạch: `docs` (danh sách gần nhất ĐỌC ĐƯỢC), `docsAlive` (lượt
+  hỏi gần nhất có trả lời không), `docsSettled` (đã hỏi xong lần nào chưa),
+  `docsPending` (có lượt đang bay không). Đọc hỏng thì **giữ** `docs`, chỉ hạ
+  `docsAlive`.
+
+`profileStaleReason(payload, docs)` gộp mọi lý do hồ sơ không dùng được thành
+bốn loại, mỗi loại một lời giải thích riêng: `wrong-drawing`, `closed`,
+`space-changed`, `changed`. `blockNote` trong `page.tsx` gộp tiếp với sức khoẻ
+`/docs` thành **một** lý do chặn dùng chung cho mọi nút ghi.
+
+Chốt CÓ THẨM QUYỀN nằm ở daemon và plugin, không ở giao diện. `DocumentGuard`
+trong `cadSelection.ts` chụp `instance` + `revision` + `space` lúc chuẩn bị và
+so lại ở **ba** mốc, vì mỗi mốc có một quãng thời gian riêng lọt qua được:
+
+| Mốc | Bịt quãng nào |
+|---|---|
+| `snapshotGuard()` | Giữa lượt đọc `/docs` và lượt quét ảnh chụp |
+| Lúc `apply` | Giữa lúc chuẩn bị và lúc người dùng xác nhận |
+| `selection_control.cpp::currentExactDocument()` | Giữa lúc daemon kiểm và lúc AutoCAD chạy lệnh đã xếp hàng |
+
+Cả ba đều bỏ qua khi một vế không biết (plugin bản cũ không phát `space`) — so
+với "không biết" thì mọi thao tác đều bị từ chối.
+
+> **Trường tuỳ chọn phải được giữ lại trong `completeDocument()`.** Hàm đó dựng
+> lại object tài liệu từ phản hồi plugin; quên một trường ở đó làm mọi chốt dùng
+> trường ấy thành **no-op trong im lặng** — không lỗi kiểu, không test đỏ, và
+> nhìn từ ngoài y hệt như đã có bảo vệ. Đã sập đúng một lần với `space`.
+
+Ba lớp dưới đây chỉ để người dùng không phải trả giá bằng một lỗi 409 — chúng
+chạy trên luồng sự kiện SSE, mà luồng đó đứt được.
+
+Thao tác hai pha còn được gác thêm ba lớp, mỗi lớp sinh ra từ một lỗi thật:
+
+1. Thẻ xác nhận đang mở + hồ sơ hoá cũ → huỷ ở máy chủ. **Trừ**
+   `activate-document` (đó là đường phục hồi) và trừ lúc đang `apply`.
+2. `layoutSwitched` → huỷ **đồng bộ** ngay tại sự kiện, không đợi `/docs` về.
+3. Bộ đếm **thế hệ không gian**: ai chuẩn bị thì chụp số trước khi chờ và vứt
+   kết quả nếu nó đã đổi — vì giữa lúc bấm và lúc máy chủ trả lời thì `pending`
+   vẫn là `null` nên hai lớp trên không thấy gì.
 
 Sẽ bổ sung sau khi từng màn hình được migrate và kiểu dữ liệu được gom về
 `lib/daemon/`.

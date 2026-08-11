@@ -66,3 +66,15 @@ next-env.d.ts
 # acad-studio local / export
 acad-studio/.work/
 acad-studio/apps/web/out/
+
+# Kết xuất smoke-test của CadWeb. `HKCU_V1.plist` trong đó là bản chụp registry
+# AutoCAD của người dùng — có họ tên thật, danh sách bản vẽ vừa mở và
+# SUBSCRIPTIONMACID. Không bao giờ được commit.
+cadweb-smoke/
+cadweb-core-smoke/
+cadweb-module-smoke/
+
+# Cache URL của CoreFoundation, do một app React Native nào đó chạy trên máy này
+# đẻ ra ở thư mục làm việc. Không phải mã nguồn, và `Cache.db` có thể chứa nội
+# dung request/response.
+React/

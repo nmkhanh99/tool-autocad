@@ -66,6 +66,14 @@ export const guards: Record<string, Guard> = {
     why: "Revision của bản vẽ trong AutoCAD không còn khớp với lúc app đọc.",
     fix: "Quét lại từ AutoCAD rồi thực hiện lại thao tác.",
   },
+  space_changed: {
+    title: "AutoCAD đã chuyển sang không gian khác",
+    why: "Thao tác được chuẩn bị cho không gian đang mở lúc đó (Model hoặc một "
+      + "layout). Đổi tab giữa chừng làm nó nhắm vào những đối tượng không còn "
+      + "thuộc không gian hiện hành.",
+    fix: "Quay lại đúng tab cũ, hoặc bấm “Đọc lại” rồi chuẩn bị lại cho không "
+      + "gian đang mở.",
+  },
   scope_stale: {
     title: "Phạm vi đã chọn không còn đúng",
     why: "Layer hoặc block dùng làm phạm vi đã đổi trong bản vẽ.",

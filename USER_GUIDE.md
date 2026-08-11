@@ -317,7 +317,8 @@ Ba giới hạn phải biết:
 - **Chỉ có không gian hiện hành.** Daemon quét đúng không gian AutoCAD đang mở
   *lúc đọc*. Một bản vẽ 10.000 đối tượng mà đang ở layout thì danh mục có thể
   chỉ 10 dòng — trông y hệt một bản vẽ trống. Đổi tab Model/Layout trong AutoCAD
-  **không** được app phát hiện; phải tự bấm Đọc lại.
+  thì app **có** phát hiện và hiện cảnh báo "AutoCAD đã chuyển sang không gian
+  X"; bấm Đọc lại để quét không gian mới.
 - **Có thể CHƯA đủ.** Nếu ghi chú nói "danh mục CHƯA đủ" thì lượt quét đã dừng
   giữa chừng, và đối tượng thiếu không hiện ra ở đâu cả.
 - **Tối đa 5.000 handle một lượt** — giới hạn của daemon.

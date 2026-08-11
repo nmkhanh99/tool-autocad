@@ -283,14 +283,14 @@ route, như `blocks.module.css` vừa làm.
   và 24 assert contract chết theo; 5 bất biến còn giá trị chuyển sang màn hình
   mới.
 
-  **Khoảng trống đã biết — đổi tab Model/Layout.** Danh mục đối tượng chỉ quét
-  không gian hiện hành, nên đổi tab trong AutoCAD làm danh mục nói về không gian
-  cũ. Màn hình KHÔNG phát hiện được: `/docs` không mang không gian, và bộ đếm
-  revision không tăng vì đổi tab không sửa đối tượng nào. Guard máy chủ cũng chỉ
-  soi `instance` + `revision`, không soi không gian. Hiện xử lý bằng lời — mọi
-  câu về phạm vi nói "lúc đọc" thay vì "đang mở". Muốn bắt thật thì phải thêm
-  không gian hiện hành vào payload `/docs` của plugin, tức sửa ObjectARX và dựng
-  lại.
+  **Đổi tab Model/Layout — đã bắt được (2026-08-11).** Plugin nay phát `space`
+  trong `/docs` và sự kiện `layoutSwitched`; `profileStaleReason` thêm loại
+  `space-changed`. Guard máy chủ vẫn chỉ soi `instance` + `revision`, không soi
+  không gian — nên đây là chốt chặn ở phía giao diện, không phải ở daemon.
+
+  Ghi lại một giả định đã sai để không lặp lại: tôi từng viết "đổi tab không làm
+  revision tăng". Đo thật thì nó tăng (0 → 121), vì AutoCAD dựng lại viewport.
+  Bài học: đừng suy hành vi bộ đếm từ ý nghĩa của thao tác — đo nó.
 
   **Cách làm cho các panel sau:** rà TỪNG chức năng của panel cũ trước, port cái
   còn thiếu, chạy thật, rồi mới xoá. Lượt này suýt xoá sớm vì tưởng màn hình mới
