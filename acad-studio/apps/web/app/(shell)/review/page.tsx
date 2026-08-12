@@ -50,6 +50,7 @@ import {
   type Severity,
   type StandardsProfile,
 } from "../../../features/standards/model";
+import { RecognizedObjects } from "../../../features/standards/RecognizedObjects";
 
 const SEVERITIES: readonly (Severity | "all")[] = ["all", "error", "warning", "info"];
 
@@ -590,6 +591,16 @@ export default function ReviewPage() {
                 )}
               </div>
             </section>
+
+            {/* Ánh xạ lấy từ hồ sơ ĐANG CHỌN, không phải từ kết quả quét: một
+                quy tắc bắt 0 đối tượng vắng mặt hoàn toàn khỏi `scan.objects`,
+                mà đấy lại là dấu hiệu quy tắc sai rõ nhất.
+
+                Nhưng khi hồ sơ đã đổi sau lượt quét thì đúng danh sách đó lại
+                nói sai — `driftNote` chính là tín hiệu ấy. Băng cảnh báo ở đầu
+                trang chỉ NHẮC; bảng thì vẫn phải thôi bịa. */}
+            <RecognizedObjects scan={scan} mappings={profile?.mappings ?? []}
+              mappingsStale={!!driftNote} />
           </>
         ) : null}
       </div>

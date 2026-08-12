@@ -27,6 +27,7 @@ import {
   unsupportedFixReason,
   LINEAR_FORMATS,
   LINEWEIGHTS,
+  groupObjectsByMapping,
   layerRowErrors,
   mappingRowErrors,
   type Issue,
@@ -49,6 +50,9 @@ const scan = (over: Partial<Scan> = {}): Scan => ({
   profileVersion: 0,
   scannedAt: "",
   issues: [],
+  objects: [],
+  objectsTruncated: false,
+  maxObjects: 2000,
   ...over,
 });
 
@@ -799,4 +803,144 @@ test("giới hạn độ dài chữ lấy đúng từ daemon", () => {
   assert.equal(mappingRowErrors(maps({ kind: " " + "k".repeat(64) + " " }))[0], null);
   assert.equal(mappingRowErrors(maps({ label: "L".repeat(160) + "  " }))[0], null);
   assert.equal(layerRowErrors(layers({ linetype: "x".repeat(255) + " " }))[0], null);
+});
+
+test("gom đối tượng theo ánh xạ — quy tắc bắt 0 KHÔNG được biến mất", () => {
+  /* Đây là vòng phản hồi duy nhất cho câu "ánh xạ của tôi có đúng không": máy
+     chủ không có dry-run, nên cách kiểm duy nhất là lưu → quét → nhìn số đối
+     tượng. Một quy tắc bắt 0 vắng mặt hoàn toàn khỏi `scan.objects`, mà đấy lại
+     là dấu hiệu quy tắc sai rõ nhất — nên phải lấy danh sách ánh xạ từ HỒ SƠ. */
+  const mapping = (id: string, label: string): MappingRule => ({
+    id, sourceId: id, label, kind: "object",
+    layerPatterns: ["X"], blockPatterns: [], textPatterns: [], entityTypes: [],
+    required: false,
+  });
+  const object = (mappingId: string, area?: number): any => ({
+    mappingId, handle: "H" + mappingId, type: "LWPOLYLINE", layer: "A",
+    width: 4800, height: 5200, area, areaUnit: area === undefined ? "" : "m²",
+  });
+
+  const parsed = normalizeScan({
+    scanId: "s1",
+    objects: [object("tuong", 24.96), object("tuong", 7.68), object("phong", 214.8)],
+    evidence: { standardsScan: { objectsTruncated: true, maxObjects: 2000 } },
+  }, "/x.dwg");
+
+  assert.equal(parsed.objects.length, 3);
+  assert.equal(parsed.objects[0].areaUnit, "m²");
+  /* Cờ cắt đọc từ bằng chứng của máy chủ, KHÔNG cộng tay từ các nhóm: máy chủ
+     tính nó trên số đối tượng TRƯỚC bộ lọc diện tích. */
+  assert.equal(parsed.objectsTruncated, true);
+  assert.equal(parsed.maxObjects, 2000);
+  assert.equal(normalizeScan({ scanId: "s2" }, "/x.dwg").objectsTruncated, false);
+
+  const groups = groupObjectsByMapping(parsed.objects, [
+    mapping("tuong", "Tường"), mapping("phong", "Phòng"), mapping("khung", "Khung tên"),
+  ]);
+  assert.deepEqual(groups.map((g) => [g.id, g.count]), [
+    ["tuong", 2], ["phong", 1], ["khung", 0],
+  ]);
+  assert.equal(groups[0].label, "Tường");
+  assert.ok(Math.abs((groups[0].area ?? 0) - 32.64) < 1e-9);
+  assert.equal(groups[0].areaUnit, "m²");
+
+  /* Thứ tự theo HỒ SƠ, và mã chỉ có trong kết quả (hồ sơ đã đổi sau lượt quét)
+     vẫn hiện, xếp sau. */
+  const drifted = groupObjectsByMapping(parsed.objects, [mapping("phong", "Phòng")]);
+  assert.deepEqual(drifted.map((g) => g.id), ["phong", "tuong"]);
+
+  /* Không đối tượng nào ĐO ĐƯỢC diện tích thì tổng là `undefined`, không phải
+     `0` — hiện "0,00 m²" là nói bản vẽ có vùng rỗng, trong khi sự thật là chưa
+     đo được cái nào. */
+  const unmeasured = normalizeScan(
+    { scanId: "s3", objects: [object("tuong"), object("tuong")] }, "/x.dwg",
+  );
+  assert.equal(groupObjectsByMapping(unmeasured.objects, [mapping("tuong", "T")])[0].area, undefined);
+
+  /* `0` cũng là CHƯA ĐO ĐƯỢC, không phải diện tích bằng không — chương trình
+     LISP trả 0 cho thứ nó không đo nổi. Đo trên bản vẽ thật: 8 đối tượng khung
+     tên, cả 8 đều `area: 0, width: 0, height: 0`, và chính bộ máy gọi đó là
+     "chưa đo được kích thước tự động". Cộng chúng lại thành "0,00 m²" là bịa ra
+     tám vùng rỗng ngay tại con số dùng để bóc tách. */
+  const zeroArea = normalizeScan({
+    scanId: "s4",
+    objects: [
+      { mappingId: "khung", handle: "1FC17", type: "INSERT", layer: "0",
+        width: 0, height: 0, area: 0, areaUnit: "m²" },
+      { mappingId: "khung", handle: "1FC18", type: "INSERT", layer: "0",
+        width: 0, height: 0, area: 0, areaUnit: "m²" },
+    ],
+  }, "/x.dwg");
+  const khung = groupObjectsByMapping(zeroArea.objects, [mapping("khung", "Khung tên")])[0];
+  assert.equal(khung.count, 2, "vẫn đếm đủ đối tượng");
+  assert.equal(khung.area, undefined, "nhưng KHÔNG cộng ra 0");
+
+  /* Trộn đo được với chưa đo được thì chỉ cộng phần đo được. */
+  const mixed = normalizeScan({
+    scanId: "s5",
+    objects: [object("tuong", 10), object("tuong", 0), object("tuong", 5)],
+  }, "/x.dwg");
+  assert.equal(groupObjectsByMapping(mixed.objects, [mapping("tuong", "T")])[0].area, 15);
+});
+
+test("ánh xạ bắt 0 chỉ đáng báo động khi BẮT BUỘC", () => {
+  /* Hồ sơ mặc định có hai ánh xạ `required: false` (`living-room`,
+     `section-plane`). Phiên bản đầu của bảng gắn "gần như chắc chắn sai" cho
+     đúng hai dòng hoàn toàn lành — trên chính bản vẽ tôi đem ra làm bằng chứng
+     là bảng chạy đúng. Một ánh xạ tuỳ chọn bắt 0 chỉ có nghĩa là bản vẽ này
+     không có loại đó. */
+  const mapping = (id: string, required: boolean): MappingRule => ({
+    id, sourceId: id, label: id, kind: "object",
+    layerPatterns: ["X"], blockPatterns: [], textPatterns: [], entityTypes: [],
+    required,
+  });
+  const groups = groupObjectsByMapping([], [
+    mapping("bat-buoc", true), mapping("tuy-chon", false),
+  ]);
+  assert.deepEqual(groups.map((g) => [g.id, g.count, g.required]), [
+    ["bat-buoc", 0, true], ["tuy-chon", 0, false],
+  ]);
+
+  /* Mã chỉ có trong kết quả — hồ sơ đã đổi sau lượt quét — thì không biết nó có
+     bắt buộc hay không, nên coi là KHÔNG. Chiều im lặng: báo động sai làm người
+     dùng thôi tin cả bảng. */
+  const drifted = groupObjectsByMapping(
+    [{ mappingId: "la", label: "", kind: "", handle: "h", type: "", layer: "",
+       width: undefined, height: undefined, area: undefined, areaUnit: "" }],
+    [],
+  );
+  assert.equal(drifted[0].required, false);
+});
+
+test("hồ sơ đã đổi sau lượt quét thì KHÔNG dựng dòng bắt 0 từ hồ sơ mới", () => {
+  /* Cùng một khuôn đã ám cả tính năng này: hai nguồn đọc ở hai thời điểm sẽ
+     lệch. Kết quả quét là của hồ sơ phiên bản N; `profile.mappings` đã là N+1.
+     Gom số liệu cũ theo danh sách mới thì một quy tắc VỪA THÊM hiện ra như "bắt
+     0" dù nó chưa từng được quét, và một quy tắc vừa đổi tên dán nhãn mới lên
+     số liệu cũ.
+
+     Giao diện xử lý bằng cách truyền danh sách RỖNG khi lệch. Test này khoá
+     hành vi của `groupObjectsByMapping` ở đúng ca đó: chỉ còn thứ thật sự tìm
+     được, và nhãn lấy từ chính đối tượng — nhãn máy chủ gắn LÚC QUÉT. */
+  const objects = [{
+    mappingId: "tuong", label: "Tường (tên lúc quét)", kind: "object",
+    handle: "h1", type: "LWPOLYLINE", layer: "A",
+    width: 10, height: 10, area: 24.96, areaUnit: "m²",
+  }];
+  const parsed = normalizeScan({ scanId: "s1", objects }, "/x.dwg");
+
+  const stale = groupObjectsByMapping(parsed.objects, []);
+  assert.equal(stale.length, 1, "chỉ còn nhóm THẬT SỰ tìm được");
+  assert.equal(stale[0].label, "Tường (tên lúc quét)", "nhãn lấy từ đối tượng");
+  assert.equal(stale[0].required, false, "không suy 'bắt buộc' từ hồ sơ đã lệch");
+
+  /* Đối chiếu: cùng dữ liệu ấy gom theo hồ sơ MỚI sẽ đẻ thêm một dòng bắt 0 cho
+     quy tắc chưa từng được quét — đúng thứ phải tránh. */
+  const withNew = groupObjectsByMapping(parsed.objects, [{
+    id: "vua-them", sourceId: "", label: "Vừa thêm", kind: "object",
+    layerPatterns: ["Z"], blockPatterns: [], textPatterns: [], entityTypes: [],
+    required: true,
+  }]);
+  assert.equal(withNew.length, 2);
+  assert.equal(withNew[0].count, 0);
 });

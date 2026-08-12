@@ -517,6 +517,36 @@ export type Scan = {
   profileVersion: number;
   scannedAt: string;
   issues: Issue[];
+  /** Đối tượng các ánh xạ bắt được. Đây là vòng phản hồi DUY NHẤT cho câu "ánh
+   * xạ của tôi có đúng không" — máy chủ không có đường thử một quy tắc chưa
+   * lưu, nên cách kiểm duy nhất là lưu → quét → nhìn số đối tượng. */
+  objects: MappedObject[];
+  /** Danh sách đối tượng đã bị cắt ở `maxObjects` chưa. Đọc từ máy chủ, KHÔNG
+   * cộng tay từ các nhóm: máy chủ tính cờ trên số đối tượng thu được **trước**
+   * bộ lọc diện tích của ánh xạ, còn tổng các nhóm là số **sau** khi lọc. Hai
+   * đại lượng khác nhau, và cộng tay sẽ bỏ sót cờ khi bộ lọc cắt nhiều. */
+  objectsTruncated: boolean;
+  /** Ngưỡng cắt của máy chủ, để nói ra con số thay vì "đã bị cắt". */
+  maxObjects: number;
+};
+
+/** Một đối tượng lượt quét nhận diện được qua ánh xạ. */
+export type MappedObject = {
+  mappingId: string;
+  label: string;
+  kind: string;
+  handle: string;
+  type: string;
+  layer: string;
+  width: number | undefined;
+  height: number | undefined;
+  /** Diện tích ĐÃ QUY ĐỔI theo `areaUnit`, không phải số thô của bản vẽ. */
+  area: number | undefined;
+  /** Đơn vị của `area`. **Không phải lúc nào cũng `m²`**: daemon chỉ quy đổi
+   * được INSUNITS 1/2/4/5/6 (inch, foot, mm, cm, m); mọi giá trị khác — kể cả
+   * `0` (không đơn vị), rất thường gặp ở bản vẽ cũ — giữ số thô và gắn nhãn
+   * `drawing-unit²`. Ghim cứng "m²" là sai với đúng những bản vẽ đó. */
+  areaUnit: string;
 };
 
 /** Chuẩn hoá mức độ. Máy chủ dùng nhiều tên cho cùng một mức, và gộp sai thì
@@ -595,7 +625,90 @@ export function normalizeScan(value: unknown, fallbackTarget: string): Scan {
     profileVersion: num(body.profileVersion) ?? 0,
     scannedAt: str(body.scannedAt),
     issues: (Array.isArray(body.issues) ? body.issues : []).map(normalizeIssue),
+    objects: (Array.isArray(body.objects) ? body.objects : []).map(normalizeMappedObject),
+    /* Cờ cắt đọc từ BẰNG CHỨNG của máy chủ. Cộng tay từ các nhóm cho ra một đại
+       lượng khác — xem chú thích ở `Scan.objectsTruncated`. */
+    objectsTruncated: record(record(body.evidence).standardsScan).objectsTruncated === true,
+    maxObjects: num(record(record(body.evidence).standardsScan).maxObjects) ?? 0,
   };
+}
+
+function normalizeMappedObject(value: unknown): MappedObject {
+  const source = record(value);
+  return {
+    mappingId: str(source.mappingId),
+    label: str(source.label),
+    kind: str(source.kind),
+    handle: str(source.handle),
+    type: str(source.type),
+    layer: str(source.layer),
+    width: num(source.width),
+    height: num(source.height),
+    area: num(source.area),
+    /* Rỗng khi máy chủ không phát — giao diện phải im chứ không được đoán "m²".
+       Đoán sai ở đây là sai gấp một triệu lần với bản vẽ mm. */
+    areaUnit: str(source.areaUnit),
+  };
+}
+
+/** Gom đối tượng theo ánh xạ đã bắt được chúng.
+ *
+ * Câu hỏi người dùng thật sự hỏi không phải "có những đối tượng nào" mà là **"quy
+ * tắc của tôi bắt đúng không"** — nên số đếm mỗi nhóm mới là câu trả lời, danh
+ * sách chi tiết chỉ để kiểm chứng.
+ *
+ * Ánh xạ bắt được **0 đối tượng** vẫn phải có mặt, và đó là lý do hàm này nhận
+ * cả danh sách ánh xạ của hồ sơ chứ không chỉ gom những gì có trong kết quả: một
+ * quy tắc không khớp gì sẽ vắng mặt hoàn toàn khỏi `scan.objects`, mà đấy lại là
+ * dấu hiệu quy tắc sai rõ nhất.
+ */
+export function groupObjectsByMapping(
+  objects: readonly MappedObject[],
+  mappings: readonly MappingRule[],
+): { id: string; label: string; kind: string; count: number; required: boolean;
+     area: number | undefined; areaUnit: string; objects: MappedObject[] }[] {
+  const buckets = new Map<string, MappedObject[]>();
+  for (const object of objects) {
+    const list = buckets.get(object.mappingId);
+    if (list) list.push(object); else buckets.set(object.mappingId, [object]);
+  }
+  /* Ánh xạ của hồ sơ trước — giữ đúng thứ tự người dùng thấy ở màn Hồ sơ — rồi
+     mới tới những mã chỉ xuất hiện trong kết quả (hồ sơ đã đổi sau lượt quét). */
+  const ids = [
+    ...mappings.map((mapping) => mapping.id),
+    ...[...buckets.keys()].filter((id) => !mappings.some((m) => m.id === id)),
+  ];
+  return ids.map((id) => {
+    const list = buckets.get(id) ?? [];
+    const mapping = mappings.find((item) => item.id === id);
+    /* "Đo được" nghĩa là diện tích DƯƠNG, không phải "có trường area".
+       Chương trình LISP trả `0` cho những gì nó không đo được — một INSERT
+       khung tên chẳng hạn — và chính bộ máy gọi đó là "chưa đo được kích thước
+       tự động" (`frame-unmeasurable`), chứ không phải diện tích bằng không.
+       Đo trên máy thật: 8 đối tượng khung tên, cả 8 đều `area: 0, width: 0,
+       height: 0`. Cộng chúng lại rồi hiện "0,00 m²" là nói bản vẽ có tám vùng
+       rỗng. */
+    const measured = list.filter((item) => item.area !== undefined && item.area > 0);
+    return {
+      id,
+      label: mapping?.label || list[0]?.label || id,
+      kind: mapping?.kind || list[0]?.kind || "",
+      count: list.length,
+      /* Ánh xạ TUỲ CHỌN bắt 0 đối tượng là chuyện bình thường — bản vẽ này chỉ
+         không có loại đó. Chỉ ánh xạ BẮT BUỘC mới đáng báo động. Mã chỉ có
+         trong kết quả (hồ sơ đã đổi sau lượt quét) thì không biết, coi là không
+         bắt buộc — chiều im lặng. */
+      required: mapping?.required === true,
+      /* `undefined` khi KHÔNG đối tượng nào đo được diện tích — khác hẳn `0`.
+         Cộng ra 0 rồi hiện "0,00 m²" là nói bản vẽ có vùng rỗng, trong khi sự
+         thật là chưa đo được cái nào. */
+      area: measured.length
+        ? measured.reduce((sum, item) => sum + (item.area ?? 0), 0)
+        : undefined,
+      areaUnit: measured[0]?.areaUnit ?? "",
+      objects: list,
+    };
+  });
 }
 
 /** Đếm theo mức độ, cho thanh lọc. */

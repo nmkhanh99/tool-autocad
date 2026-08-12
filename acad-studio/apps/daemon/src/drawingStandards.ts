@@ -903,7 +903,16 @@ export function drawingStandardsRouter(
           },
         },
         issues,
-        objects: parsed.objects,
+        /* Gửi bản ĐÃ QUY ĐỔI, đúng bản đã lưu vào phiên — không phải
+           `parsed.objects` thô.
+           `parsed.objects.area` tính theo đơn vị bản vẽ, nên với bản vẽ mm một
+           phòng 20 m² ra `20000000`. Giao diện không có cách nào biết điều đó
+           từ payload: không có trường đơn vị nào đi kèm. Bản của `displayObjects`
+           mang thêm `areaUnit` — và `areaUnit` KHÔNG phải lúc nào cũng `m²`:
+           `metersPerUnit()` chỉ nhận INSUNITS 1/2/4/5/6, mọi giá trị khác (kể cả
+           0 — không đơn vị, rất thường gặp ở bản vẽ cũ) giữ số thô và gắn nhãn
+           `drawing-unit²`. */
+        objects: session.objects,
         dimensions: parsed.dimensions,
       });
     } catch (error) {

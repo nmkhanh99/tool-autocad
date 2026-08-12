@@ -1,5 +1,108 @@
 # CHANGELOG
 
+## 2026-08-12 — Bảng đối tượng đã nhận diện (mục 2.1)
+
+### Added — `/review` hiện đối tượng các ánh xạ bắt được
+
+Máy chủ **đã trả** dữ liệu này trong kết quả quét từ trước; `/review` nhận rồi
+vứt. Hệ quả: câu app khuyên ở màn Hồ sơ — *"lưu, rồi quét ở màn Kiểm tra và đối
+chiếu số đối tượng"* — không làm theo được. Đây là vòng phản hồi **duy nhất** cho
+câu "ánh xạ của tôi có đúng không", vì bảy route của `drawingStandards.ts` không
+có dry-run nào.
+
+Gộp theo ánh xạ, không phải danh sách phẳng: câu hỏi thật là *"quy tắc Phòng
+khách bắt được bao nhiêu cái"*, nên số đếm mỗi nhóm là câu trả lời còn danh sách
+chi tiết thì gập lại. Ánh xạ bắt **0 đối tượng** vẫn nằm nguyên trong bảng và
+được tô đậm — nó vắng mặt hoàn toàn khỏi `scan.objects`, mà đấy lại là dấu hiệu
+quy tắc sai rõ nhất. Vì vậy `groupObjectsByMapping()` lấy danh sách ánh xạ từ
+**hồ sơ**, không phải từ kết quả quét.
+
+### Fixed — phản hồi `/scan` gửi diện tích thô, không kèm đơn vị
+
+`displayObjects()` chỉ được áp cho bản lưu phiên; phản hồi gửi `parsed.objects`.
+Với bản vẽ mm, một phòng 20 m² ra `20000000` — và giao diện không có cách nào
+biết vì payload không mang trường đơn vị nào. Nay gửi đúng bản đã lưu vào phiên.
+
+`areaUnit` **không phải lúc nào cũng `m²`**: `metersPerUnit()` chỉ nhận INSUNITS
+1/2/4/5/6 (inch, foot, mm, cm, m); mọi giá trị khác — kể cả `0` là "không đơn
+vị", rất thường gặp ở bản vẽ cũ — giữ số thô và được gắn nhãn `drawing-unit²`.
+Giao diện hiện đơn vị máy chủ trả về chứ không ghim một chữ.
+
+### Fixed — `0` là "chưa đo được", không phải "diện tích bằng không"
+
+Đo trên bản vẽ thật lộ ra: 8 đối tượng khung tên, cả 8 đều `area: 0, width: 0,
+height: 0`. Chính bộ máy gọi đó là *"chưa đo được kích thước tự động"*
+(`frame-unmeasurable`). Chốt của tôi kiểm `!== undefined` nên lọt, và bảng sẽ
+hiện "0,00 m²" — bịa ra tám vùng rỗng ngay tại con số dùng để bóc tách. Nay
+"đo được" nghĩa là **dương**, cho cả diện tích lẫn rộng/cao.
+
+### Changed — hai chỗ cố ý khác bộ mẫu
+
+- **Cờ cắt đọc từ `evidence.standardsScan.objectsTruncated`**, không cộng tay từ
+  các nhóm: máy chủ tính nó trên số đối tượng **trước** bộ lọc diện tích, còn
+  tổng các nhóm là số **sau** khi lọc. Cộng tay sẽ bỏ sót cờ khi bộ lọc cắt nhiều.
+- **Câu banner.** Bộ mẫu khuyên "quét lại trên phạm vi hẹp hơn"; `/scan` chỉ nhận
+  `target` + `profileId` + `readOnly`, không có tham số phạm vi. Đường thật là thu
+  hẹp mẫu nhận diện ở màn Hồ sơ — đã ghi đúng như vậy.
+
+### Fixed — Codex review: "bắt 0" không phải lúc nào cũng là lỗi
+
+Phiên bản đầu coi **mọi** ánh xạ bắt 0 đối tượng là "gần như chắc chắn sai". Sai
+theo hai đường, và cả hai đều biến bảng thành máy báo động giả:
+
+- **Ánh xạ tuỳ chọn** (`required: false`) bắt 0 là chuyện bình thường — bản vẽ
+  này chỉ không có loại đó. Hồ sơ mặc định có đúng hai ánh xạ như vậy
+  (`living-room`, `section-plane`), nên bảng đã gắn cảnh báo cho đúng hai dòng
+  hoàn toàn lành — **trên chính bản vẽ tôi đem ra làm bằng chứng là nó chạy
+  đúng**.
+- **Danh sách bị cắt** thì `0` nghĩa là *chưa quét tới*, không phải *không khớp
+  gì*. `acadstd:scan` chia một ngân sách 2.000 mục **dùng chung** cho mọi ánh xạ
+  và tiêu theo đúng thứ tự hồ sơ:
+  `(if (< count maxItems) (scan-map … (- maxItems count)))`. Ánh xạ đầu ăn hết
+  ngân sách là những ánh xạ sau **không bao giờ được chạy**.
+
+Nay chỉ báo động khi ánh xạ **bắt buộc** và lượt quét **không bị cắt**; hai
+trường hợp còn lại có ghi chú trung tính nói đúng điều đang biết.
+
+### Fixed — Codex review vòng hai: gom số liệu cũ theo hồ sơ mới
+
+Cùng một khuôn đã ám cả tính năng này: **hai nguồn đọc ở hai thời điểm thì sẽ
+lệch**. Kết quả quét là của hồ sơ phiên bản N, còn `profile.mappings` đã là N+1
+sau khi người dùng sửa hồ sơ. Gom số liệu cũ theo danh sách mới cho ra hai lời
+nói dối: một quy tắc **vừa thêm** hiện ra như "bắt 0" dù nó chưa từng được quét,
+và một quy tắc **vừa đổi tên** dán nhãn mới lên số liệu cũ.
+
+Băng cảnh báo lệch phiên bản ở đầu trang chỉ *nhắc*; bảng thì vẫn bịa. Nay khi
+lệch, bảng chỉ hiện thứ lượt quét **thật sự tìm được** — nhãn lấy từ chính đối
+tượng, tức nhãn máy chủ gắn lúc quét — và nói rõ vì sao thiếu dòng bắt 0.
+
+### Fixed — Codex review vòng ba: bản vá vừa rồi đẻ ra một lời nói dối khác
+
+Nhánh "bảng rỗng" nói *"Hồ sơ này chưa có ánh xạ nào"*. Nhưng bản vá lệch phiên
+bản ở trên **cố ý** truyền danh sách ánh xạ rỗng khi lệch, nên một lượt quét
+không tìm được gì sẽ rơi đúng vào nhánh ấy — rồi báo hồ sơ không có ánh xạ nào,
+trong khi nó có đủ. Nay hai nguyên nhân có hai câu riêng.
+
+### Technical
+
+- `features/standards/RecognizedObjects.tsx` (mới), `groupObjectsByMapping()` và
+  `normalizeMappedObject()` trong `model.ts`, một dòng ở
+  `drawingStandards.ts`.
+- 1 test mới (23 test cho module này), dùng đúng hình dạng dữ liệu đo được trên
+  máy thật. `pnpm verify` 164 test, exit 0.
+- **Đã kiểm trên AutoCAD 2027 thật.** Quét bản vẽ đang mở: `Khung vẽ` 8 đối
+  tượng với diện tích **"—"** (không phải "0,00 m²"), `Phòng khách` và `Mặt phẳng
+  cắt` mỗi cái 0 đối tượng, in đậm kèm câu "gần như chắc chắn sai" và không có
+  nút bung. Bung `Khung vẽ` ra: 8 hàng `INSERT` trên layer `0`, rộng/cao/diện
+  tích đều "—". Khớp chính xác payload đo bằng curl.
+
+  Ảnh chụp màn hình từng lỗi `params.clip.scale` và `read_page` trả viewport
+  0×0 — hoá ra **không phải extension hỏng** mà là cửa sổ Chrome có chiều cao 0.
+  Đặt lại kích thước cửa sổ là chạy bình thường. Ghi lại để lần sau không kết
+  luận vội là công cụ hỏng.
+
+---
+
 ## 2026-08-12 — Rà soát panel cũ trước khi xoá: 13 khoảng trống, 3 đã đóng
 
 ### Added — hai trường hồ sơ từng vô hình ở màn mới

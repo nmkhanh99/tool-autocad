@@ -365,17 +365,23 @@ route, như `blocks.module.css` vừa làm.
 
   | # | Việc | Vì sao ở vị trí này |
   |---|---|---|
-  | 1 | **2.1** Bảng đối tượng đã nhận diện | Vá một lời khuyên app đang đưa ra mà không thực hiện được; dữ liệu máy chủ đã trả sẵn, `/review` đang vứt đi |
+  | ~~1~~ | **2.1** Bảng đối tượng đã nhận diện — **XONG 2026-08-12** | `features/standards/RecognizedObjects.tsx`. Bẫy đơn vị đã bịt (daemon gửi bản quy đổi, giao diện hiện `areaUnit` chứ không ghim `m²`). Bản vẽ thật dạy thêm: `area: 0` là *chưa đo được*, không phải diện tích bằng không |
   | 2 | **1.1** Nhập layer từ bản vẽ | Đối chiếu chứ không thay sạch; nhớ quy đổi bề dày DXF→mm |
   | 3 | **2.2** Chọn + zoom đối tượng trong AutoCAD | Cây cầu duy nhất từ danh sách phát hiện sang bản vẽ |
   | 4 | **1.2** Sửa `bounds` bằng hai nhóm ô có nhãn, KHÔNG phải ô JSON | Xem bảng ba nghĩa của `bounds` ở trên |
   | 5 | **2.3** Bảng dimension + DIMSPACE | Mở khoá hành động thứ 5/5; hẹp hơn bốn mục trên |
 
-  **Bẫy đã phát hiện trước khi bắt tay vào 2.1:** phản hồi của `POST /scan` gửi
+  **Bẫy đơn vị đã bịt khi làm 2.1.** Phản hồi `POST /scan` từng gửi
   `parsed.objects` **thô** — diện tích theo đơn vị bản vẽ, không kèm `areaUnit` —
-  trong khi bản lưu phiên dùng `displayObjects()` đã quy đổi sang m². Với bản vẽ
-  mm, một phòng 20 m² ra `20000000`. Cách gọn nhất là cho daemon gửi luôn bản đã
-  quy đổi; nó đã tính sẵn cho phiên rồi.
+  trong khi bản lưu phiên dùng `displayObjects()` đã quy đổi. Nay gửi đúng bản đã
+  lưu vào phiên. Lưu ý còn giá trị: `areaUnit` **không phải lúc nào cũng `m²`**,
+  vì `metersPerUnit()` chỉ nhận INSUNITS 1/2/4/5/6; INSUNITS 0 (không đơn vị,
+  thường gặp ở bản vẽ cũ) giữ số thô và mang nhãn `drawing-unit²`.
+
+  **Và một điều chỉ bản vẽ thật dạy được:** `area: 0` nghĩa là *chưa đo được*,
+  không phải diện tích bằng không — chương trình LISP trả 0 cho thứ nó không đo
+  nổi, và bộ máy gọi đúng đó là `frame-unmeasurable`. Đo được: 8 đối tượng khung
+  tên, cả 8 đều `area/width/height = 0`.
 
   **Bản rà soát trên còn THIẾU — sửa lại 2026-08-12 sau khi đối chiếu
   `KE-HOACH-CHUYEN-DOI-UI.html`.** Tôi rà panel cũ ↔ màn mới, nên mọi yêu cầu
