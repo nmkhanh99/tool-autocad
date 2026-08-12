@@ -81,6 +81,17 @@ static std::string      gHiLayer;   // layer dang duoc highlight (de unhighlight
 static const ACHAR* kGroup = L"ACAD_BRIDGE";
 static const char*  kPluginVersion = "1.6.0";
 static const char*  kReadOnlyJobMarker = ";;; ACAD_BRIDGE_READ_ONLY";
+// Tien to cua chuong trinh job CHI DOC, de `lispWillStart` nhan ra.
+//
+// PHAI nam trong CUNG MOT bieu thuc voi than job.  AutoCAD danh gia moi bieu
+// thuc cap cao thanh mot luot LISP RIENG: dat marker thanh mot `(setq ...)`
+// dung truoc thi no chay va ket thuc trong luot cua chinh no, roi job bat dau o
+// luot sau voi `firstLine` khong con marker.  Da do that.
+//
+// So khop bang TIEN TO chinh xac, khong phai "co chua": mot bieu thuc LISP cua
+// nguoi dung tinh co chua chuoi nay — trong mot comment hay mot string — se bat
+// che do chan, va moi sua that sau do mat `drawingModified`.
+static const char*  kReadOnlyLispPrefix = "(progn (setq acad:ro-job T)";
 static const uint64_t gDocumentNonce =
     (static_cast<uint64_t>(arc4random()) << 32) | arc4random();
 static uint64_t gNextDocumentInstance = 1;
@@ -92,6 +103,15 @@ static std::map<const AcDbDatabase*, uint64_t> gDatabaseRevisions;
 static bool gDirty = false;
 // Dang chay mot job daemon KHAI BAO la chi doc, va tren database nao.
 //
+// Bat/ha theo VONG DOI LISP cua chinh AutoCAD — `lispWillStart` / `lispEnded` /
+// `lispCancelled`.  Truoc day canh tep snapshot bi xoa, va cach do de lai mot
+// khe: tu luc job xong den luc watcher chay, mot sua that bi nuot.  Canh vong
+// doi thi khong con khe nao, va cung khong can han thoi gian doan mo.
+//
+// Chuong trinh TU KHAI BAO bang mot marker o dau chuoi lenh, thay vi plugin
+// doan xem lisp nao la cua minh: nguoi dung co the go mot bieu thuc LISP xen
+// vao giua luc xep hang va luc job chay.
+//
 // VI SAO CHAN LA AN TOAN: job chay tren MAIN THREAD cua AutoCAD.  Trong quang
 // do nguoi dung khong tuong tac duoc — nen khong co "sua that" nao de bo sot.
 // Thu duy nhat bi chan la nhieu cua chinh AutoCAD: `modified:AcDbViewport` khi
@@ -102,16 +122,9 @@ static bool gDirty = false;
 // `drawingModified` gia thi lam `/standards/scan` tu loai bo ket qua cua chinh
 // minh.
 //
-// Ba chi tiet cua vong doi, moi cai sua mot lan da mac:
-//  1. Ha co khi BAN SAO snapshot bien mat, khong phai `job.lsp` — tep do la
-//     duong truyen dung chung, luon con, nen co se khong bao gio ha.
-//  2. Gan voi DUNG database.  Co toan tien trinh nuot luon ban ve khac dang mo.
-//  3. Han 180 giay xet TRONG countable(), khong o watcher: watcher chi chay khi
-//     thu muc bridge doi, nen bridge im lang la co ket vinh vien.
+// Van gan voi DUNG database: mot co toan tien trinh se nuot luon nhung sua that
+// o ban ve khac dang mo.
 static bool gReadOnlyJobRunning = false;
-static std::string gReadOnlyJobSnapshot;
-static time_t gReadOnlyJobStartedAt = 0;
-static const time_t kReadOnlyJobMaxSeconds = 180;
 static const AcDbDatabase* gReadOnlyJobDb = nullptr;
 
 // Revision tai lan luu gan nhat. So sanh voi gDatabaseRevisions cho ra
@@ -3655,7 +3668,10 @@ static void runJob() {
     std::wstring dirW = toWide(gBridgeDir);
     const std::string snapshotPath = snapshotJobFile(gJobPath, jobBytes);
     std::wstring jobW = toWide(snapshotPath);
+    // Marker de `lispWillStart` nhan ra day la job CHI DOC cua daemon.  Dat o
+    // dau chuoi vi callback chi duoc nhan `firstLine`.
     std::wstring cmd =
+        (readOnly ? toWide(std::string(kReadOnlyLispPrefix) + " ") : std::wstring()) +
         L"((lambda (mep:tp mep:tp-changed mep:load-result) "
         L"(if (null mep:tp) (setq mep:tp \"\")) "
         L"(if (and (null (vl-string-search \"Acad-Bridge\" mep:tp)) (null (vl-string-search \"MEP-Bridge\" mep:tp))) "
@@ -3667,16 +3683,9 @@ static void runJob() {
         L"(if (vl-catch-all-error-p mep:load-result) "
         L"(princ (strcat \"\\n[AcadBridge] Job load failed: \" "
         L"(vl-catch-all-error-message mep:load-result)))) (princ)) "
-        L"(getvar \"TRUSTEDPATHS\") nil nil) ";
+        L"(getvar \"TRUSTEDPATHS\") nil nil)"
+        + (readOnly ? std::wstring(L")") : std::wstring()) + L" ";
     // Read-only review executes in the target context without activating its tab.
-    //
-    // Bat TRUOC khi xep hang: `sendStringToExecute` bat dong bo.
-    if (readOnly) {
-        gReadOnlyJobRunning = true;
-        gReadOnlyJobSnapshot = snapshotPath;
-        gReadOnlyJobStartedAt = time(nullptr);
-        gReadOnlyJobDb = pDoc->database();
-    }
     acDocManager->sendStringToExecute(
         pDoc, cmd.c_str(), !readOnly, readOnly, false);
     writeDocs(); // tien the cap nhat trang thai
@@ -3697,23 +3706,6 @@ void mepRawRegisterCommands();
 static void fsCallback(ConstFSEventStreamRef, void*, size_t, void*,
                        const FSEventStreamEventFlags*, const FSEventStreamEventId*) {
     struct stat st;
-    // Job chi doc da xong: chuong trinh tu xoa BAN SAO snapshot o gan cuoi.
-    //
-    // Han thoi gian cung xet o day, khong chi trong `userEdit()`: neu AutoCAD tu
-    // choi hoac danh roi yeu cau xep hang, snapshot khong bao gio bi xoa va co
-    // se cho toi callback database tiep theo moi het han — trong quang do moi
-    // sua that tren database do mat `gDirty`.
-    if (gReadOnlyJobRunning) {
-        const bool gone = gReadOnlyJobSnapshot.empty()
-            || stat(gReadOnlyJobSnapshot.c_str(), &st) != 0;
-        const bool expired =
-            time(nullptr) - gReadOnlyJobStartedAt > kReadOnlyJobMaxSeconds;
-        if (gone || expired) {
-            gReadOnlyJobRunning = false;
-            gReadOnlyJobSnapshot.clear();
-            gReadOnlyJobDb = nullptr;
-        }
-    }
     if (stat(gDrawingInfoReqPath.c_str(), &st) == 0 &&
         tsChanged(st.st_mtimespec, gDrawingInfoReqMtime)) {
         gDrawingInfoReqMtime = st.st_mtimespec;
@@ -4606,9 +4598,36 @@ public:
 private:
     void detachDbReactorIfDoc(AcApDocument* d);
 };
+static bool revisionDebugOn();   // dinh nghia o duoi, canh MepDbReactor
+
 class MepEdReactor : public AcEditorReactor {
 public:
     void commandWillStart(const ACHAR* cmd) override { emitEvent("commandStart", toUtf8(cmd)); }
+
+    // Vong doi LISP: bat/ha co chan co ban cho job chi doc cua daemon.
+    //
+    // Chi nhan job cua CHINH MINH, qua marker chuong trinh tu khai bao — nguoi
+    // dung co the go mot bieu thuc LISP xen vao giua luc xep hang va luc job
+    // chay, va chan nham no la nuot mot thay doi that.
+    void lispWillStart(const ACHAR* firstLine) override {
+        if (revisionDebugOn()) {
+            emitEvent("lispWillStart",
+                      firstLine ? toUtf8(firstLine).substr(0, 120) : std::string("(null)"));
+        }
+        if (!firstLine) return;
+        if (toUtf8(firstLine).rfind(kReadOnlyLispPrefix, 0) != 0) return;
+        gReadOnlyJobRunning = true;
+        // Lay database TAI DAY: luc nay AutoCAD da vao dung document context cua
+        // job, nen no chinh xac hon gia tri chup luc xep hang.
+        AcApDocument* doc = acDocManager ? acDocManager->curDocument() : nullptr;
+        gReadOnlyJobDb = doc ? doc->database() : nullptr;
+    }
+    void lispEnded() override {
+        if (revisionDebugOn()) emitEvent("lispEnded", "");
+        gReadOnlyJobRunning = false;
+        gReadOnlyJobDb = nullptr;
+    }
+    void lispCancelled() override { gReadOnlyJobRunning = false; gReadOnlyJobDb = nullptr; }
     void commandEnded(const ACHAR* cmd) override {
         emitEvent("commandEnded", toUtf8(cmd));
         // Lenh ket thuc + ban ve co thay doi -> bao app (de tu refresh BOM/BOQ live).
@@ -4671,14 +4690,9 @@ public:
      * do la su kien `drawingModified`) moi bi chan.  Xem `gReadOnlyJobRunning`. */
     static bool userEdit(const AcDbDatabase* db, const char* why,
                          const AcDbObject* object) {
-        if (gReadOnlyJobRunning) {
-            if (time(nullptr) - gReadOnlyJobStartedAt > kReadOnlyJobMaxSeconds) {
-                gReadOnlyJobRunning = false;
-                gReadOnlyJobDb = nullptr;
-            } else if (db && db == gReadOnlyJobDb) {
-                noteRevisionBump((std::string("skipped-readonly:") + why).c_str(), object);
-                return false;
-            }
+        if (gReadOnlyJobRunning && db && db == gReadOnlyJobDb) {
+            noteRevisionBump((std::string("skipped-readonly:") + why).c_str(), object);
+            return false;
         }
         noteRevisionBump(why, object);
         return true;

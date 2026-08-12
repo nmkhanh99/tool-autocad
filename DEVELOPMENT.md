@@ -647,9 +647,32 @@ nhích khi một job chỉ đọc quét bản vẽ**. Công cụ chẩn đoán c
 bộ, làm bộ đếm +8 dù chương trình không sửa gì.
 
 **Không sửa bằng cách chặn bộ đếm.** Đã thử ba biến thể của ý tưởng đó và cả ba
-đều hỏng; biến thể cuối cùng hỏng ở chỗ nguyên tắc: chặn bộ đếm trong lúc job
-chạy cũng chặn luôn **sửa thật của người dùng** trong quãng đó — đúng thứ chốt
-sinh ra để bắt.
+đều hỏng; biến thể cuối cùng hỏng ở chỗ nguyên tắc: bộ đếm phục vụ nhiều chốt
+khác, không nên bị can thiệp vì một endpoint.
+
+Thứ được chặn là **cờ bẩn** (và qua đó là sự kiện `drawingModified`), chỉ trong
+lúc một job chỉ đọc chạy, chỉ trên đúng database của nó. An toàn theo nghĩa
+chặt: job giữ main thread của AutoCAD nên trong quãng đó người dùng không tương
+tác được — không có "sửa thật" nào để bỏ sót.
+
+Cờ đó bám **vòng đời LISP của chính AutoCAD** — `AcEditorReactor::lispWillStart`
+/ `lispEnded` / `lispCancelled` — chứ không suy ra từ tệp, từ thời gian, hay từ
+"đang trong lệnh hay không". Đã thử cả ba cách suy đó và hỏng cả ba; cách canh
+tệp còn để lại một khe giữa lúc job xong và lúc watcher chạy.
+
+Chương trình **tự khai báo** bằng marker `(progn (setq acad:ro-job T) …)`. Plugin
+không đoán biểu thức LISP nào là của mình: người dùng gõ một biểu thức xen vào
+giữa lúc xếp hàng và lúc job chạy là chuyện có thật, và chặn nhầm nó là nuốt một
+thay đổi thật. Khớp bằng **tiền tố chính xác** chứ không phải "có chứa".
+
+> **AutoCAD đánh giá mỗi biểu thức cấp cao thành một lượt LISP RIÊNG.** Marker
+> đặt thành một `(setq …)` đứng trước thân job sẽ chạy và kết thúc trong lượt
+> của chính nó — `lispWillStart` của thân job không còn thấy nó. Bất cứ thứ gì
+> cần đi cùng một lượt LISP phải nằm trong **cùng một biểu thức**.
+
+> Cờ này kẹt ở trạng thái bật nghĩa là **mọi chốt độ tươi của app đóng băng
+> trong im lặng**. Đó là lý do nó phải bám một vòng đời có `end` VÀ `cancel`,
+> chứ không bám một tín hiệu gián tiếp.
 
 > **Bộ đếm revision và thao tác của người dùng là hai chuyện khác nhau.** Chỗ
 > nào cần biết "người dùng có sửa không", đừng so bộ đếm — dùng

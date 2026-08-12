@@ -107,21 +107,41 @@ nay nằm trong `pnpm verify`.
   sang đối tượng khác. Nay so `instance` giữa hai lượt chụp, cùng cách phía web
   đang làm.
 
-### Known — một khe hẹp được ghi nhận, không sửa
+### Fixed — bịt khe hẹp của cờ chặn cờ bẩn
 
-Cờ chặn cờ bẩn được hạ khi bản sao snapshot biến mất, mà việc đó do watcher phát
-hiện. Giữa lúc job xong và lúc watcher chạy có một khe — người dùng sửa đúng
-trong khe đó thì mất `drawingModified`.
+Cờ từng được hạ khi **watcher** thấy bản sao snapshot biến mất. Giữa lúc job
+xong và lúc watcher chạy có một khe, và sửa đúng trong khe đó thì mất
+`drawingModified`. Còn nếu job không bao giờ được xếp hàng thì cờ treo tới hết
+hạn 180 giây.
 
-Không sửa tiếp, và cân nhắc như sau: khe đó tính bằng mili-giây (job ghi tệp kết
-quả vào chính thư mục watcher đang canh, nên callback tới gần như tức thì);
-**bộ đếm revision KHÔNG bị chặn**, nên mọi chốt dựa vào nó — kể cả chốt của
-`/apply` — vẫn bắt được; và lượt quét đã kết thúc tại thời điểm đó, nên chốt độ
-tươi của nó không còn liên quan.
+Cả hai đều là triệu chứng của cùng một sai lầm: **suy ra vòng đời từ một tệp**.
+ObjectARX có sẵn vòng đời thật — `AcEditorReactor::lispWillStart` /
+`lispEnded` / `lispCancelled`. Nay cờ bật/hạ theo đúng ba callback đó. Không còn
+khe, không còn hạn thời gian đoán mò, không còn canh tệp.
 
-Đổi lại, cách bịt hẳn là buộc cờ vào vòng đời lệnh của AutoCAD — thứ tôi đã thử
-và **hỏng bốn lần liên tiếp** trong chính lượt này, lần nào cũng đẻ ra một lỗi
-nặng hơn lỗi nó sửa. Dừng ở đây là lựa chọn có ý thức.
+Ba chi tiết đáng ghi:
+
+- **Chương trình TỰ KHAI BÁO** bằng marker `(progn (setq acad:ro-job T) …)`,
+  thay vì plugin đoán xem biểu thức LISP nào là của mình. Người dùng có thể gõ
+  một biểu thức xen vào giữa lúc xếp hàng và lúc job chạy — chặn nhầm nó là nuốt
+  một thay đổi thật. Khớp bằng **tiền tố chính xác**, không phải "có chứa": một
+  biểu thức của người dùng tình cờ chứa chuỗi đó, trong comment hay trong string,
+  cũng sẽ bật chế độ chặn.
+- **Marker phải nằm trong CÙNG MỘT biểu thức với thân job.** AutoCAD đánh giá
+  mỗi biểu thức cấp cao thành **một lượt LISP riêng**: bản đầu đặt marker thành
+  một `(setq …)` đứng trước, và nó chạy xong rồi kết thúc trong lượt của chính
+  nó — job bắt đầu ở lượt sau với `firstLine` không còn marker, nên cờ không bao
+  giờ bật. Đo thấy qua log: `lispEnded` rồi mới tới `lispWillStart` của thân job.
+  Nay gói cả hai trong một `(progn …)`.
+- **Database lấy tại `lispWillStart`**, không phải lúc xếp hàng: tại thời điểm
+  đó AutoCAD đã vào đúng document context của job.
+
+Đây là lần thứ năm tôi động vào cơ chế này trong một lượt, và là lần đầu tiên
+không phải đoán: bốn lần trước đều suy vòng đời từ tệp, từ thời gian, hoặc từ
+"đang trong lệnh hay không". Kiểm chứng cuối trên máy thật, plugin đã nạp: quét
+sạch → **thành công, 15 phát hiện, 8 nhiễu bị chặn khỏi cờ bẩn**; bơm một
+`drawingModified` vào giữa lượt quét → **`drawing_stale`, từ chối đúng**; bộ đếm
+revision vẫn nhảy 0 → 8, đúng thiết kế.
 
 ### Added — công cụ chẩn đoán bộ đếm revision
 
