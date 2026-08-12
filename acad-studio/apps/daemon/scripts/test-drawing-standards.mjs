@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { appendFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 process.env.ACAD_PROJECT_ROOT = resolve(here, "../../../..");
+/* Thư mục bridge RIÊNG cho test: chốt độ tươi mới đọc `events.jsonl` thật, và
+   test không được ghi vào nhật ký của AutoCAD đang chạy trên máy người dùng. */
+const bridgeDir = mkdtempSync(join(tmpdir(), "acad-standards-test-"));
+process.env.ACAD_BRIDGE_DIR = bridgeDir;
 
 const {
   buildStandardsAction,
@@ -272,16 +277,32 @@ assert.equal(
 );
 assert.equal(rejectedDispatches, 0);
 
-let staleSnapshotIndex = 0;
-const staleSnapshots = [snapshot(7), snapshot(8)];
+/* Bản vẽ bị sửa TRONG LÚC quét → từ chối kết quả.
+ *
+ * Chốt này từng so bộ đếm revision trước/sau lượt quét, và nó SAI: chính lượt
+ * quét làm bộ đếm nhảy (AutoCAD dựng lại viewport khi `ssget "_X"` quét toàn
+ * bộ — đo thật 16 → 24), nên endpoint tự loại bỏ kết quả của mình, lần nào cũng
+ * vậy.
+ *
+ * Nay chốt đọc sự kiện `drawingModified`, thứ chỉ bắn khi một LỆNH kết thúc và
+ * bản vẽ bẩn — tức người dùng thật sự sửa. Đọc bản vẽ không kết thúc lệnh nào.
+ */
+const eventsFile = join(bridgeDir, "events.jsonl");
+writeFileSync(eventsFile, "");
 const staleResult = await invokeRoute(
   drawingStandardsRouter({
     ...baseDependencies,
-    requestDrawingInfo: async () =>
-      staleSnapshots[Math.min(staleSnapshotIndex++, staleSnapshots.length - 1)],
+    requestDrawingInfo: async () => snapshot(7),
     dispatchLiveJob: async (lisp, _target, _wait, options) => {
       assert.equal(options?.readOnly, true);
       writeScanResult(lisp);
+      // Người dùng sửa bản vẽ ngay giữa lượt quét.
+      appendFileSync(eventsFile, JSON.stringify({
+        t: Math.floor(Date.now() / 1000),
+        type: "drawingModified",
+        detail: "",
+        activeDoc: activeDocument.title,
+      }) + "\n");
       return { state: "done", result: { status: "ok" } };
     },
   }),
@@ -292,8 +313,44 @@ const staleResult = await invokeRoute(
     readOnly: true,
   },
 );
-assert.equal(staleResult.status, 409);
+assert.equal(staleResult.status, 409, JSON.stringify(staleResult.payload));
 assert.equal(staleResult.payload.code, "drawing_stale");
+
+/* Và một lượt quét SẠCH phải đi qua. Không có test này thì một chốt "luôn từ
+   chối" cũng làm test trên xanh — đúng lỗi vừa sửa. */
+const cleanResult = await invokeRoute(
+  drawingStandardsRouter({
+    ...baseDependencies,
+    /* Revision NHẢY giữa hai lượt đọc — đúng như AutoCAD làm khi dựng lại
+       viewport. Lượt quét sạch vẫn phải đi qua: đó là cả điểm của việc bỏ phép
+       so bộ đếm. */
+    requestDrawingInfo: (() => {
+      let index = 0;
+      const snaps = [snapshot(11), snapshot(19)];
+      return async () => snaps[Math.min(index++, snaps.length - 1)];
+    })(),
+    dispatchLiveJob: async (lisp, _target, _wait, options) => {
+      assert.equal(options?.readOnly, true);
+      writeScanResult(lisp);
+      // Chỉ nhiễu của AutoCAD, không phải lệnh nào kết thúc.
+      appendFileSync(eventsFile, JSON.stringify({
+        t: Math.floor(Date.now() / 1000),
+        type: "commandStart",
+        detail: "ZOOM",
+        activeDoc: activeDocument.title,
+      }) + "\n");
+      return { state: "done", result: { status: "ok" } };
+    },
+  }),
+  "/scan",
+  {
+    target: activeDocument.file,
+    profileId: DEFAULT_PROFILE.id,
+    readOnly: true,
+  },
+);
+assert.equal(cleanResult.status, 200, JSON.stringify(cleanResult.payload));
+assert.equal(cleanResult.payload.ok, true);
 
 let incompleteSnapshotIndex = 0;
 const incompleteSnapshots = [
@@ -335,10 +392,12 @@ const routerSource = readFileSync(
 assert.match(routerSource, /snapshotDocument\.quiescent !== true/);
 assert.match(routerSource, /drawing_revision_unavailable/);
 assert.match(routerSource, /reviewOnly/);
-assert.match(
-  routerSource,
-  /verifiedDrawingRevision !== expectedDrawingRevision/,
-);
+/* Chốt độ tươi phải đọc SỰ KIỆN, không so bộ đếm revision. Khoá bằng mã nguồn
+   vì đây là thứ dễ "sửa lại cho gọn" nhất: so hai con số trông hợp lý hơn hẳn
+   đọc một nhật ký — mà nó sai, và sai theo kiểu endpoint luôn tự loại bỏ kết
+   quả của chính mình. */
+assert.match(routerSource, /drawingChangedSince\(eventMark/);
+assert.doesNotMatch(routerSource, /verifiedDrawingRevision !== expectedDrawingRevision/);
 assert.match(routerSource, /completeness:\s*\{/);
 
 console.log("✓ drawing standards router: typed actions and routes");

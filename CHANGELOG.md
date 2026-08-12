@@ -1,5 +1,139 @@
 # CHANGELOG
 
+## 2026-08-12 — Bộ đếm phiên bản hồ sơ, và truy tiếp lỗi revision
+
+### Added — hồ sơ quy tắc có số phiên bản đọc được
+
+`revision` là hash nội dung: chính xác cho việc so sánh, nhưng `f304e8e7` không
+nói gì với ai. Nay mỗi hồ sơ có thêm `version` — một bộ đếm tăng 1 **mỗi lần nội
+dung thật sự đổi**.
+
+Hai thứ, hai việc, giữ cả hai:
+
+| | Dùng để | Lưu nội dung y hệt |
+|---|---|---|
+| `revision` (hash) | `If-Match`, chốt lượt quét | **không đổi** → lượt quét vẫn sống |
+| `version` (số đếm) | hiển thị cho người | **không tăng** |
+
+Đã đo cả ba nhánh trên máy thật: lưu y hệt → vẫn `1`; đổi tỷ lệ model → `2`;
+hoàn nguyên → `3` nhưng **hash quay về đúng giá trị ban đầu**. Bộ đếm đếm số lần
+sửa, hash định danh nội dung — cố ý không thay thế nhau.
+
+`version` nằm NGOÀI phép tính hash (đưa vào là tự tham chiếu), và
+`sanitizeProfile` không tự quyết nó: chỉ `upsertProfile` mới biết bản trước đó
+là gì để so. Hồ sơ **mới** luôn bắt đầu từ 1 kể cả khi chép từ một bản đang ở
+v7 — thừa kế số của nguồn làm lần sửa đầu tiên thành v8, một lịch sử không có
+thật.
+
+### Fixed — lượt quét tự phá kết quả: sửa đúng chỗ, sau ba lần sai chỗ
+
+Bản vá hôm qua (miễn `FILEDIA`/`CMDDIA`) có tác dụng nhưng chưa đủ: vẫn +8 mỗi
+lượt quét. Khoanh vùng bằng cách thử từng lời gọi — `drawing-info` → 0, job LISP
+tối thiểu → 0, lượt quét tiêu chuẩn → **+8**. Công cụ chẩn đoán chỉ đích danh:
+**`modified:AcDbViewport`**. AutoCAD tự dựng lại viewport khi chương trình
+`ssget "_X"` quét toàn bộ bản vẽ. Không một `setvar`/`entmod`/`command` nào
+trong đường quét.
+
+**Tôi đã sửa sai chỗ ba lần trước khi sửa đúng.** Cả ba đều chặn nhầm thứ — chặn
+**bộ đếm revision** thay vì chặn cờ bẩn:
+
+1. Canh tệp `job.lsp` biến mất. Sai: chương trình xoá **bản sao snapshot**, còn
+   `job.lsp` là đường truyền dùng chung nên luôn còn. Cờ **không bao giờ hạ**,
+   và mọi chốt độ tươi của app đóng băng trong im lặng.
+2. Cờ toàn tiến trình. Sai: nó nuốt luôn những sửa thật ở **bản vẽ khác** đang
+   mở.
+3. Gắn cờ với đúng database. Đúng hơn, nhưng vẫn chặn nhầm đối tượng: bộ đếm
+   revision phục vụ nhiều chốt khác, không nên bị can thiệp vì một endpoint.
+
+Cơ chế đúng có hai nửa. Nửa ở plugin: chặn **cờ bẩn** (và qua đó là sự kiện
+`drawingModified`) trong lúc job chỉ đọc chạy — an toàn vì job giữ main thread
+nên người dùng không sửa được gì trong quãng đó. Nửa ở daemon: Bộ đếm revision và thao tác của người dùng là
+hai chuyện khác nhau, và plugin đã có sẵn tín hiệu phân biệt: **`drawingModified`
+chỉ bắn khi một LỆNH kết thúc và bản vẽ bẩn**. Đọc bản vẽ không kết thúc lệnh
+nào. Nên `/standards/scan` nay ghi một mốc trong nhật ký sự kiện trước khi chạy,
+và sau đó hỏi "có `drawingModified` nào mới không" thay vì so bộ đếm. Cơ chế
+chặn ở plugin đã **gỡ bỏ hoàn toàn**.
+
+Mốc `drawingRevision` mà phiên quét lưu lại cũng đổi sang giá trị **sau** lượt
+quét: chính lượt quét làm bộ đếm nhảy, nên lưu giá trị trước là bảo đảm
+`/apply` luôn 409.
+
+Đã kiểm đủ ba vế trên máy thật, với plugin cuối cùng đã nạp:
+
+- Lượt quét sạch → **thành công, 15 phát hiện**.
+- Bơm một `drawingModified` vào giữa lượt quét → **`drawing_stale`, từ chối
+  đúng**.
+- Bộ đếm revision **vẫn nhảy 0 → 8** trong lượt quét sạch — đúng như thiết kế:
+  8 tín hiệu nhiễu bị chặn khỏi *cờ bẩn*, còn bộ đếm thì không bị can thiệp, vì
+  nó phục vụ những chốt khác.
+
+Nhân đó biết thêm một con số hữu ích: lượt quét chỉ mất **1 giây**.
+
+Bản vá của chốt mới lại đẻ ra bốn lỗi nữa, và ba trong số đó là P1:
+
+- **Cắt nhật ký theo KÝ TỰ thay vì BYTE.** `statSync().size` đếm byte,
+  `String.slice` đếm ký tự — nhật ký có tên bản vẽ tiếng Việt nên hai thang lệch
+  nhau, và phần cắt ra bắt đầu giữa một dòng JSON. Dòng hỏng = không nhận ra
+  `drawingModified` = nhận một lượt quét đã cũ.
+- **Mốc đặt sau lượt đọc ảnh chụp đầu tiên.** Sửa đổi xảy ra giữa hai mốc đó
+  nằm TRƯỚC mốc và bị bỏ qua, nên `auditStandards()` chấm điểm ảnh chụp trước
+  khi sửa còn phiên quét lưu revision sau khi sửa.
+- **Chính lượt quét sinh ra `drawingModified`.** Sau khi gỡ cờ chặn, nhiễu
+  `AcDbViewport` lại đặt `gDirty` — chốt mới sẽ từ chối một lượt quét sạch.
+
+  Tôi thử "chỉ đặt `gDirty` khi đang trong một LỆNH". Sai: lệnh ghi LISP và
+  native (`entmake`/`entmod` của đường sửa tiêu chuẩn, `execNativeJob`) chạy
+  NGOÀI lệnh nào cả — chúng sẽ không còn phát `drawingModified`, và cả app mất
+  tín hiệu bản vẽ đã đổi.
+
+  Cách đúng, và lập luận kiểm chứng được: **job chỉ đọc giữ main thread của
+  AutoCAD**, nên trong quãng đó người dùng không tương tác được — không có "sửa
+  thật" nào để bỏ sót. Chặn `gDirty` trong quãng đó là an toàn theo nghĩa chặt.
+  Và **chỉ chặn `gDirty`**, không chặn bộ đếm revision: bộ đếm còn phục vụ những
+  chốt khác, để nó nhảy theo nhiễu thì không ai chết.
+- **Đọc nhật ký hỏng trả "sạch".** Không có bằng chứng không phải là bằng chứng
+  không có. Nay fail-closed — và chốt revision đã gỡ nên không còn ai đỡ phía
+  sau.
+
+Test của daemon cũng phải đổi theo: nó đang khoá đúng đoạn mã vừa gỡ. Nay khoá
+**cả hai chiều** — bơm `drawingModified` giữa lượt quét thì phải 409, và một
+lượt quét sạch có revision nhảy 11 → 19 thì phải đi qua. Không có vế thứ hai thì
+một chốt "luôn từ chối" cũng làm test xanh, đúng lỗi vừa sửa. `test:standards`
+nay nằm trong `pnpm verify`.
+
+- **Đóng rồi mở lại cùng đường dẫn trong lúc quét** không sinh
+  `drawingModified` nào — chỉ `docClosed`/`docOpened` — nên chốt sự kiện cho
+  qua. Nhưng với AutoCAD đó là một database khác: handle trong ảnh chụp cũ trỏ
+  sang đối tượng khác. Nay so `instance` giữa hai lượt chụp, cùng cách phía web
+  đang làm.
+
+### Known — một khe hẹp được ghi nhận, không sửa
+
+Cờ chặn cờ bẩn được hạ khi bản sao snapshot biến mất, mà việc đó do watcher phát
+hiện. Giữa lúc job xong và lúc watcher chạy có một khe — người dùng sửa đúng
+trong khe đó thì mất `drawingModified`.
+
+Không sửa tiếp, và cân nhắc như sau: khe đó tính bằng mili-giây (job ghi tệp kết
+quả vào chính thư mục watcher đang canh, nên callback tới gần như tức thì);
+**bộ đếm revision KHÔNG bị chặn**, nên mọi chốt dựa vào nó — kể cả chốt của
+`/apply` — vẫn bắt được; và lượt quét đã kết thúc tại thời điểm đó, nên chốt độ
+tươi của nó không còn liên quan.
+
+Đổi lại, cách bịt hẳn là buộc cờ vào vòng đời lệnh của AutoCAD — thứ tôi đã thử
+và **hỏng bốn lần liên tiếp** trong chính lượt này, lần nào cũng đẻ ra một lỗi
+nặng hơn lỗi nó sửa. Dừng ở đây là lựa chọn có ý thức.
+
+### Added — công cụ chẩn đoán bộ đếm revision
+
+Hai lần liên tiếp bộ đếm nhảy vì lý do không ai đoán được, và đoán mò tốn nhiều
+thời gian hơn cả việc sửa. Nay `MepDbReactor` ghi lại **callback nào bắn và cho
+lớp đối tượng gì**, kèm cả những lần bị bỏ qua vì job chỉ đọc.
+
+Tắt mặc định, bật bằng `touch ~/Acad-Bridge/debug_revision`. Cờ được đọc lại mỗi
+giây và **không nhớ kết quả phủ định** — bật nó sau khi plugin đã chạy là cách
+dùng duy nhất của một công cụ chẩn đoán; bắt bật trước thì phải đoán trước lúc
+nào sẽ cần nó.
+
 ## 2026-08-12 — Giai đoạn 6: tách `/review` và `/standards`
 
 ### Added — hai màn hình thay cho một hộp thoại 2.411 dòng

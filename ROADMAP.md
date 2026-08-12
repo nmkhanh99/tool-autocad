@@ -309,6 +309,13 @@ route, như `blocks.module.css` vừa làm.
   `DocumentReviewPanel.tsx` (1.348 dòng) là chuyện khác: prototype PDF, thành
   `/review-pdf` ở giai đoạn 10 theo D2.
 
+  **Nợ kỹ thuật — khe hẹp của cờ chặn cờ bẩn.** Cờ hạ khi watcher thấy bản sao
+  snapshot biến mất; giữa lúc job xong và lúc watcher chạy có một khe mili-giây,
+  và sửa đúng trong khe đó thì mất `drawingModified`. Bộ đếm revision không bị
+  chặn nên mọi chốt khác vẫn bắt được. Bịt hẳn phải buộc cờ vào vòng đời lệnh
+  của AutoCAD — đã thử bốn biến thể trong một lượt và hỏng cả bốn, nên để lại
+  cho một lượt riêng có test cho từng đường.
+
   **Nợ kỹ thuật phát sinh — bộ chạy job kích hoạt bản vẽ đích.** `runJob()` gọi
   `executeInApplicationContext(pDoc, cmd, !readOnly, …)`: job GHI luôn kích hoạt
   bản vẽ đích trước khi chạy. Hệ quả: người dùng đổi tab trong quãng giữa lúc

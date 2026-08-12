@@ -190,10 +190,12 @@ export default function StandardsPage() {
       await loadProfiles(saved.id || draft.id, true);
       setSavedNote(
         saved.revision === draft.revision
-          ? `Đã lưu “${saved.name || draft.name}”. Nội dung không đổi, nên lượt `
-            + "quét đang mở ở màn Kiểm tra vẫn dùng được."
-          : `Đã lưu “${saved.name || draft.name}”. Mọi lượt quét ở màn Kiểm tra `
-            + "dựa trên hồ sơ này đã hết giá trị — phải quét lại trước khi sửa.",
+          ? `Đã lưu “${saved.name || draft.name}”. Nội dung không đổi nên vẫn là `
+            + `phiên bản ${saved.version} — lượt quét đang mở ở màn Kiểm tra vẫn `
+            + "dùng được."
+          : `Đã lưu “${saved.name || draft.name}” thành phiên bản ${saved.version}. `
+            + "Mọi lượt quét ở màn Kiểm tra dựa trên phiên bản cũ đã hết giá trị "
+            + "— phải quét lại trước khi sửa.",
       );
     } catch (failure) {
       setError(daemonFailureText(failure));
@@ -232,7 +234,8 @@ export default function StandardsPage() {
       screen="standards"
       title="Hồ sơ tiêu chuẩn"
       sub={draft
-        ? `${draft.name}${dirty ? " · có thay đổi chưa lưu" : ""}`
+        ? `${draft.name}${draft.version ? ` · phiên bản ${draft.version}` : ""}`
+          + `${dirty ? " · có thay đổi chưa lưu" : ""}`
         : "Chưa có hồ sơ nào"}
       actions={
         <>
@@ -307,7 +310,7 @@ export default function StandardsPage() {
           <div className="tablewrap">
             <table className="data">
               <thead>
-                <tr><th>Tên</th><th>Mã</th><th>Phiên bản</th><th className="n">Layer</th></tr>
+                <tr><th>Tên</th><th>Mã</th><th className="n">Phiên bản</th><th className="n">Layer</th></tr>
               </thead>
               <tbody>
                 {profiles.map((item) => (
@@ -320,11 +323,11 @@ export default function StandardsPage() {
                     }}>
                     <td>{item.name}{item.id === selectedId && dirty ? <> <Tag>chưa lưu</Tag></> : null}</td>
                     <td className="mono">{item.id}</td>
-                    {/* Cắt hash cho đọc được. Nó là hash NỘI DUNG, nên hai hồ
-                        sơ giống hệt nhau mang cùng một mã — đó là tính năng,
-                        không phải trùng lặp. */}
-                    <td className="mono" title={item.revision}>
-                      {item.revision.slice(0, 8) || "—"}
+                    {/* Số đếm cho người đọc; hash để trong `title` cho ai cần
+                        đối chiếu. Hash là của NỘI DUNG, nên hai hồ sơ giống hệt
+                        nhau mang cùng một mã — tính năng, không phải trùng. */}
+                    <td className="n mono" title={item.revision}>
+                      {item.version || "—"}
                     </td>
                     <td className="n mono">{item.layers.length}</td>
                   </tr>

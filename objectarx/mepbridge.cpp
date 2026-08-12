@@ -90,6 +90,30 @@ static std::map<const AcDbDatabase*, uint64_t> gDatabaseRevisions;
 // hoac nhip watcher xa no. Khai o day (khong phai canh cac reactor) vi nhip
 // watcher nam TRUOC khoi reactor trong file nay.
 static bool gDirty = false;
+// Dang chay mot job daemon KHAI BAO la chi doc, va tren database nao.
+//
+// VI SAO CHAN LA AN TOAN: job chay tren MAIN THREAD cua AutoCAD.  Trong quang
+// do nguoi dung khong tuong tac duoc — nen khong co "sua that" nao de bo sot.
+// Thu duy nhat bi chan la nhieu cua chinh AutoCAD: `modified:AcDbViewport` khi
+// chuong trinh `ssget "_X"` quet ca ban ve (do that: +8 moi luot quet).
+//
+// CHI chan `gDirty`, KHONG chan bo dem revision: bo dem con phuc vu nhung chot
+// khac, va de no nhay theo nhieu thi khong ai chet — con mot su kien
+// `drawingModified` gia thi lam `/standards/scan` tu loai bo ket qua cua chinh
+// minh.
+//
+// Ba chi tiet cua vong doi, moi cai sua mot lan da mac:
+//  1. Ha co khi BAN SAO snapshot bien mat, khong phai `job.lsp` — tep do la
+//     duong truyen dung chung, luon con, nen co se khong bao gio ha.
+//  2. Gan voi DUNG database.  Co toan tien trinh nuot luon ban ve khac dang mo.
+//  3. Han 180 giay xet TRONG countable(), khong o watcher: watcher chi chay khi
+//     thu muc bridge doi, nen bridge im lang la co ket vinh vien.
+static bool gReadOnlyJobRunning = false;
+static std::string gReadOnlyJobSnapshot;
+static time_t gReadOnlyJobStartedAt = 0;
+static const time_t kReadOnlyJobMaxSeconds = 180;
+static const AcDbDatabase* gReadOnlyJobDb = nullptr;
+
 // Revision tai lan luu gan nhat. So sanh voi gDatabaseRevisions cho ra
 // "da sua ke tu lan luu" — thu ma AcApDocument khong co accessor nao.
 static std::map<const AcDbDatabase*, uint64_t> gSavedRevisions;
@@ -3645,6 +3669,14 @@ static void runJob() {
         L"(vl-catch-all-error-message mep:load-result)))) (princ)) "
         L"(getvar \"TRUSTEDPATHS\") nil nil) ";
     // Read-only review executes in the target context without activating its tab.
+    //
+    // Bat TRUOC khi xep hang: `sendStringToExecute` bat dong bo.
+    if (readOnly) {
+        gReadOnlyJobRunning = true;
+        gReadOnlyJobSnapshot = snapshotPath;
+        gReadOnlyJobStartedAt = time(nullptr);
+        gReadOnlyJobDb = pDoc->database();
+    }
     acDocManager->sendStringToExecute(
         pDoc, cmd.c_str(), !readOnly, readOnly, false);
     writeDocs(); // tien the cap nhat trang thai
@@ -3665,6 +3697,23 @@ void mepRawRegisterCommands();
 static void fsCallback(ConstFSEventStreamRef, void*, size_t, void*,
                        const FSEventStreamEventFlags*, const FSEventStreamEventId*) {
     struct stat st;
+    // Job chi doc da xong: chuong trinh tu xoa BAN SAO snapshot o gan cuoi.
+    //
+    // Han thoi gian cung xet o day, khong chi trong `userEdit()`: neu AutoCAD tu
+    // choi hoac danh roi yeu cau xep hang, snapshot khong bao gio bi xoa va co
+    // se cho toi callback database tiep theo moi het han — trong quang do moi
+    // sua that tren database do mat `gDirty`.
+    if (gReadOnlyJobRunning) {
+        const bool gone = gReadOnlyJobSnapshot.empty()
+            || stat(gReadOnlyJobSnapshot.c_str(), &st) != 0;
+        const bool expired =
+            time(nullptr) - gReadOnlyJobStartedAt > kReadOnlyJobMaxSeconds;
+        if (gone || expired) {
+            gReadOnlyJobRunning = false;
+            gReadOnlyJobSnapshot.clear();
+            gReadOnlyJobDb = nullptr;
+        }
+    }
     if (stat(gDrawingInfoReqPath.c_str(), &st) == 0 &&
         tsChanged(st.st_mtimespec, gDrawingInfoReqMtime)) {
         gDrawingInfoReqMtime = st.st_mtimespec;
@@ -4576,18 +4625,74 @@ public:
 };
 // Database reactor: gom moi thay doi entity (them/sua/xoa) -> danh dau dirty (KHONG lam gi nang
 // trong callback — chi set co; emit 1 lan khi lenh ket thuc de tranh spam).
+// Ghi lai VI SAO bo dem revision nhay.
+//
+// Bo dem nay quyet dinh mot loat chot an toan, va hai lan roi no nhay vi ly do
+// khong ai doan duoc — lam `/standards/scan` tu loai bo ket qua cua chinh no.
+// Doan mo la vo ich; can biet callback nao ban va cho doi tuong gi.
+//
+// Tat mac dinh. Bat bang: touch ~/Acad-Bridge/debug_revision
+static bool revisionDebugOn() {
+    // Doc lai moi giay. KHONG nho ket qua phu dinh: bat co sau khi plugin da
+    // chay la cach dung duy nhat cua no — bat truoc thi phai doan truoc luc nao
+    // se can chan doan.
+    static time_t lastCheck = 0;
+    static bool on = false;
+    const time_t now = time(nullptr);
+    if (now != lastCheck) {
+        lastCheck = now;
+        struct stat st;
+        on = stat((gBridgeDir + "/debug_revision").c_str(), &st) == 0;
+    }
+    return on;
+}
+
+static void noteRevisionBump(const char* why, const AcDbObject* object) {
+    if (!revisionDebugOn()) return;
+    std::string detail = why;
+    if (object) {
+        // `isA()->name()` la ten lop cua doi tuong — du de biet cai gi dang bi
+        // dong vao, ma khong phai mo them gi.
+        if (AcRxClass* cls = object->isA()) detail += ":" + toUtf8(cls->name());
+    }
+    emitEvent("revisionBump", detail);
+}
+
 class MepDbReactor : public AcDbDatabaseReactor {
 public:
-    void objectAppended(const AcDbDatabase* db, const AcDbObject*) override {
-        gDirty = true;
+    // Chi de ghi chan doan. Tung co mot co chan bo dem trong luc job chi doc
+    // chay, nhung do la co che SAI: no chan luon ca sua that cua nguoi dung
+    // trong quang do — dung thu chot nay sinh ra de bat. Viec phan biet nhieu
+    // cua AutoCAD voi sua that nay thuoc ve daemon, bang su kien
+    // `drawingModified` (chi ban khi mot LENH ket thuc va ban ve ban).
+    /** Tin hieu nay co duoc tinh la NGUOI DUNG SUA khong.
+     *
+     * Bo dem revision van tang trong moi truong hop — chi co `gDirty` (va qua
+     * do la su kien `drawingModified`) moi bi chan.  Xem `gReadOnlyJobRunning`. */
+    static bool userEdit(const AcDbDatabase* db, const char* why,
+                         const AcDbObject* object) {
+        if (gReadOnlyJobRunning) {
+            if (time(nullptr) - gReadOnlyJobStartedAt > kReadOnlyJobMaxSeconds) {
+                gReadOnlyJobRunning = false;
+                gReadOnlyJobDb = nullptr;
+            } else if (db && db == gReadOnlyJobDb) {
+                noteRevisionBump((std::string("skipped-readonly:") + why).c_str(), object);
+                return false;
+            }
+        }
+        noteRevisionBump(why, object);
+        return true;
+    }
+    void objectAppended(const AcDbDatabase* db, const AcDbObject* object) override {
+        if (userEdit(db, "appended", object)) gDirty = true;
         if (db) ++gDatabaseRevisions[db];
     }
-    void objectModified(const AcDbDatabase* db, const AcDbObject*) override {
-        gDirty = true;
+    void objectModified(const AcDbDatabase* db, const AcDbObject* object) override {
+        if (userEdit(db, "modified", object)) gDirty = true;
         if (db) ++gDatabaseRevisions[db];
     }
-    void objectErased(const AcDbDatabase* db, const AcDbObject*, bool) override {
-        gDirty = true;
+    void objectErased(const AcDbDatabase* db, const AcDbObject* object, bool) override {
+        if (userEdit(db, "erased", object)) gDirty = true;
         if (db) ++gDatabaseRevisions[db];
     }
     // Bien he thong nao KHONG phai noi dung ban ve.
@@ -4622,7 +4727,8 @@ public:
     void headerSysVarChanged(const AcDbDatabase* db, const ACHAR* name, bool success) override {
         if (!success) return;
         if (name && isSessionPreference(toUtf8(name))) return;
-        gDirty = true;
+        if (userEdit(db, ("sysvar=" + (name ? toUtf8(name) : std::string("?"))).c_str(),
+                     nullptr)) gDirty = true;
         if (db) ++gDatabaseRevisions[db];
     }
 };

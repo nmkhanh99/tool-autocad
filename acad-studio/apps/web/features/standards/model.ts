@@ -88,6 +88,10 @@ export type StandardsProfile = {
    *
    * Cũng là giá trị gửi trong `If-Match` khi ghi. */
   revision: string;
+  /** Bộ đếm phiên bản, tăng 1 mỗi lần nội dung THẬT SỰ đổi. Dành cho con người
+   * — `f304e8e7` không nói gì với ai, "phiên bản 7" thì có. Nó KHÔNG thay
+   * `revision` ở vai trò chốt. `0` = máy chủ bản cũ chưa phát. */
+  version: number;
   unit: string;
   insunits: number | undefined;
   precision: number | undefined;
@@ -114,6 +118,7 @@ export function normalizeProfile(value: unknown): StandardsProfile {
     /* Giữ NGUYÊN chuỗi. Thiếu thì để rỗng — và `profileDriftNote` im khi một vế
        rỗng, vì "không biết" không phải "đã đổi". */
     revision: str(source.revision),
+    version: num(source.version) ?? 0,
     unit: str(drawing.unit),
     insunits: num(drawing.insunits),
     precision: num(drawing.precision),

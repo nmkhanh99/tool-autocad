@@ -86,7 +86,17 @@ export type DrawingStandardProfile = {
   description?: string;
   createdAt: string;
   updatedAt: string;
+  /** Hash NỘI DUNG. Là token so sánh của `If-Match` và của chốt lượt quét —
+   *  chính xác theo nghĩa "nội dung có khác không", nhưng không đọc được. */
   revision: string;
+  /** Bộ đếm phiên bản, tăng 1 mỗi lần nội dung THẬT SỰ đổi.
+   *
+   * Dành cho con người: `f304e8e7` không nói gì với ai, còn "phiên bản 7" thì
+   * có. Nó KHÔNG thay `revision` ở vai trò chốt — lưu lại một nội dung y hệt
+   * không tăng số này, nên lượt quét đang mở vẫn sống, và đó là hành vi đúng.
+   *
+   * Cố ý nằm NGOÀI phép tính hash: đưa vào là tự tham chiếu. */
+  version: number;
   drawing: DrawingStandard;
   dimension: DimensionStandard;
   layers: LayerStandard[];
@@ -444,10 +454,11 @@ function canonicalize(value: unknown): unknown {
 }
 
 export function calculateProfileRevision(
-  profile: Omit<DrawingStandardProfile, "revision"> | DrawingStandardProfile,
+  profile: Omit<DrawingStandardProfile, "revision" | "version"> | DrawingStandardProfile,
 ): string {
   const {
     revision: _revision,
+    version: _version,
     createdAt: _createdAt,
     updatedAt: _updatedAt,
     ...revisionSource
@@ -487,7 +498,7 @@ export function sanitizeProfile(value: unknown): DrawingStandardProfile {
   assertUnique(mappings.map((mapping) => mapping.id), "profile.mappings.id");
 
   const createdAt = isoDate(source.createdAt, "profile.createdAt", now);
-  const withoutRevision: Omit<DrawingStandardProfile, "revision"> = {
+  const withoutRevision: Omit<DrawingStandardProfile, "revision" | "version"> = {
     id,
     name: stringValue(source.name, "profile.name", { maxLength: 160 }),
     ...(optionalString(source.description, "profile.description", 1_000) == null
@@ -500,9 +511,17 @@ export function sanitizeProfile(value: unknown): DrawingStandardProfile {
     layers,
     mappings,
   };
+  /* `version` do NƠI GỌI quyết định, không tính ở đây: chỉ `upsertProfile` mới
+     biết bản trước đó là gì để so nội dung và tăng số. `sanitizeProfile` chạy
+     cả ở đường tạo mới lẫn đường đọc từ đĩa. */
+  const version = Number.isSafeInteger(Number(source.version))
+      && Number(source.version) >= 1
+    ? Number(source.version)
+    : 1;
   return {
     ...withoutRevision,
     revision: calculateProfileRevision(withoutRevision),
+    version,
   };
 }
 
@@ -772,12 +791,20 @@ export function upsertProfile(
     throw new StandardsConflictError(`Profile ${id} đã thay đổi; hãy tải lại trước khi lưu.`);
   }
   const now = new Date().toISOString();
-  const profile = sanitizeProfile({
+  /* Dựng một lần để BIẾT nội dung mới, rồi mới quyết `version`. Tăng số theo
+     mỗi lần bấm Lưu là sai: lưu lại một nội dung y hệt sẽ giết mọi lượt quét
+     đang mở mà chẳng có gì thay đổi. */
+  const draft = sanitizeProfile({
     ...source,
     id,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
+    version: existing?.version ?? 1,
   });
+  const contentChanged = !existing || existing.revision !== draft.revision;
+  const profile: DrawingStandardProfile = contentChanged
+    ? { ...draft, version: (existing?.version ?? 0) + 1 }
+    : draft;
   if (index >= 0) state.profiles[index] = profile;
   else state.profiles.push(profile);
   saveStandardsState(state, options);
@@ -821,6 +848,10 @@ export function createProfile(
     name: cleanName,
     createdAt: now,
     updatedAt: now,
+    /* Hồ sơ MỚI luôn bắt đầu từ 1, kể cả khi chép từ một bản đang ở v7. Thừa kế
+       số của nguồn làm lần sửa đầu tiên của nó thành v8 — một lịch sử không có
+       thật, và người dùng đọc "phiên bản 8" cho một hồ sơ vừa tạo. */
+    version: 1,
   });
   state.profiles.push(profile);
   saveStandardsState(state, options);

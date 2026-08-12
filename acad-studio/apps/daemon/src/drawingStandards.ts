@@ -5,6 +5,8 @@ import express, { type Router } from "express";
 import {
   acadRunning,
   dispatchLiveJob,
+  drawingChangedSince,
+  eventLogMark,
   listOpenDocs,
   requestDrawingInfo,
   selectOpenDocument,
@@ -714,6 +716,13 @@ export function drawingStandardsRouter(
       const reviewOnly = req.body?.readOnly === true;
       const profile = getProfile(String(req.body?.profileId ?? ""));
       if (!profile) return res.status(404).json({ ok: false, error: "Không tìm thấy profile" });
+      /* Mốc nhật ký sự kiện, đặt TRƯỚC cả lượt đọc ảnh chụp đầu tiên.
+       *
+       * Đặt sau nó thì một sửa đổi xảy ra giữa lúc chụp và lúc đặt mốc sẽ nằm
+       * TRƯỚC mốc và bị bỏ qua — lúc đó `auditStandards()` chấm điểm một ảnh
+       * chụp trước khi sửa, còn phiên quét lại lưu revision sau khi sửa, nên
+       * `/apply` nhận một kết quả không nhất quán. */
+      const eventMark = eventLogMark();
       const { document, exactTarget } = await resolveDocument(
         req.body?.target,
         dependencies,
@@ -790,7 +799,32 @@ export function drawingStandardsRouter(
           error: "Không xác minh được document instance/revision sau khi quét",
         });
       }
-      if (verifiedDrawingRevision !== expectedDrawingRevision) {
+      /* So SỰ KIỆN, không so bộ đếm revision.
+       *
+       * Bộ đếm nhúc nhích cả khi AutoCAD tự làm việc của nó: một lượt
+       * `ssget "_X"` quét toàn bộ bản vẽ làm nó +8 dù chương trình quét không
+       * sửa gì — không một `setvar`/`entmod`/`command` nào. Đo thật: 16 → 24.
+       * Nên phép so cũ khiến endpoint này TỰ LOẠI BỎ kết quả của chính mình,
+       * lần nào cũng vậy, và `/review` không dùng được.
+       *
+       * `drawingModified` chỉ bắn khi một LỆNH kết thúc và bản vẽ bẩn — tức
+       * người dùng thật sự sửa. Đọc bản vẽ không kết thúc lệnh nào. */
+      /* Bản vẽ bị ĐÓNG rồi MỞ LẠI cùng đường dẫn giữa hai lượt chụp.
+       *
+       * Chốt sự kiện không bắt được: đóng/mở chỉ sinh `docClosed`/`docOpened`,
+       * không sinh `drawingModified` nào. Nhưng với AutoCAD đó là một database
+       * khác — handle trong ảnh chụp cũ trỏ sang đối tượng khác, và phiên quét
+       * lại lưu instance mới. `/apply` sẽ ghi phát hiện cũ vào bản vẽ mới. */
+      const initialInstance = String(asRecord(snapshot.document).instance ?? "");
+      const verifiedInstance = String(verifiedDocument.instance ?? "");
+      if (initialInstance && verifiedInstance && initialInstance !== verifiedInstance) {
+        return res.status(409).json({
+          ok: false,
+          code: "document_stale",
+          error: "Bản vẽ đã được đóng và mở lại trong lúc quét; hãy quét lại",
+        });
+      }
+      if (drawingChangedSince(eventMark, document.title)) {
         return res.status(409).json({
           ok: false,
           code: "drawing_stale",
@@ -820,7 +854,9 @@ export function drawingStandardsRouter(
         exactTarget,
         profileId: profile.id,
         profileRevision: profile.revision,
-        drawingRevision: expectedDrawingRevision,
+        /* Mốc cho `/apply` là revision SAU lượt quét: chính lượt quét đã làm
+           bộ đếm nhảy, nên lưu giá trị trước đó là bảo đảm `/apply` luôn 409. */
+        drawingRevision: verifiedDrawingRevision,
         scannedAt,
         settings: parsed.settings,
         dimensions: parsed.dimensions,

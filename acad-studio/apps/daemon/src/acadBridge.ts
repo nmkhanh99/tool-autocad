@@ -785,6 +785,65 @@ function drawingInfoRuntime(
 const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
 export const READ_ONLY_JOB_MARKER = ";;; ACAD_BRIDGE_READ_ONLY";
 
+/** Vị trí hiện tại của nhật ký sự kiện, để sau đó hỏi "có gì mới không". */
+export function eventLogMark(): number {
+  try {
+    return statSync(join(getBridgeDir(), "events.jsonl")).size;
+  } catch {
+    return 0;
+  }
+}
+
+/** Người dùng CÓ sửa bản vẽ kể từ mốc `since` không.
+ *
+ * Dùng sự kiện `drawingModified` thay vì so bộ đếm revision, vì hai thứ đó bắt
+ * hai chuyện khác nhau:
+ *
+ *  · Bộ đếm revision nhúc nhích cả khi **AutoCAD tự làm việc của nó** — một
+ *    lượt `ssget "_X"` quét toàn bộ bản vẽ làm nó +8 dù chương trình không sửa
+ *    gì. Đó là lý do `/standards/scan` từng tự loại bỏ kết quả của chính mình,
+ *    lần nào cũng vậy.
+ *  · `drawingModified` chỉ bắn khi một **LỆNH kết thúc và bản vẽ bẩn** — tức
+ *    một thao tác thật của người dùng. Đọc bản vẽ không kết thúc lệnh nào.
+ *
+ * `activeDoc` của sự kiện là TIÊU ĐỀ. Không lọc theo nó khi tiêu đề rỗng: thà
+ * từ chối thừa một lượt quét còn hơn nhận một lượt đã cũ.
+ */
+export function drawingChangedSince(since: number, title?: string): boolean {
+  let text = "";
+  try {
+    const file = join(getBridgeDir(), "events.jsonl");
+    const buffer = readFileSync(file);
+    // File bị cắt (plugin dọn khi nó phình) → không so được, coi như CÓ đổi.
+    if (buffer.length < since) return true;
+    /* Cắt theo BYTE, không theo ký tự. `statSync().size` là số byte, còn
+       `String.slice` đếm ký tự — nhật ký có tên bản vẽ tiếng Việt nên hai thang
+       đó lệch nhau, và phần cắt ra sẽ bắt đầu giữa một dòng JSON. Dòng hỏng =
+       không nhận ra `drawingModified` = nhận một lượt quét đã cũ. */
+    text = utf8FromByteOffset(buffer, since);
+  } catch {
+    /* Đọc hỏng = KHÔNG CÓ BẰNG CHỨNG bản vẽ còn sạch. Trả `false` ở đây là nói
+       "không ai sửa gì" trong khi ta không biết — và chốt revision đã bị gỡ,
+       nên không còn ai đỡ phía sau. */
+    return true;
+  }
+  const wanted = (title ?? "").trim();
+  return text.split("\n").filter(Boolean).some((line) => {
+    try {
+      const event = JSON.parse(line) as { type?: string; activeDoc?: string };
+      if (event.type !== "drawingModified") return false;
+      const doc = String(event.activeDoc ?? "").trim();
+      return !wanted || !doc || doc === wanted;
+    } catch {
+      /* Dòng hỏng = KHÔNG ĐỌC ĐƯỢC, không phải "không khớp". Plugin ghi bằng
+         `fprintf` nên đọc đúng lúc nó đang ghi sẽ ra một dòng cụt — mà dòng cụt
+         đó có thể chính là `drawingModified` cần bắt. Trả `false` ở đây là công
+         bố một lượt quét đã cũ. */
+      return true;
+    }
+  });
+}
+
 /**
  * Bọc payload LISP: đánh dấu running, bẫy lỗi, ghi result file có sentinel.
  * Uses acad:write-result (primary) with mep:write-result alias for older jobs.

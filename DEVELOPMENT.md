@@ -150,6 +150,7 @@ mới tới `verify` của web.
 |------|-------------|
 | `pnpm typecheck:daemon` | `tsc --noEmit` trên gói daemon |
 | `pnpm --filter @acad/daemon test:cad-selection` | Hai pha, chốt độ tươi, chốt không gian Model/Layout |
+| `pnpm --filter @acad/daemon test:standards` | Hồ sơ quy tắc, chốt độ tươi theo sự kiện, router |
 
 rồi chuyển sang gói web:
 
@@ -597,6 +598,17 @@ Hai màn hình dùng chung một API, và ràng buộc giữa chúng là thứ d
 > phải dùng `mode="immediate"`; dùng `"staged"` là hứa một bước rút lui không
 > tồn tại.
 
+Hồ sơ mang **hai** chỉ số phiên bản, cố ý không thay thế nhau:
+
+| Trường | Kiểu | Dùng để | Lưu nội dung y hệt |
+|---|---|---|---|
+| `revision` | hash sha256 của nội dung | `If-Match`, chốt lượt quét | không đổi |
+| `version` | số đếm, tăng khi nội dung đổi | hiển thị cho người | không tăng |
+
+`version` nằm NGOÀI phép tính hash — đưa vào là tự tham chiếu. Và
+`sanitizeProfile` không tự quyết nó: chỉ `upsertProfile` mới biết bản trước đó
+là gì để so nội dung.
+
 **`profile.revision` là HASH NỘI DUNG, không phải bộ đếm.** Hai hệ quả:
 
 - Đọc nó như số (`Number(...)`) cho ra `NaN` và mọi phép so đều sai.
@@ -628,6 +640,35 @@ Nay có danh sách biến **phiên/ứng dụng** được miễn trong `MepDbRe
 > Biến thuộc **nội dung bản vẽ** — `CLAYER`, `INSUNITS`, `LUPREC`, `CTAB`,
 > `TILEMODE` — KHÔNG được vào danh sách đó. Miễn chúng là để một thay đổi thật
 > đi qua mà không ai biết.
+
+Danh sách biến chỉ giải quyết được một nửa. Nửa còn lại: **chính AutoCAD nhúc
+nhích khi một job chỉ đọc quét bản vẽ**. Công cụ chẩn đoán chỉ đích danh
+`modified:AcDbViewport` — AutoCAD dựng lại viewport khi `ssget "_X"` quét toàn
+bộ, làm bộ đếm +8 dù chương trình không sửa gì.
+
+**Không sửa bằng cách chặn bộ đếm.** Đã thử ba biến thể của ý tưởng đó và cả ba
+đều hỏng; biến thể cuối cùng hỏng ở chỗ nguyên tắc: chặn bộ đếm trong lúc job
+chạy cũng chặn luôn **sửa thật của người dùng** trong quãng đó — đúng thứ chốt
+sinh ra để bắt.
+
+> **Bộ đếm revision và thao tác của người dùng là hai chuyện khác nhau.** Chỗ
+> nào cần biết "người dùng có sửa không", đừng so bộ đếm — dùng
+> `drawingChangedSince()`, thứ đọc sự kiện `drawingModified`. Sự kiện đó chỉ bắn
+> khi một **lệnh kết thúc và bản vẽ bẩn**; đọc bản vẽ không kết thúc lệnh nào.
+>
+> Bộ đếm vẫn đúng cho việc nó sinh ra: làm token so sánh giữa hai mốc đọc
+> (`instance` + `revision` trong guard của `/selection/prepare`).
+
+`/standards/scan` ghi một mốc nhật ký (`eventLogMark()`) trước khi chạy và hỏi
+lại sau đó. Mốc `drawingRevision` mà phiên quét lưu là giá trị **sau** lượt
+quét — lưu giá trị trước là bảo đảm `/apply` luôn 409.
+
+> **Chẩn đoán khi bộ đếm lại nhảy bất thường:**
+> `touch ~/Acad-Bridge/debug_revision`, chạy lại thao tác, rồi đọc các dòng
+> `revisionBump` trong `~/Acad-Bridge/events.jsonl`. Mỗi dòng ghi callback nào
+> bắn và cho lớp đối tượng gì; những lần bị bỏ qua vì job chỉ đọc cũng được ghi,
+> có tiền tố `skipped-readonly:`. Đoán mò tốn nhiều thời gian hơn cả việc sửa —
+> đã hai lần.
 
 ### Trạng thái độ tươi của `/drawing-info`
 
