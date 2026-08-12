@@ -313,8 +313,92 @@ route, như `blocks.module.css` vừa làm.
   ăn 400 lúc lưu. Đã đo trực tiếp trên daemon: `40` → 400, `-3` → 400,
   `"Default"` → 200.
 
-  `DrawingStandardsPanel.tsx` (2.411 dòng) **vẫn chưa xoá** — phải rà từng chức
-  năng của nó đối chiếu hai màn hình mới trước, theo đúng bài học ở trên.
+  **Đã rà xong toàn bộ `DrawingStandardsPanel.tsx` (2.411 dòng) — KẾT LUẬN:
+  chưa xoá được (2026-08-12).** Rà từng chức năng, đối chiếu với `/standards` +
+  `/review`. Còn **10 khoảng trống**, chia ba nhóm:
+
+  **Nhóm 1 — soạn hồ sơ, còn 2 việc** (2 việc khác đã đóng ngay khi rà: hai
+  trường `linearFormat` và `frameTolerancePercent` vô hình ở màn mới, và ô `Loại`
+  của ánh xạ bị khoá thành select trong khi panel cho gõ tự do):
+
+  - `importCurrentLayers()` — nạp danh sách layer thẳng từ bản vẽ qua
+    `/api/acad/drawing-info`, kèm quy đổi bề dày DXF→mm. Thay cho việc gõ tay
+    hàng chục layer. **Đáng port nhất trong cả danh sách.**
+  - `BoundsEditor` — ô JSON thô sửa `mapping.bounds`. `/standards` giữ được
+    `bounds` nhưng không sửa được.
+
+  **Nhóm 2 — quét và sửa, còn 4 việc:**
+
+  - Bảng **đối tượng đã nhận diện** (nhãn/loại/handle/layer/rộng/cao/diện tích).
+    Máy chủ *đã trả* `objects` trong kết quả quét; `/review` vứt đi. Hệ quả trực
+    tiếp: câu app đang khuyên ở màn hồ sơ — “lưu, rồi quét và đối chiếu số đối
+    tượng” — **hiện không làm theo được**.
+  - Bảng **dimension** đọc từ lượt quét (`dimensions`, cũng đang bị vứt).
+  - **Chọn + zoom đối tượng trong AutoCAD** từ handle của một phát hiện
+    (`prepareHandleSelection`). `/review` chỉ in handle ra dạng chữ.
+  - **DIMSPACE**: chọn một DIM làm chuẩn rồi căn đều các DIM đã tích. Đây chính
+    là lý do `unsupportedFixReason()` đang chặn hành động `dimspace`.
+
+  **Nhóm 3 — công cụ thao tác trực tiếp: BỎ, không port (user quyết
+  2026-08-12).** Gồm `scale`, `rotate`, `color`, `layer`→`move-to-layer`, `area`,
+  và `importCurrentSelection()` đọc pickfirst selection.
+
+  Lý do bỏ: đây là các lệnh AutoCAD gốc, và một kỹ sư đang mở sẵn AutoCAD gõ
+  `SCALE` nhanh hơn chuyển sang trình duyệt rồi bấm. Chúng cũng là nhóm rủi ro
+  nhất — `scale`/`rotate` chạy được trên **cả bản vẽ** và không hoàn tác được từ
+  app. Không có quy trình thật nào cần chúng.
+
+  Hệ quả: xoá panel chỉ còn chờ nhóm 1 và 2. Endpoint
+  `/standards/action` vẫn giữ nguyên ở daemon — `/review` dùng nó cho các hành
+  động sửa theo phát hiện, và `select` (mục 2.2) cũng đi qua đó.
+
+  > Một mục tôi từng đề xuất giữ mà nay cũng bỏ theo: `area` (đo diện tích) và
+  > đọc bộ chọn — cả hai đều chỉ ĐỌC, và tôi đã đề xuất chuyển sang
+  > `/workspace`. Nếu sau này cần lại thì đó là một việc nhỏ, tách riêng.
+
+  Một thứ **cố ý không port**: dấu ★ “hồ sơ đang dùng”. Daemon tính
+  `activeProfileId` bằng `state.profiles[0]?.id` — không có kho, không có
+  endpoint đặt nó. Ngôi sao đó nói “hồ sơ đầu danh sách”, không phải “đang dùng”.
+
+  **Thứ tự đã chốt (user duyệt 2026-08-12).** Cả năm mục đều KHÔNG cần viết thêm
+  endpoint nào — backend đã có sẵn:
+
+  | # | Việc | Vì sao ở vị trí này |
+  |---|---|---|
+  | 1 | **2.1** Bảng đối tượng đã nhận diện | Vá một lời khuyên app đang đưa ra mà không thực hiện được; dữ liệu máy chủ đã trả sẵn, `/review` đang vứt đi |
+  | 2 | **1.1** Nhập layer từ bản vẽ | Đối chiếu chứ không thay sạch; nhớ quy đổi bề dày DXF→mm |
+  | 3 | **2.2** Chọn + zoom đối tượng trong AutoCAD | Cây cầu duy nhất từ danh sách phát hiện sang bản vẽ |
+  | 4 | **1.2** Sửa `bounds` bằng hai nhóm ô có nhãn, KHÔNG phải ô JSON | Xem bảng ba nghĩa của `bounds` ở trên |
+  | 5 | **2.3** Bảng dimension + DIMSPACE | Mở khoá hành động thứ 5/5; hẹp hơn bốn mục trên |
+
+  **Bẫy đã phát hiện trước khi bắt tay vào 2.1:** phản hồi của `POST /scan` gửi
+  `parsed.objects` **thô** — diện tích theo đơn vị bản vẽ, không kèm `areaUnit` —
+  trong khi bản lưu phiên dùng `displayObjects()` đã quy đổi sang m². Với bản vẽ
+  mm, một phòng 20 m² ra `20000000`. Cách gọn nhất là cho daemon gửi luôn bản đã
+  quy đổi; nó đã tính sẵn cho phiên rồi.
+
+  **Bản rà soát trên còn THIẾU — sửa lại 2026-08-12 sau khi đối chiếu
+  `KE-HOACH-CHUYEN-DOI-UI.html`.** Tôi rà panel cũ ↔ màn mới, nên mọi yêu cầu
+  của kế hoạch mà panel cũ *cũng* không có thì phép so đó mù hoàn toàn. Ba thứ
+  lọt lưới, cả ba thuộc giai đoạn 6:
+
+  | # | Kế hoạch đòi | Hiện trạng |
+  |---|---|---|
+  | 6 | `features/review/scopes.ts` — bảng tra **6 hằng số** thay cho `scopeMatches()` lọc bằng regex tiếng Việt (`/frame\|paper\|scale\|khung\|tỷ lệ\|ty le/`) | thư mục không tồn tại. Sáu hằng số thật: `unit` · `layer` · `dimstyle` · `dim-row` · `frame` · `mapping-required` |
+  | 7 | Nút **Xoá hồ sơ** (`DELETE /profiles/:id`) — kế hoạch ghi rõ đây là "việc thêm mới thật" | daemon có endpoint (`drawingStandards.ts:704`), **không màn nào có nút** |
+  | — | Bất biến CI **#7**: tập `scope:"…"` trích từ `standardsEngine.ts` = tập hằng số trong `features/review/scopes.ts` | `test-contract.mjs` không assert gì về scope |
+
+  Lý do kế hoạch nêu cho việc bỏ regex đáng giữ nguyên văn: *backend đổi một chữ
+  là issue biến mất im lặng*. `/review` hiện lọc theo mức độ + từ khoá nên không
+  mắc đúng lỗi đó, nhưng cũng chưa có bảng tra.
+
+  Tiêu chí nghiệm thu `grep -c "scopeMatches" = 0` hiện là **4** — tự đạt khi xoá
+  panel.
+
+  **Xoá panel khi xong 2.1 + 1.1 + 2.2** — lúc đó nó không còn giữ thứ gì thiết
+  yếu. 1.2, 2.3 và hai mục 6–7 làm sau cũng được.
+
+  Bản đề xuất đầy đủ kèm ràng buộc cho từng mục: `DE-XUAT-UI-CON-THIEU.html`.
 
   `DocumentReviewPanel.tsx` (1.348 dòng) là chuyện khác: prototype PDF, thành
   `/review-pdf` ở giai đoạn 10 theo D2.

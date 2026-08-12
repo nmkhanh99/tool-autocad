@@ -1,0 +1,790 @@
+<title>Chức năng còn thiếu ở /standards và /review — đánh giá và đề xuất thiết kế</title>
+
+<style>
+  :root {
+    --ground:   #ffffff;
+    --surface:  #f5f5f6;
+    --sunken:   #ebebed;
+    --ink:      #0b0b0d;
+    --ink-72:   #45454b;
+    --muted:    #75757c;
+    --line:     #dddde1;
+    --line-soft:#ececef;
+    --accent:   #0066cc;
+    --accent-w: #e7f0fa;
+
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "IBM Plex Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+
+    --gutter: 78px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:   #101013;
+      --surface:  #17171b;
+      --sunken:   #1e1e23;
+      --ink:      #f2f2f4;
+      --ink-72:   #c2c2c8;
+      --muted:    #8b8b93;
+      --line:     #2b2b32;
+      --line-soft:#232329;
+      --accent:   #5aa9f5;
+      --accent-w: #17273a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:   #101013;
+    --surface:  #17171b;
+    --sunken:   #1e1e23;
+    --ink:      #f2f2f4;
+    --ink-72:   #c2c2c8;
+    --muted:    #8b8b93;
+    --line:     #2b2b32;
+    --line-soft:#232329;
+    --accent:   #5aa9f5;
+    --accent-w: #17273a;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15.5px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .sheet {
+    max-width: 940px;
+    margin: 0 auto;
+    padding: 56px 28px 120px;
+  }
+
+  /* ---- Masthead ------------------------------------------------ */
+  .masthead { border-bottom: 2px solid var(--ink); padding-bottom: 22px; margin-bottom: 8px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(26px, 4.4vw, 40px);
+    line-height: 1.12;
+    letter-spacing: -0.025em;
+    font-weight: 600;
+    margin: 14px 0 0;
+    text-wrap: balance;
+  }
+  .standfirst {
+    margin: 18px 0 0; max-width: 66ch; color: var(--ink-72); font-size: 16.5px;
+  }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 22px;
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+  }
+  .meta b { color: var(--ink-72); font-weight: 500; }
+
+  /* ---- Verdict summary ----------------------------------------- */
+  .tally { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line);
+           grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); margin: 40px 0 8px; }
+  .tally > div { background: var(--ground); padding: 16px 18px; }
+  .tally .n {
+    font-family: var(--mono); font-size: 30px; line-height: 1; letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+  }
+  .tally .k {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--muted); margin-top: 9px;
+  }
+  .tally .why { font-size: 13px; color: var(--ink-72); margin-top: 7px; }
+
+  /* ---- Section headings ---------------------------------------- */
+  h2 {
+    font-family: var(--mono); font-size: 13px; letter-spacing: .13em;
+    text-transform: uppercase; font-weight: 600;
+    margin: 64px 0 0; padding-bottom: 11px; border-bottom: 1px solid var(--ink);
+  }
+  h2 + .lede { margin: 16px 0 0; color: var(--ink-72); max-width: 66ch; }
+
+  /* ---- Record schedule ----------------------------------------- */
+  .rec { display: grid; grid-template-columns: var(--gutter) 1fr; gap: 0 20px;
+         border-bottom: 1px solid var(--line-soft); padding: 30px 0; }
+  .rec:last-child { border-bottom: 0; }
+
+  .rec .key { font-family: var(--mono); }
+  .rec .id {
+    font-size: 15px; font-weight: 600; letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Kết luận báo bằng HÌNH và CHỮ, không bằng màu — đúng kỷ luật của chính
+     hệ thiết kế mà tài liệu này nói tới: nó đơn sắc có chủ ý. */
+  .mark { display: block; width: 11px; height: 11px; margin-top: 11px; }
+  .mark[data-v="build"]  { background: var(--ink); border: 1.5px solid var(--ink); }
+  .mark[data-v="drop"]   { background: transparent; border: 1.5px solid var(--muted);
+                           position: relative; }
+  .mark[data-v="drop"]::after {
+    content: ""; position: absolute; inset: -3px auto -3px 4px;
+    width: 1.5px; background: var(--muted); transform: rotate(45deg);
+  }
+  .verdict {
+    font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); margin-top: 9px; line-height: 1.35;
+  }
+
+  .rec h3 { font-size: 19px; line-height: 1.3; margin: -3px 0 0; font-weight: 600;
+            letter-spacing: -0.012em; text-wrap: balance; }
+  .rec p { margin: 13px 0 0; max-width: 66ch; }
+  .rec p.tight { margin-top: 8px; }
+
+  .from {
+    font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+    margin-top: 12px; word-break: break-word;
+  }
+  .from b { color: var(--ink-72); font-weight: 500; }
+
+  /* ---- Spec block ---------------------------------------------- */
+  .spec { background: var(--surface); border-left: 2px solid var(--accent);
+          padding: 18px 20px; margin-top: 20px; }
+  .spec h4 {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--muted); margin: 0 0 12px; font-weight: 600;
+  }
+  .spec ul { margin: 0; padding-left: 19px; }
+  .spec li { margin: 0 0 9px; max-width: 62ch; }
+  .spec li:last-child { margin-bottom: 0; }
+  .spec ul ul { margin-top: 9px; }
+
+  .hard {
+    margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line);
+  }
+  .hard-label {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink); font-weight: 600;
+  }
+
+  code {
+    font-family: var(--mono); font-size: 0.88em; background: var(--sunken);
+    padding: 1px 5px; border-radius: 3px; word-break: break-word;
+  }
+  .spec code { background: var(--ground); }
+
+  /* ---- Truth table --------------------------------------------- */
+  .scroll { overflow-x: auto; margin-top: 20px; border: 1px solid var(--line); }
+  table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 13.5px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line-soft);
+           vertical-align: top; }
+  th {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .11em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600; background: var(--surface);
+    border-bottom: 1px solid var(--line);
+  }
+  tr:last-child td { border-bottom: 0; }
+  td code { font-size: 11.5px; }
+
+  /* ---- Closing question ---------------------------------------- */
+  .ask { border: 2px solid var(--ink); padding: 24px 26px; margin-top: 30px; }
+  .ask h3 { margin: 0; font-size: 17px; letter-spacing: -0.01em; }
+  .ask p { margin: 12px 0 0; max-width: 66ch; }
+  .ask ol { margin: 14px 0 0; padding-left: 20px; }
+  .ask li { margin-bottom: 8px; max-width: 64ch; }
+
+  .foot {
+    margin-top: 70px; padding-top: 18px; border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+  }
+
+  @media (max-width: 620px) {
+    :root { --gutter: 54px; }
+    .sheet { padding: 36px 18px 80px; }
+    .rec { gap: 0 14px; }
+  }
+</style>
+
+<div class="sheet">
+
+  <header class="masthead">
+    <div class="eyebrow">AutoCAD Toolkit · Rà soát trước khi xoá panel cũ</div>
+    <h1>Mười chức năng màn hình mới chưa có</h1>
+    <p class="standfirst">
+      Đã rà từng chức năng của <code>DrawingStandardsPanel.tsx</code> (2.411 dòng)
+      và đối chiếu với <code>/standards</code> + <code>/review</code>. Tài liệu này
+      đánh giá từng khoảng trống — cái nào đáng dựng, cái nào cần bạn quyết, cái nào
+      nên bỏ — kèm mô tả đủ để giao cho người thiết kế.
+    </p>
+    <div class="meta">
+      <span><b>Nguồn</b> app/DrawingStandardsPanel.tsx</span>
+      <span><b>Đối chiếu</b> app/(shell)/standards · app/(shell)/review</span>
+      <span><b>Ngày</b> 12·08·2026</span>
+    </div>
+  </header>
+
+  <div class="tally">
+    <div>
+      <div class="n">5</div>
+      <div class="k">Nên dựng</div>
+      <div class="why">Backend đã có sẵn cả năm. Không cần viết endpoint nào.</div>
+    </div>
+    <div>
+      <div class="n">5</div>
+      <div class="k">Đã quyết bỏ</div>
+      <div class="why">Bốn công cụ thao tác trực tiếp, và một khái niệm không có thật.</div>
+    </div>
+    <div>
+      <div class="n">1—5</div>
+      <div class="k">Thứ tự đã chốt</div>
+      <div class="why">2.1 → 1.1 → 2.2 → 1.2 → 2.3. Không mục nào cần backend mới.</div>
+    </div>
+    <div>
+      <div class="n">4</div>
+      <div class="k">Bộ mẫu cần sửa</div>
+      <div class="why">Ba trong bốn là hiểu nhầm bản dựng thật vừa sửa xong.</div>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <h2>Trước tiên — bốn sự thật người thiết kế phải biết</h2>
+  <p class="lede">
+    Bốn điều này quyết định hình dạng của gần như mọi đề xuất bên dưới. Cả bốn đều
+    đọc ra từ mã máy chủ và chương trình LISP, không phải suy đoán — và cả bốn đều
+    trái với thứ nhìn giao diện mà đoán.
+  </p>
+
+  <div class="rec">
+    <div class="key"><div class="id">S1</div></div>
+    <div>
+      <h3>Ô mẫu để trống nghĩa là <em>khớp tất cả</em>, không phải <em>bỏ qua</em></h3>
+      <p>
+        <code>acadstd:pattern-p</code> trả về đúng ngay khi mẫu rỗng, và
+        <code>map-entity-p</code> coi “mẫu layer rỗng <b>và</b> mẫu block rỗng” là khớp
+        mọi đối tượng. Một quy tắc trông như “chưa cấu hình” thực ra đang vơ cả bản vẽ
+        vào bảng bóc tách. Mọi thiết kế có ô mẫu phải nói ra điều này ngay cạnh ô.
+      </p>
+      <div class="from"><b>acad-lisp/headless/standards_lib.lsp</b> · dòng 141–172</div>
+    </div>
+  </div>
+
+  <div class="rec">
+    <div class="key"><div class="id">S2</div></div>
+    <div>
+      <h3>Trường <code>bounds</code> của ánh xạ là ba thứ khác nhau nằm chung một tên</h3>
+      <p>
+        Ba nhóm khoá, ba nơi đọc, ba thời điểm — và một nhóm không ai đọc. Panel cũ né
+        chuyện này bằng một ô JSON thô, nghĩa là nó cho phép gõ những khoá không có
+        tác dụng mà không báo gì.
+      </p>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>Khoá</th><th>Ai đọc</th><th>Khi nào</th><th>Làm gì</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>minX minY maxX maxY</code></td>
+              <td>Chương trình LISP, trong AutoCAD</td>
+              <td>Trong lượt quét</td>
+              <td>Chỉ nhận đối tượng có <b>tâm</b> nằm trong hình chữ nhật đó. Thiếu một
+                  trong bốn số là bỏ lọc hoàn toàn.</td>
+            </tr>
+            <tr>
+              <td><code>minArea maxArea areaUnit</code></td>
+              <td>Daemon</td>
+              <td><b>Sau</b> lượt quét</td>
+              <td>Loại bỏ đối tượng ngoài khoảng diện tích, có quy đổi đơn vị theo
+                  INSUNITS.</td>
+            </tr>
+            <tr>
+              <td><code>width height tolerancePercent unit</code></td>
+              <td><b>Không ai</b></td>
+              <td>—</td>
+              <td>Dữ liệu chết. Hồ sơ mặc định đang có nó ở ánh xạ
+                  <code>drawing-frame</code>. Việc so khung với khổ giấy lấy số từ
+                  <code>drawing.paper</code>, không phải từ đây.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="from">
+        <b>standardsEngine.ts</b> 119–126, 426–434 · <b>drawingStandards.ts</b> 475–498
+        · <b>standards_lib.lsp</b> 146–155
+      </div>
+    </div>
+  </div>
+
+  <div class="rec">
+    <div class="key"><div class="id">S3</div></div>
+    <div>
+      <h3>Máy chủ <em>không có</em> đường thử một quy tắc chưa lưu</h3>
+      <p>
+        Bộ mẫu có nút “Thử trên bản vẽ đang mở”; nút đó chạy trên dữ liệu giả trong
+        trình duyệt. Thật ra chỉ có bảy đường: đọc/tạo/sửa/xoá hồ sơ, quét, áp dụng,
+        và chạy một hành động. Không có dry-run. Vòng phản hồi duy nhất là
+        <b>lưu → quét → nhìn số đối tượng</b> — và đó chính là lý do mục 2.1 bên dưới
+        là mục quan trọng nhất cả danh sách.
+      </p>
+      <div class="from"><b>drawingStandards.ts</b> · bảy route đã đếm</div>
+    </div>
+  </div>
+
+  <div class="rec">
+    <div class="key"><div class="id">S4</div></div>
+    <div>
+      <h3>Sửa theo phát hiện là <em>ghi một pha, không hoàn tác được</em></h3>
+      <p>
+        Khác phần lớn lệnh ghi của app, nó không vào hàng chờ và không có bước rút lui.
+        Bấm xác nhận là AutoCAD sửa ngay; đường quay lại duy nhất là gõ <code>UNDO</code>
+        trong AutoCAD. Mọi nút ghi trong đề xuất này phải dùng thẻ xác nhận ở chế độ
+        <code>immediate</code>.
+      </p>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <h2>Nhóm 1 · Màn Hồ sơ tiêu chuẩn — 2 mục</h2>
+
+  <div class="rec">
+    <div class="key">
+      <div class="id">1.1</div>
+      <span class="mark" data-v="build"></span>
+      <div class="verdict">Nên dựng<br>Ưu tiên 2</div>
+    </div>
+    <div>
+      <h3>Nhập danh sách layer từ một bản vẽ</h3>
+      <p>
+        Panel cũ có nút “Lấy layer từ bản vẽ”: đọc bảng layer qua
+        <code>/api/acad/drawing-info</code> rồi đổ vào hồ sơ. Màn mới không có — phải gõ
+        tay từng dòng.
+      </p>
+      <p class="tight">
+        <b>Đánh giá: cần.</b> Hồ sơ mặc định có 5 layer; một bộ quy chuẩn thật của công
+        ty có 30–80. Gõ tay tên, màu, kiểu nét, bề dày cho từng dòng là việc không ai
+        làm đến hết. Và cách lập hồ sơ tự nhiên nhất là lấy từ một bản vẽ đã chuẩn rồi
+        tỉa lại, chứ không phải dựng từ trang trắng.
+      </p>
+      <p class="tight">
+        <b>Nhưng bản cũ làm sai một chỗ:</b> nó hỏi một câu rồi <b>thay sạch</b> danh
+        sách. Ai đã tinh chỉnh cột “bắt buộc” và bề dày cho 40 layer sẽ mất hết trong
+        một cú bấm.
+      </p>
+
+      <div class="spec">
+        <h4>Đề xuất thiết kế</h4>
+        <ul>
+          <li>Nút <b>“Lấy layer từ bản vẽ”</b> đặt cạnh nút “Thêm layer” ở đầu bảng Layer.</li>
+          <li>Mở một hộp thoại <b>đối chiếu</b>, không phải thay thế. Ba nhóm, mỗi dòng
+            một ô tích:
+            <ul>
+              <li><b>Chỉ có trong bản vẽ</b> — mặc định <em>tích</em> (thêm vào hồ sơ).</li>
+              <li><b>Có ở cả hai nhưng khác thuộc tính</b> — mặc định <em>không tích</em>,
+                hiện hai giá trị cạnh nhau để so.</li>
+              <li><b>Chỉ có trong hồ sơ</b> — mặc định <em>không tích</em>, tích nghĩa là xoá.</li>
+            </ul>
+          </li>
+          <li>Chọn bản vẽ nguồn ngay trong hộp thoại: màn Hồ sơ vốn không gắn với bản vẽ
+            nào, nên phải hỏi.</li>
+          <li>Nhận xong <b>chưa lưu</b> — kết quả vào bản nháp, người dùng vẫn bấm “Lưu hồ sơ”.</li>
+        </ul>
+        <div class="hard">
+          <div class="hard-label">Ràng buộc bắt buộc</div>
+          <ul style="margin-top:11px">
+            <li>Bề dày từ bản vẽ là <b>mã DXF group 370</b>, kho hồ sơ thì nhận
+              <b>milimét 0–2.11</b> hoặc ba tên. Phải quy đổi: <code>-3</code> →
+              <code>Default</code>, <code>-2</code> → <code>ByBlock</code>,
+              <code>-1</code> → <code>ByLayer</code>, giá trị lớn hơn 2.11 → chia 100.
+              Bỏ bước này là mọi layer nhập vào đều bị máy chủ từ chối.</li>
+            <li>Màu đọc từ khoá <code>aci</code> của bảng layer.</li>
+            <li>Bản vẽ phải đang mở trong AutoCAD; nếu chưa, nút phải nói lý do chứ không
+              chỉ mờ đi.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rec">
+    <div class="key">
+      <div class="id">1.2</div>
+      <span class="mark" data-v="build"></span>
+      <div class="verdict">Nên dựng<br>Ưu tiên 4</div>
+    </div>
+    <div>
+      <h3>Sửa giới hạn nhận diện của ánh xạ — nhưng không phải bằng ô JSON</h3>
+      <p>
+        Panel cũ cho sửa <code>bounds</code> bằng một ô văn bản JSON thô. Màn mới giữ
+        được giá trị đó qua mỗi lượt lưu nhưng không sửa được.
+      </p>
+      <p class="tight">
+        <b>Đánh giá: cần, và cần làm khác đi.</b> Đọc lại S2: ô JSON cho phép gõ
+        <code>{"width": 420}</code> — thứ trông như một quy tắc mà không một dòng mã nào
+        đọc tới. Bê nguyên ô JSON sang là bê cả cái bẫy đó.
+      </p>
+
+      <div class="spec">
+        <h4>Đề xuất thiết kế</h4>
+        <ul>
+          <li>Bỏ ô JSON. Thay bằng một khối gập trong dòng ánh xạ, <b>hai nhóm ô có nhãn
+            theo tác dụng thật</b>:
+            <ul>
+              <li><b>Giới hạn vùng</b> — bốn ô <code>minX minY maxX maxY</code>, đơn vị bản
+                vẽ. Ghi rõ: lọc theo <em>tâm</em> đối tượng, và <b>phải đủ cả bốn số</b>
+                mới có tác dụng.</li>
+              <li><b>Giới hạn diện tích</b> — <code>minArea</code>, <code>maxArea</code>,
+                và ô chọn đơn vị (m² · cm² · mm² · đơn vị bản vẽ²).</li>
+            </ul>
+          </li>
+          <li>Nói rõ hai nhóm chạy ở <b>hai chỗ khác nhau</b>: giới hạn vùng lọc ngay
+            trong AutoCAD lúc quét, giới hạn diện tích lọc ở daemon sau đó. Người dùng cần
+            biết để hiểu vì sao số đối tượng lại ra như vậy.</li>
+          <li>Với hồ sơ đang mang khoá chết (<code>width</code>/<code>height</code>/
+            <code>tolerancePercent</code>): hiện một dòng nhắc <em>“3 giá trị ở đây không
+            có tác dụng”</em> kèm nút xoá. <b>Không</b> tự xoá.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <h2>Nhóm 2 · Màn Kiểm tra bản vẽ — 3 mục</h2>
+
+  <div class="rec">
+    <div class="key">
+      <div class="id">2.1</div>
+      <span class="mark" data-v="build"></span>
+      <div class="verdict">Nên dựng<br>Ưu tiên 1</div>
+    </div>
+    <div>
+      <h3>Bảng đối tượng đã nhận diện</h3>
+      <p>
+        Panel cũ có bảng liệt kê mọi đối tượng mà các ánh xạ bắt được: nhãn, loại,
+        handle, layer, rộng, cao, diện tích. Máy chủ <b>vẫn đang trả dữ liệu này</b>
+        trong kết quả quét — màn <code>/review</code> nhận rồi vứt đi.
+      </p>
+      <p class="tight">
+        <b>Đánh giá: cần nhất trong cả danh sách.</b> Theo S3, đây là vòng phản hồi
+        <em>duy nhất</em> cho câu “ánh xạ của tôi có đúng không”. Tệ hơn: app hiện đang
+        khuyên người dùng đúng cách kiểm này — màn Hồ sơ ghi <em>“lưu, rồi quét ở màn
+        Kiểm tra và đối chiếu số đối tượng”</em> — mà không cung cấp cái để đối chiếu.
+        Một lời khuyên không làm theo được.
+      </p>
+
+      <div class="spec">
+        <h4>Đề xuất thiết kế</h4>
+        <ul>
+          <li>Khối riêng ở <code>/review</code>, dưới bảng phát hiện.</li>
+          <li><b>Gộp theo ánh xạ, không phải danh sách phẳng.</b> Mỗi ánh xạ một dòng
+            tổng: tên quy tắc · <b>số đối tượng bắt được</b> · tổng diện tích. Con số đó
+            chính là câu trả lời người dùng đang tìm.</li>
+          <li>Bung một dòng ra mới thấy từng đối tượng: handle, loại, layer, rộng, cao,
+            diện tích.</li>
+          <li>Ánh xạ bắt được <b>0 đối tượng</b> vẫn phải hiện, và hiện nổi — đó là dấu
+            hiệu quy tắc sai rõ nhất.</li>
+        </ul>
+        <div class="hard">
+          <div class="hard-label">Ràng buộc bắt buộc</div>
+          <ul style="margin-top:11px">
+            <li>Danh sách bị cắt ở <b>2.000 đối tượng</b>. Kết quả quét có cờ
+              <code>objectsTruncated</code> — khi cờ bật, phải nói ra, vì một con số đã bị
+              cắt mà trông như số thật là cách tệ nhất để sai.</li>
+            <li>Diện tích đã qua bộ lọc <code>minArea</code>/<code>maxArea</code> của ánh
+              xạ (xem S2). Số ở đây là số <em>sau khi lọc</em>.</li>
+            <li><b>Đơn vị diện tích trong phản hồi không phải m².</b> Máy chủ quy đổi sang
+              m² cho bản lưu nội bộ nhưng gửi ra ngoài số <em>thô theo đơn vị bản vẽ</em>,
+              và không kèm tên đơn vị. Với bản vẽ mm, một phòng 20 m² sẽ là
+              <code>20000000</code>. Hoặc daemon gửi luôn bản đã quy đổi (nó đã tính sẵn),
+              hoặc giao diện tự quy đổi theo <code>INSUNITS</code> — nhưng
+              <b>không được hiện số thô kèm chữ “m²”</b>.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rec">
+    <div class="key">
+      <div class="id">2.2</div>
+      <span class="mark" data-v="build"></span>
+      <div class="verdict">Nên dựng<br>Ưu tiên 3</div>
+    </div>
+    <div>
+      <h3>Chọn và phóng tới đối tượng trong AutoCAD</h3>
+      <p>
+        Panel cũ cho bấm vào handle của một phát hiện để AutoCAD chọn và zoom tới đúng
+        đối tượng đó. Màn mới chỉ in handle ra dạng chữ.
+      </p>
+      <p class="tight">
+        <b>Đánh giá: cần.</b> “13 DIM lệch hàng chuẩn” là một câu vô dụng nếu không tìm
+        được 13 cái đó ở đâu. Đây là cây cầu duy nhất từ danh sách phát hiện sang bản vẽ
+        thật, và không có nó thì người dùng phải tự dò bằng mắt.
+      </p>
+
+      <div class="spec">
+        <h4>Đề xuất thiết kế</h4>
+        <ul>
+          <li>Handle trong bảng phát hiện và trong bảng 2.1 trở thành <b>nút bấm được</b>,
+            không phải chữ tĩnh.</li>
+          <li>Thêm một nút ở khối chi tiết: <b>“Chọn cả N đối tượng của phát hiện này”</b>.</li>
+          <li>Sau khi chạy, nói rõ đã chọn bao nhiêu — và nói rằng việc tiếp theo diễn ra
+            <b>trong AutoCAD</b>, không phải trong app.</li>
+        </ul>
+        <div class="hard">
+          <div class="hard-label">Ràng buộc bắt buộc</div>
+          <ul style="margin-top:11px">
+            <li>Lệnh này <b>không sửa bản vẽ</b> (máy chủ đánh dấu <code>mutates: false</code>)
+              nên không cần thẻ xác nhận. Nhưng nó <b>thay bộ chọn hiện tại</b> trong
+              AutoCAD — phá thao tác người dùng đang làm dở. Phải nói một câu ở gần nút.</li>
+            <li>Chỉ chạy được khi bản vẽ đích <b>đang hoạt động</b> trong AutoCAD.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rec">
+    <div class="key">
+      <div class="id">2.3</div>
+      <span class="mark" data-v="build"></span>
+      <div class="verdict">Nên dựng<br>Ưu tiên 5</div>
+    </div>
+    <div>
+      <h3>Bảng dimension và lệnh căn đều DIMSPACE</h3>
+      <p>
+        Panel cũ liệt kê mọi dimension đọc được từ lượt quét, cho chọn một cái làm chuẩn,
+        rồi căn đều những cái đang tích. Màn mới không có cả hai — và đó chính là lý do
+        <code>/review</code> đang <b>khoá</b> hành động <code>dimspace</code> với lý do
+        “màn hình này chưa hỏi được”.
+      </p>
+      <p class="tight">
+        <b>Đánh giá: cần, nhưng để sau.</b> Đây là 1 trong 5 hành động sửa tự động mà máy
+        chủ làm được, nên đang thiếu 1/5 năng lực. Nhưng nó chỉ chạm tới dimension lệch
+        hàng — hẹp hơn bốn mục trên. Hai thứ này đi cùng nhau: bảng dimension chính là nơi
+        chọn DIM chuẩn.
+      </p>
+
+      <div class="spec">
+        <h4>Đề xuất thiết kế</h4>
+        <ul>
+          <li>Bảng dimension đọc từ lượt quét, mỗi dòng có <b>một nút chọn (radio)</b> để
+            đặt làm chuẩn — không phải ô thả xuống rời khỏi bảng như bản cũ.</li>
+          <li>Dòng đang là chuẩn phải nhìn ra ngay khi liếc, kể cả khi bảng dài.</li>
+          <li>Nút <b>“Căn đều N dim đã chọn theo dim chuẩn”</b> — nhãn nói rõ cả hai vế,
+            vì chọn nhầm dim chuẩn làm xô lệch cả hàng.</li>
+          <li>Khoảng cách hàng lấy từ hồ sơ (<code>rowSpacing</code>) — hiện ra để đọc,
+            không sửa tại đây.</li>
+        </ul>
+        <div class="hard">
+          <div class="hard-label">Ràng buộc bắt buộc</div>
+          <ul style="margin-top:11px">
+            <li><b>Ghi thẳng và không hoàn tác được</b> (S4). Phải qua thẻ xác nhận chế độ
+              <code>immediate</code>, và câu tóm tắt phải nêu số dim sẽ bị dời.</li>
+            <li>Dim chuẩn bị loại khỏi danh sách bị dời — nó là mốc.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <h2>Nhóm 3 · Công cụ thao tác trực tiếp — đã quyết BỎ</h2>
+  <p class="lede">
+    <b>Quyết định 12·08·2026: không port, bỏ hẳn cùng panel cũ.</b> Năm lệnh này không
+    liên quan tới hồ sơ quy tắc nào cả — chúng không trả lời câu “bản vẽ lệch chuẩn ở
+    đâu” mà trả lời câu “tôi tự chọn đối tượng và bảo nó làm gì”. Chúng cũng là các lệnh
+    AutoCAD gốc: một kỹ sư đang mở sẵn AutoCAD gõ <code>SCALE</code> nhanh hơn chuyển
+    sang trình duyệt rồi bấm. Giữ lại hai mục dưới đây để ghi lại thứ đã bỏ và vì sao.
+  </p>
+
+  <div class="rec">
+    <div class="key">
+      <div class="id">3.1</div>
+      <span class="mark" data-v="drop"></span>
+      <div class="verdict">Đã bỏ</div>
+    </div>
+    <div>
+      <h3>Đọc bộ chọn hiện tại của AutoCAD, và đo diện tích</h3>
+      <p>
+        Panel cũ lấy được danh sách đối tượng người dùng đang chọn trong AutoCAD, và có
+        lệnh <code>area</code> đo diện tích của chúng.
+      </p>
+      <p class="tight">
+        <b>Tôi từng đề xuất giữ, nhưng đã bỏ theo cả nhóm.</b> Cả hai chỉ ĐỌC, không sửa
+        gì, và màn <b>Khung bản vẽ</b> (<code>/workspace</code>) vốn đã có khái niệm bộ
+        chọn nên sẽ là chỗ đúng. Nếu sau này cần lại thì đây là một việc nhỏ, tách riêng —
+        không phải lý do giữ panel cũ sống.
+      </p>
+    </div>
+  </div>
+
+  <div class="rec">
+    <div class="key">
+      <div class="id">3.2</div>
+      <span class="mark" data-v="drop"></span>
+      <div class="verdict">Đã bỏ</div>
+    </div>
+    <div>
+      <h3>Phóng to, xoay, đổi màu, chuyển layer</h3>
+      <p>
+        Bốn lệnh <b>ghi</b> chạy trên bộ chọn hiện tại — và <code>scale</code> với
+        <code>rotate</code> còn chạy được trên <b>cả bản vẽ</b>, có điểm gốc tuỳ chọn.
+        <code>layer</code> đi qua hàng chờ hai pha; ba cái còn lại ghi thẳng.
+      </p>
+      <p class="tight">
+        <b>Bỏ.</b> Không có quy trình thật nào cần chúng từ trình duyệt. Chúng cũng là
+        nhóm rủi ro nhất trong cả tài liệu: <b>xoay cả bản vẽ</b> là thao tác không hoàn
+        tác được từ app, làm sai một lần là hỏng cả tệp — một năng lực như vậy cần lý do
+        rõ ràng để tồn tại, và nó không có.
+      </p>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <h2>Nên bỏ — khái niệm không có thật</h2>
+
+  <div class="rec">
+    <div class="key">
+      <div class="id">4.1</div>
+      <span class="mark" data-v="drop"></span>
+      <div class="verdict">Không port</div>
+    </div>
+    <div>
+      <h3>Dấu ★ “hồ sơ đang dùng”</h3>
+      <p>
+        Panel cũ đánh dấu sao vào một hồ sơ trong danh sách. Nhìn thì tưởng là “hồ sơ
+        đang được áp dụng”.
+      </p>
+      <p class="tight">
+        <b>Đánh giá: bỏ.</b> Máy chủ tính giá trị đó bằng
+        <code>state.profiles[0]?.id</code> — không có kho lưu, không có đường đặt nó. Ngôi
+        sao đang nói <em>“hồ sơ đầu danh sách”</em> chứ không phải <em>“đang dùng”</em>.
+        Bê sang là bê một lời nói dối. Nếu bạn thật sự cần khái niệm “hồ sơ mặc định” thì
+        đó là việc của máy chủ trước, giao diện sau.
+      </p>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <h2>Đã đóng ngay trong lượt rà — 3 mục</h2>
+
+  <div class="rec">
+    <div class="key"><div class="id">✓</div></div>
+    <div>
+      <h3>Hai trường hồ sơ vô hình, và một ô bị khoá nhầm</h3>
+      <p>
+        <code>drawing.linearFormat</code> (kiểu ghi số dài) và
+        <code>drawing.frameTolerancePercent</code> (dung sai khung) — panel cũ sửa được,
+        màn mới <b>không có ô nào</b>. Chúng sống sót qua mỗi lượt lưu nhờ phép vá, nên
+        không ai mất dữ liệu và cũng không ai biết chúng tồn tại. Đúng loại lỗi với 20
+        trường dimension từng bị giấu, chỉ nhỏ hơn — và chỉ lộ ra vì rà lại panel cũ.
+      </p>
+      <p class="tight">
+        Ô <b>Loại</b> của ánh xạ thì ngược lại: tôi khoá thành danh sách chọn, trong khi
+        panel cho gõ tự do. Bộ máy nhận diện khung tên bằng biểu thức
+        <code>/frame|sheet|title.?block|khung/</code>, nên khoá lại là lấy mất những cách
+        gọi như <code>sheet</code> hay <code>khung-ten</code>. Đã trả về gõ tự do kèm gợi ý.
+      </p>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <h2>Bộ mẫu hiện tại cần sửa — 4 điểm</h2>
+  <p class="lede">
+    Bốn điểm này nằm trong <code>mau-thiet-ke/js/standards.js</code>. Ba trong số đó
+    <b>trùng đúng những hiểu nhầm tôi cũng mắc</b> khi dựng bảng ánh xạ — bản dựng thật
+    đã sửa rồi, nhưng bộ mẫu thì chưa, nên người thiết kế sẽ thiết kế tiếp trên nền sai.
+  </p>
+
+  <div class="rec">
+    <div class="key"><div class="id">M1</div></div>
+    <div>
+      <h3>Nút “Thử trên bản vẽ” báo 0 khi quy tắc thật sự khớp mọi thứ</h3>
+      <p>
+        Với một quy tắc mới hoặc vừa xoá hết mẫu, bản xem trước trả về 0 kết quả. Thực tế
+        <code>map-entity-p</code> coi đó là <b>khớp cả bản vẽ</b> (S1). Bản xem trước đang
+        trấn an người dùng về đúng quy tắc nguy hiểm nhất.
+      </p>
+      <p class="tight">
+        Nói thêm: bản dựng thật <b>không có</b> nút này, vì máy chủ không có dry-run (S3).
+        Nếu bộ mẫu giữ nút đó, cần biết nó chỉ là hình minh hoạ.
+      </p>
+    </div>
+  </div>
+
+  <div class="rec">
+    <div class="key"><div class="id">M2</div></div>
+    <div>
+      <h3>Loại ánh xạ “Theo nội dung chữ” không tồn tại</h3>
+      <p>
+        Chỉ <code>room</code> mới được đọc mẫu chữ; mọi loại khác bỏ qua trường đó hoàn
+        toàn. Tuỳ chọn này hứa một cách khớp không có thật, và bản xem trước còn hiện một
+        con số mà lượt quét thật sẽ không bao giờ cho ra.
+      </p>
+    </div>
+  </div>
+
+  <div class="rec">
+    <div class="key"><div class="id">M3</div></div>
+    <div>
+      <h3>Bảng màu ACI 10–249 đang được suy ra bằng công thức HSL</h3>
+      <p>
+        AutoCAD dùng một bảng tra cố định. Ô màu suy bằng công thức gần như luôn khác màu
+        thật, nên người dùng chọn theo mắt sẽ lưu một chỉ số không phải màu họ thấy — mà
+        đối chiếu màu bằng mắt lại chính là việc bảng layer sinh ra để phục vụ.
+      </p>
+      <p class="tight">
+        Bản dựng thật chọn cách khác: chỉ tô ô màu cho <b>1–9</b> (chín màu có quy ước),
+        các chỉ số khác hiện số trần với viền nét đứt. Đoán sai còn tệ hơn để trống.
+        Nếu có bảng tra chính xác thì dùng bảng tra; không có thì đừng đoán.
+      </p>
+    </div>
+  </div>
+
+  <div class="rec">
+    <div class="key"><div class="id">M4</div></div>
+    <div>
+      <h3>Ô nhập mẫu đánh rơi chữ đang gõ khi rời ô</h3>
+      <p>
+        Gõ một mẫu rồi bấm Lưu (hoặc sang ô khác, hoặc đổi hồ sơ) mà chưa nhấn Enter thì
+        mẫu đó không được ghi vào quy tắc — mất trong im lặng. Gõ xong rồi bấm Lưu là thao
+        tác thường gặp nhất, nên đây là đường mất dữ liệu dễ đi nhất.
+      </p>
+      <p class="tight">
+        Bản dựng thật nhận chữ khi rời ô. Bộ mẫu nên làm giống.
+      </p>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <h2>Đã chốt — 12·08·2026</h2>
+
+  <div class="ask">
+    <h3>Ba quyết định, và việc chúng mở ra</h3>
+    <ol>
+      <li>
+        <b>Nhóm 3: bỏ hẳn.</b> Không port lệnh phóng/xoay/đổi màu/chuyển layer, cũng
+        không port đo diện tích và đọc bộ chọn. Không có quy trình thật nào cần chúng từ
+        trình duyệt. Việc này gỡ luôn ràng buộc “phải tìm chỗ ở cho nhóm 3 trước khi xoá
+        panel”.
+      </li>
+      <li>
+        <b>Thứ tự: 2.1 → 1.1 → 2.2 → 1.2 → 2.3.</b> Không mục nào cần viết thêm endpoint.
+      </li>
+      <li>
+        <b>Xoá panel khi xong 2.1 + 1.1 + 2.2.</b> Hai mục còn lại (1.2 và 2.3) làm sau
+        cũng được — panel không giữ thứ gì thiết yếu nữa từ thời điểm đó.
+      </li>
+    </ol>
+    <p>
+      Bốn điểm cần sửa trong bộ mẫu (M1–M4) độc lập với thứ tự trên và nên làm sớm, vì
+      mọi thiết kế tiếp theo đều dựng trên nền đó.
+    </p>
+  </div>
+
+  <div class="foot">
+    Rà soát dựa trên mã nguồn tại nhánh main · DrawingStandardsPanel.tsx 2.411 dòng ·
+    đối chiếu app/(shell)/standards/page.tsx, app/(shell)/review/page.tsx,
+    features/standards/ · sự thật máy chủ đọc từ drawingStandards.ts, standardsEngine.ts,
+    standardsProfile.ts và acad-lisp/headless/standards_lib.lsp
+  </div>
+
+</div>

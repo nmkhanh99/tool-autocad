@@ -129,11 +129,19 @@ export type StandardsProfile = {
   version: number;
   unit: string;
   insunits: number | undefined;
+  /** Kiểu ghi số dài của AutoCAD (LUNITS). `linearFormat()` của daemon hiểu năm
+   * TÊN (`Decimal`, `Scientific`, `Engineering`, `Architectural`, `Fractional`)
+   * hoặc số 1–5. Trường này panel cũ sửa được còn màn mới thì không — nó chỉ
+   * sống sót nhờ phép vá, và người dùng không biết nó tồn tại. */
+  linearFormat: string;
   precision: number | undefined;
   modelScale: number | undefined;
   paperName: string;
   paperWidth: number | undefined;
   paperHeight: number | undefined;
+  /** Dung sai khi so khung tên với khổ giấy, theo phần trăm (`0…100`). Lượt quét
+   * dùng nó để quyết một khung lệch bao nhiêu thì bị báo lỗi. */
+  frameTolerancePercent: number | undefined;
   dimStyleName: string;
   dimTextHeight: number | undefined;
   dimOverallScale: number | undefined;
@@ -165,12 +173,14 @@ export function normalizeProfile(value: unknown): StandardsProfile {
     revision: str(source.revision),
     version: num(source.version) ?? 0,
     unit: str(drawing.unit),
+    linearFormat: str(drawing.linearFormat),
     insunits: num(drawing.insunits),
     precision: num(drawing.precision),
     modelScale: num(drawing.modelScale),
     paperName: str(paper.name),
     paperWidth: num(paper.width),
     paperHeight: num(paper.height),
+    frameTolerancePercent: num(drawing.frameTolerancePercent),
     dimStyleName: str(dimension.styleName),
     dimTextHeight: num(dimension.textHeight),
     dimOverallScale: num(dimension.overallScale),
@@ -237,9 +247,11 @@ export function applyProfileEdits(profile: StandardsProfile): JsonRecord {
     drawing: {
       ...drawing,
       unit: profile.unit,
+      linearFormat: profile.linearFormat,
       insunits: profile.insunits,
       precision: profile.precision,
       modelScale: profile.modelScale,
+      frameTolerancePercent: profile.frameTolerancePercent,
       paper: {
         ...paper,
         name: profile.paperName,
@@ -288,6 +300,18 @@ export function applyProfileEdits(profile: StandardsProfile): JsonRecord {
   };
 }
 
+/** Giới hạn độ dài của từng trường chữ, lấy đúng từ `stringValue(..., {maxLength})`
+ * của daemon. Vượt là 400 — và vì các ô này gõ tự do, dán một đoạn dài là chạm
+ * tới ngay. Gom một chỗ để khi daemon đổi số thì chỉ phải sửa ở đây.
+ *
+ * `unit` 64 · `styleName` 255 · `profile.name` 160 — xem `standardsProfile.ts`. */
+export const MAX_LENGTHS = {
+  layerName: 255,
+  linetype: 255,
+  mappingLabel: 160,
+  mappingKind: 64,
+} as const;
+
 /** Vì sao bảng layer chưa hợp lệ — theo từng dòng. Rỗng nghĩa là dòng đó ổn.
  *
  * Trả về theo CHỈ SỐ DÒNG chứ không phải một câu chung: người dùng phải biết
@@ -303,6 +327,16 @@ export function layerRowErrors(layers: readonly LayerRule[]): (string | null)[] 
     const key = name.toLocaleUpperCase("en-US");
     if (seen.has(key)) return "Trùng tên với một layer phía trên.";
     seen.add(key);
+
+    if (name.length > MAX_LENGTHS.layerName) {
+      return `Tên layer dài quá ${MAX_LENGTHS.layerName} ký tự.`;
+    }
+    /* Đo trên chuỗi ĐÃ TRIM — `stringValue()` của daemon gọi `value.trim()` rồi
+       mới so với `maxLength`. Đo chuỗi thô là chặn một hồ sơ máy chủ chấp nhận,
+       chỉ vì một dấu cách thừa ở cuối. */
+    if (String(layer.linetype).trim().length > MAX_LENGTHS.linetype) {
+      return `Kiểu nét dài quá ${MAX_LENGTHS.linetype} ký tự.`;
+    }
 
     const color = colorProblem(layer.color);
     if (color) return color;
@@ -372,6 +406,15 @@ function lineweightProblem(weight: string | number): string | null {
  * đúng loại này — xem `mappingRowErrors()`. */
 export const ROOM_KIND = "room";
 
+/** Năm tên `linearFormat()` của daemon hiểu. Ngoài ra nó nhận số 1–5.
+ *
+ * `stringValue()` lúc lưu cho qua MỌI chuỗi ≤64 ký tự, nên `"6"` hay `"foo"` lưu
+ * êm rồi ném lỗi ở bước `apply-units` — cùng một cái bẫy với màu `RGB(...)` và
+ * bề dày dạng chữ lạ. */
+export const LINEAR_FORMATS = [
+  "Decimal", "Scientific", "Engineering", "Architectural", "Fractional",
+] as const;
+
 /** Vì sao bảng ánh xạ chưa hợp lệ — theo từng dòng.
  *
  * Ràng buộc lấy từ `sanitizeMapping()` + `assertUnique()` của daemon và từ
@@ -397,7 +440,15 @@ export function mappingRowErrors(mappings: readonly MappingRule[]): (string | nu
 
     // `stringValue()` từ chối chuỗi rỗng y như với mọi trường chữ khác.
     if (!mapping.label.trim()) return "Nhãn không được để trống.";
+    if (mapping.label.trim().length > MAX_LENGTHS.mappingLabel) {
+      return `Nhãn dài quá ${MAX_LENGTHS.mappingLabel} ký tự.`;
+    }
     if (!mapping.kind.trim()) return "Loại không được để trống.";
+    /* Ô Loại vừa được mở thành gõ tự do ở lượt này, nên giới hạn 64 ký tự của
+       daemon trở nên chạm tới được — dán một đoạn dài là ăn 400. */
+    if (mapping.kind.trim().length > MAX_LENGTHS.mappingKind) {
+      return `Loại dài quá ${MAX_LENGTHS.mappingKind} ký tự.`;
+    }
 
     const isRoom = mapping.kind.trim().toLowerCase() === ROOM_KIND;
 
@@ -734,6 +785,7 @@ export function profileSaveBlockedReason(
        máy chủ từ chối. */
     { label: "Rộng khổ", value: profile.paperWidth, min: 0.001, max: 1_000_000 },
     { label: "Cao khổ", value: profile.paperHeight, min: 0.001, max: 1_000_000 },
+    { label: "Dung sai khung", value: profile.frameTolerancePercent, min: 0, max: 100 },
     /* Cao chữ cho phép 0 — dimstyle annotative lấy chiều cao từ style. */
     { label: "Cao chữ", value: profile.dimTextHeight, min: 0, max: 1_000_000 },
     { label: "Tỷ lệ tổng", value: profile.dimOverallScale, min: 0.000001, max: 1_000_000_000 },
@@ -760,10 +812,22 @@ export function profileSaveBlockedReason(
     ["Tên hồ sơ", profile.name],
     ["Đơn vị", profile.unit],
     ["Tên khổ", profile.paperName],
+    ["Kiểu ghi số", profile.linearFormat],
     ["Tên dimstyle", profile.dimStyleName],
   ] as const;
   const blank = texts.filter(([, value]) => !value.trim()).map(([label]) => label);
   if (blank.length) return `Không được để trống: ${blank.join(", ")}.`;
+
+  /* Kiểu ghi số: kho hồ sơ nhận mọi chuỗi, `linearFormat()` lúc áp dụng chỉ hiểu
+     năm tên hoặc số 1–5. Chặn ở đây để lỗi hiện ra nơi sửa được. */
+  const format = profile.linearFormat.trim();
+  const formatNumber = Number(format);
+  const formatOk = LINEAR_FORMATS.some((name) => name.toLowerCase() === format.toLowerCase())
+    || (Number.isInteger(formatNumber) && formatNumber >= 1 && formatNumber <= 5);
+  if (!formatOk) {
+    return `Kiểu ghi số “${format}” lưu được nhưng lượt áp dụng không hiểu — `
+      + `chỉ nhận ${LINEAR_FORMATS.join(", ")} hoặc số 1–5.`;
+  }
 
   const layerError = layerRowErrors(profile.layers).findIndex(Boolean);
   if (layerError >= 0) {

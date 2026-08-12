@@ -401,6 +401,11 @@ export function MappingTable({ mappings, onChange, disabled }: {
         </span>
       </div>
 
+      <datalist id="acad-mapping-kinds">
+        {["object", ROOM_KIND, "frame", "cut-plane", "sheet"]
+          .map((kind) => <option key={kind} value={kind} />)}
+      </datalist>
+
       <div className="tablewrap">
         <table className="data">
           <thead>
@@ -437,16 +442,18 @@ export function MappingTable({ mappings, onChange, disabled }: {
                     onChange={(event) => patch(index, { label: event.target.value })} />
                 </td>
                 <td>
-                  <select className="cell mono" value={mapping.kind} disabled={disabled}
+                  {/* Gõ TỰ DO kèm gợi ý, không phải danh sách đóng. Panel cũ
+                      cho nhập bất kỳ chuỗi nào, và điều đó có ý nghĩa: bộ máy
+                      nhận diện khung tên bằng regex `/frame|sheet|title.?block|
+                      khung/` trên `kind`, nên `sheet` hay `khung-ten` đều dùng
+                      được. Khoá thành select là lấy mất những cách gọi đó.
+                      Riêng `room` mới đổi hành vi chương trình LISP.
+                      KHÔNG gợi ý `text`: đó là loại tôi bịa ra ở bản trước, nó
+                      hứa một cách khớp không tồn tại. */}
+                  <input className="cell mono" value={mapping.kind} disabled={disabled}
+                    list="acad-mapping-kinds"
                     aria-label={`Loại dòng ${index + 1}`}
-                    onChange={(event) => patch(index, { kind: event.target.value })}>
-                    {/* KHÔNG có `text` ở đây. Chương trình LISP chỉ rẽ nhánh trên
-                        `room`; `frame` thì bộ máy dùng để nhận diện khung tên
-                        (`/frame|sheet|title.?block|khung/`). Một loại `text` là
-                        thứ tôi bịa ra, và nó hứa một cách khớp không tồn tại. */}
-                    {[...new Set([mapping.kind, "object", ROOM_KIND, "frame", "cut-plane"])]
-                      .map((kind) => <option key={kind} value={kind}>{kind}</option>)}
-                  </select>
+                    onChange={(event) => patch(index, { kind: event.target.value })} />
                 </td>
                 <td>
                   <TagInput values={mapping.layerPatterns} disabled={disabled}

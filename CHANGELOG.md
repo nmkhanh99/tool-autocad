@@ -1,5 +1,87 @@
 # CHANGELOG
 
+## 2026-08-12 — Rà soát panel cũ trước khi xoá: 13 khoảng trống, 3 đã đóng
+
+### Added — hai trường hồ sơ từng vô hình ở màn mới
+
+Rà từng chức năng của `DrawingStandardsPanel.tsx` (2.411 dòng) đối chiếu
+`/standards` + `/review` — theo đúng bài học đã ghi sau lượt `/workspace`: rà
+trước, port cái thiếu, rồi mới xoá.
+
+Việc rà lộ ra ngay hai trường panel cũ sửa được mà màn mới **không có ô nào**:
+
+- `drawing.linearFormat` — kiểu ghi số dài (LUNITS).
+- `drawing.frameTolerancePercent` — khung lệch quá bao nhiêu phần trăm thì lượt
+  quét báo lỗi.
+
+Chúng sống sót qua mỗi lượt lưu nhờ phép vá `...drawing`, nên không ai mất dữ
+liệu và cũng **không ai biết chúng tồn tại**. Đúng loại lỗi với 20 trường
+dimension từng bị giấu, chỉ nhỏ hơn — và chỉ lộ ra vì rà lại panel cũ.
+
+### Fixed — ô “Loại” của ánh xạ bị khoá nhầm thành danh sách chọn
+
+Panel cũ cho gõ tự do. Bộ máy nhận diện khung tên bằng
+`/frame|sheet|title.?block|khung/i` trên `kind`, nên `sheet` hay `khung-ten` đều
+là giá trị dùng được — khoá thành `select` là lấy mất chúng. Nay gõ tự do kèm
+gợi ý, và vẫn không gợi ý `text` (loại không tồn tại).
+
+### Fixed — `linearFormat` lưu được nhưng áp dụng không hiểu
+
+Codex bắt: `stringValue()` cho qua mọi chuỗi ≤64 ký tự, còn `linearFormat()` lúc
+áp dụng chỉ hiểu năm tên hoặc số 1–5. Gõ `6` hay `foo` là lưu êm rồi hỏng ở
+`apply-units`. Cùng một cái bẫy với màu `RGB(...)` và bề dày dạng chữ lạ — nay
+chặn cùng một cách.
+
+### Fixed — Codex review: giới hạn độ dài, và tài liệu nói dối sau khi bỏ theo dõi bộ mẫu
+
+- **Ô Loại của ánh xạ vượt 64 ký tự thì lưu hỏng.** Chính lượt này mở nó thành gõ
+  tự do, nên giới hạn của daemon mới trở nên chạm tới được — dán một đoạn dài là
+  ăn 400. Gom mọi giới hạn chữ vào `MAX_LENGTHS`: tên layer 255, kiểu nét 255,
+  nhãn ánh xạ 160, loại ánh xạ 64.
+- **Bỏ theo dõi `mau-thiet-ke/` làm `DEVELOPMENT.md` nói dối.** Nó vẫn trỏ tới bộ
+  mẫu như nguồn thiết kế, trong khi một bản clone mới sẽ không có thư mục đó —
+  vi phạm quy tắc "tài liệu phải đủ rõ để người khác clone và tiếp tục". Nay ghi
+  rõ bộ mẫu nằm ngoài repo, kèm ba lệnh tra lại bản đã commit ở `82f5232`, và
+  nói thẳng rằng bản **mới nhất** chỉ có trên máy người thiết kế.
+- **Hai trường `drawing` mới chưa vào mô hình dữ liệu.** Đã bổ sung bảng đầy đủ
+  sáu trường `drawing` vào `DEVELOPMENT.md` kèm ràng buộc và nơi đọc chúng lúc
+  áp dụng.
+
+### Technical — kết quả rà soát
+
+**Không xoá được panel.** Còn 10 khoảng trống sau khi đóng 3 cái trên. Ghi đầy đủ
+trong `ROADMAP.md`; bản đề xuất thiết kế kèm ràng buộc từng mục ở
+`DE-XUAT-UI-CON-THIEU.html`.
+
+Ba sự thật máy chủ đào ra khi đánh giá, cả ba đều trái với thứ nhìn giao diện mà
+đoán:
+
+- **`bounds` của ánh xạ là ba thứ nằm chung một tên.** `minX/minY/maxX/maxY` tới
+  chương trình LISP lọc theo vùng; `minArea/maxArea/areaUnit` lọc ở daemon **sau**
+  lượt quét; còn `width/height/tolerancePercent` — thứ hồ sơ mặc định đang có ở
+  `drawing-frame` — **không ai đọc**. Việc so khung với khổ giấy lấy số từ
+  `drawing.paper`, không phải từ đây.
+- **Máy chủ đã trả `objects` và `dimensions` trong kết quả quét**, `/review` nhận
+  rồi vứt. Hệ quả: câu app đang khuyên ở màn hồ sơ — “lưu, rồi quét ở màn Kiểm
+  tra và đối chiếu số đối tượng” — hiện **không làm theo được**.
+- **`activeProfileId` không phải một thiết lập.** Daemon tính nó bằng
+  `state.profiles[0]?.id`. Dấu ★ của panel cũ nói “hồ sơ đầu danh sách”, không
+  phải “đang dùng” — cố ý không port.
+
+**Quyết định của user (2026-08-12):** bỏ hẳn nhóm công cụ thao tác trực tiếp
+(`scale`, `rotate`, `color`, `layer`, `area`, đọc bộ chọn). Chúng là lệnh AutoCAD
+gốc, và là nhóm rủi ro nhất — `scale`/`rotate` chạy được trên cả bản vẽ, không
+hoàn tác được từ app. Thứ tự năm mục còn lại: 2.1 → 1.1 → 2.2 → 1.2 → 2.3; xoá
+panel khi xong ba mục đầu.
+
+Codex cũng soi bộ mẫu và tìm ra **ba hiểu nhầm y hệt ba cái bản dựng thật vừa
+sửa** — loại `text` không tồn tại, “không mẫu nào” bị hiểu là khớp-0 trong khi
+thật ra khớp-tất-cả, và ACI 10–249 đoán màu bằng HSL — cộng một lỗi mất chữ khi
+rời ô nhập. Bốn điểm đó nằm trong `mau-thiet-ke/`, đã ghi thành mục riêng (M1–M4)
+của bản đề xuất để người thiết kế sửa trước khi thiết kế tiếp.
+
+---
+
 ## 2026-08-12 — Ba bảng của bộ mẫu vào app thật
 
 ### Added — `/standards` sửa được layer, ánh xạ và 20 trường kích thước

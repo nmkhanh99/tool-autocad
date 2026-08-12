@@ -25,6 +25,7 @@ import {
   profileSaveBlockedReason,
   targetOf,
   unsupportedFixReason,
+  LINEAR_FORMATS,
   LINEWEIGHTS,
   layerRowErrors,
   mappingRowErrors,
@@ -311,7 +312,8 @@ test("ô số của hồ sơ là BẮT BUỘC, không phải 'trống = không r
   const full = normalizeProfile({
     id: "p", name: "M", revision: "h",
     drawing: {
-      unit: "mm", insunits: 4, precision: 0, modelScale: 1,
+      unit: "mm", linearFormat: "Decimal", insunits: 4, precision: 0, modelScale: 1,
+      frameTolerancePercent: 1,
       paper: { name: "A3", width: 420, height: 297 },
     },
     dimension: { styleName: "ACAD", textHeight: 2.5, overallScale: 1 },
@@ -506,7 +508,8 @@ test("dòng bảng hỏng thì CHẶN LƯU, kèm số dòng", () => {
   const base = normalizeProfile({
     id: "p", name: "M", revision: "h",
     drawing: {
-      unit: "mm", insunits: 4, precision: 0, modelScale: 1,
+      unit: "mm", linearFormat: "Decimal", insunits: 4, precision: 0, modelScale: 1,
+      frameTolerancePercent: 1,
       paper: { name: "A3", width: 420, height: 297 },
     },
     dimension: { styleName: "ACAD", textHeight: 2.5, overallScale: 1 },
@@ -650,7 +653,8 @@ test("bảng kích thước nâng cao không được đổi KIỂU của trư�
   const saved = normalizeProfile({
     id: "p", name: "M", revision: "h",
     drawing: {
-      unit: "mm", insunits: 4, precision: 0, modelScale: 1,
+      unit: "mm", linearFormat: "Decimal", insunits: 4, precision: 0, modelScale: 1,
+      frameTolerancePercent: 1,
       paper: { name: "A3", width: 420, height: 297 },
     },
     dimension: {
@@ -693,4 +697,106 @@ test("bảng kích thước nâng cao không được đổi KIỂU của trư�
   /* Không có bản đã lưu để đối chiếu thì KHÔNG kết luận: đoán kiểu từ bản nháp
      là đoán từ chính cái giá trị hỏng cần bắt. */
   assert.equal(profileSaveBlockedReason(asText), "");
+});
+
+test("hai trường drawing panel cũ sửa được phải đi tới nơi", () => {
+  /* `linearFormat` và `frameTolerancePercent` từng vô hình ở màn mới: chúng sống
+     sót qua mỗi lượt lưu nhờ phép vá `...drawing`, nên không ai mất dữ liệu và
+     cũng không ai biết chúng tồn tại. Đúng loại lỗi với 20 trường dimension,
+     chỉ nhỏ hơn — và chỉ lộ ra khi rà lại panel cũ trước lúc xoá nó. */
+  const source = {
+    id: "p", name: "M", revision: "h",
+    drawing: {
+      unit: "mm", linearFormat: "Decimal", insunits: 4, precision: 0, modelScale: 1,
+      frameTolerancePercent: 1,
+      paper: { name: "A3", width: 420, height: 297 },
+    },
+    dimension: { styleName: "ACAD", textHeight: 2.5, overallScale: 1 },
+  };
+  const loaded = normalizeProfile(source);
+  assert.equal(loaded.linearFormat, "Decimal");
+  assert.equal(loaded.frameTolerancePercent, 1);
+
+  const payload = applyProfileEdits({
+    ...loaded, linearFormat: "Architectural", frameTolerancePercent: 2.5,
+  }) as Record<string, any>;
+  assert.equal(payload.drawing.linearFormat, "Architectural");
+  assert.equal(payload.drawing.frameTolerancePercent, 2.5);
+
+  /* Cả hai đều BẮT BUỘC ở daemon: `stringValue()` từ chối chuỗi rỗng,
+     `numberValue()` từ chối `undefined`, và dung sai phải nằm trong 0–100. */
+  assert.equal(profileSaveBlockedReason(loaded, loaded), "");
+  assert.match(profileSaveBlockedReason({ ...loaded, linearFormat: " " }, loaded), /Kiểu ghi số/);
+  assert.match(
+    profileSaveBlockedReason({ ...loaded, frameTolerancePercent: undefined }, loaded),
+    /Dung sai khung/,
+  );
+  assert.match(
+    profileSaveBlockedReason({ ...loaded, frameTolerancePercent: 101 }, loaded),
+    /nhỏ hơn hoặc bằng 100/,
+  );
+  assert.equal(profileSaveBlockedReason({ ...loaded, frameTolerancePercent: 0 }, loaded), "");
+});
+
+test("kiểu ghi số phải là thứ bước áp dụng hiểu được", () => {
+  /* Cùng cái bẫy với màu `RGB(...)` và bề dày dạng chữ lạ: `stringValue()` lúc
+     lưu cho qua mọi chuỗi, `linearFormat()` lúc áp dụng chỉ hiểu năm tên hoặc
+     số 1–5. Không chặn ở đây là để hồ sơ lưu êm rồi chết ở `apply-units`. */
+  const base = normalizeProfile({
+    id: "p", name: "M", revision: "h",
+    drawing: {
+      unit: "mm", linearFormat: "Decimal", insunits: 4, precision: 0, modelScale: 1,
+      frameTolerancePercent: 1,
+      paper: { name: "A3", width: 420, height: 297 },
+    },
+    dimension: { styleName: "ACAD", textHeight: 2.5, overallScale: 1 },
+  });
+  assert.equal(profileSaveBlockedReason(base, base), "");
+
+  for (const name of LINEAR_FORMATS) {
+    assert.equal(profileSaveBlockedReason({ ...base, linearFormat: name }, base), "", name);
+  }
+  // Hoa/thường không quan trọng — daemon so sau khi hạ chữ.
+  assert.equal(profileSaveBlockedReason({ ...base, linearFormat: "decimal" }, base), "");
+  // Số 1–5 cũng hợp lệ.
+  for (const value of ["1", "5"]) {
+    assert.equal(profileSaveBlockedReason({ ...base, linearFormat: value }, base), "", value);
+  }
+  assert.match(profileSaveBlockedReason({ ...base, linearFormat: "6" }, base), /không hiểu/);
+  assert.match(profileSaveBlockedReason({ ...base, linearFormat: "foo" }, base), /không hiểu/);
+});
+
+test("giới hạn độ dài chữ lấy đúng từ daemon", () => {
+  /* `stringValue(..., {maxLength})` của daemon từ chối chuỗi dài — và các ô này
+     gõ tự do nên dán một đoạn dài là chạm tới ngay. Ô Loại vừa được mở thành gõ
+     tự do ở chính lượt này, nên giới hạn 64 của nó mới trở nên với tới được. */
+  const layers = (over: Partial<LayerRule>): LayerRule[] => [{
+    name: "A", color: 7, linetype: "Continuous", lineweight: "Default", required: true,
+    ...over,
+  }];
+  const maps = (over: Partial<MappingRule>): MappingRule[] => [{
+    id: "m1", sourceId: "m1", label: "Tường", kind: "object",
+    layerPatterns: ["A-*"], blockPatterns: [], textPatterns: [], entityTypes: [],
+    required: false,
+    ...over,
+  }];
+
+  assert.equal(layerRowErrors(layers({ name: "x".repeat(255) }))[0], null);
+  assert.match(layerRowErrors(layers({ name: "x".repeat(256) }))[0] ?? "", /255 ký tự/);
+  assert.match(
+    layerRowErrors(layers({ linetype: "x".repeat(256) }))[0] ?? "",
+    /Kiểu nét dài quá/,
+  );
+
+  assert.equal(mappingRowErrors(maps({ kind: "k".repeat(64) }))[0], null);
+  assert.match(mappingRowErrors(maps({ kind: "k".repeat(65) }))[0] ?? "", /64 ký tự/);
+  assert.equal(mappingRowErrors(maps({ label: "L".repeat(160) }))[0], null);
+  assert.match(mappingRowErrors(maps({ label: "L".repeat(161) }))[0] ?? "", /160 ký tự/);
+
+  /* Đo trên chuỗi ĐÃ TRIM: `stringValue()` gọi `value.trim()` rồi mới so với
+     `maxLength`, nên một dấu cách thừa ở cuối KHÔNG được làm hồ sơ bị chặn —
+     máy chủ sẽ nhận nó bình thường. */
+  assert.equal(mappingRowErrors(maps({ kind: " " + "k".repeat(64) + " " }))[0], null);
+  assert.equal(mappingRowErrors(maps({ label: "L".repeat(160) + "  " }))[0], null);
+  assert.equal(layerRowErrors(layers({ linetype: "x".repeat(255) + " " }))[0], null);
 });

@@ -40,6 +40,24 @@ HTTP loopback `127.0.0.1:8788`.
 Repo đang trong quá trình chuyển giao diện sang bộ mẫu `mau-thiet-ke/`.
 Kế hoạch đầy đủ: `KE-HOACH-CHUYEN-DOI-UI.html` (11 giai đoạn).
 
+> **`mau-thiet-ke/` KHÔNG còn nằm trong repo** (bỏ theo dõi 2026-08-12, xem
+> `.gitignore`). Nó là bản dựng thử của người thiết kế, được sinh lại liên tục
+> bằng công cụ, và app thật **không import một dòng nào** từ đó — nó là tài liệu
+> tham chiếu, không phải mã nguồn. Để trong repo thì mỗi lượt chỉnh mẫu đẻ ra
+> một diff hàng trăm dòng lẫn vào diff thật.
+>
+> **Bản đã commit vẫn tra được trong lịch sử tại `82f5232`:**
+>
+> ```bash
+> git show 82f5232 --stat -- mau-thiet-ke/          # xem có những file gì
+> git show 82f5232:mau-thiet-ke/css/app.css         # đọc một file
+> git checkout 82f5232 -- mau-thiet-ke/             # lấy lại cả thư mục
+> ```
+>
+> Bản **mới nhất** không nằm trong lịch sử — nó chỉ có trên máy người thiết kế.
+> Mọi trích dẫn từ bộ mẫu trong tài liệu này vì vậy phải nêu rõ giá trị được
+> trích, đừng bắt người đọc mở file mới hiểu.
+
 ```
 apps/web/
 ├── next.config.mjs          output: "export" + trailingSlash: true
@@ -319,8 +337,9 @@ Component đặt attribute trong `useEffect` và **phải gỡ khi unmount** —
 Ba quy tắc:
 
 1. **Luôn đổi tên phía sẽ chết** (`globals.css` → tiền tố `legacy-`), không bao
-   giờ đổi phía design system — đổi là fork khỏi `mau-thiet-ke/css/app.css` và
-   không đồng bộ lại được nữa.
+   giờ đổi phía design system — đổi là fork khỏi `mau-thiet-ke/css/app.css`
+   (không còn trong repo; bản gốc ở `git show 82f5232:mau-thiet-ke/css/app.css`)
+   và không đồng bộ lại được nữa.
 2. **Mọi gate dùng `:where()`** để giữ nguyên specificity. Mục tiêu của giai đoạn
    1 là giao diện không đổi một pixel, nên cascade cũng không được đổi.
 3. **`design-system.css` chỉ được lệch khỏi mẫu theo danh sách khai ở đầu file.**
@@ -600,6 +619,34 @@ Hai màn hình dùng chung một API, và ràng buộc giữa chúng là thứ d
 > `prepare`, không có id để huỷ, không vào hàng chờ của `/changes`. Thẻ xác nhận
 > phải dùng `mode="immediate"`; dùng `"staged"` là hứa một bước rút lui không
 > tồn tại.
+
+#### Các trường `drawing` giao diện gửi lên
+
+Cả sáu đều **bắt buộc** — `sanitizeDrawing` gọi `numberValue()`/`stringValue()`,
+và cả hai từ chối thiếu hoặc rỗng. Khoảng giá trị lấy đúng từ
+`standardsProfile.ts`, đừng đoán:
+
+| Trường | Kiểu | Ràng buộc | Ai đọc lúc áp dụng |
+|---|---|---|---|
+| `unit` | chuỗi | ≤64 ký tự, không rỗng | — |
+| `insunits` | số | nguyên `0…24` | `apply-units` |
+| `precision` | số | nguyên `0…8` | `apply-units` |
+| `modelScale` | số | `0.000001…1e9` | so khung với khổ giấy |
+| `linearFormat` | chuỗi | ≤64 ký tự — nhưng `linearFormat()` lúc áp dụng **chỉ hiểu** `Decimal`/`Scientific`/`Engineering`/`Architectural`/`Fractional` hoặc số `1…5` | `apply-units` (→ LUNITS) |
+| `frameTolerancePercent` | số | `0…100` | `expectedSheet()` — khung lệch quá bao nhiêu phần trăm thì báo lỗi |
+
+Hai trường cuối từng **vô hình** ở màn `/standards`: chúng sống sót qua mỗi lượt
+lưu nhờ phép vá `...drawing`, nên không ai mất dữ liệu và cũng không ai biết
+chúng tồn tại. Cùng loại lỗi với 20 trường `dimension` từng bị giấu.
+
+`linearFormat` là ví dụ rõ nhất của **hai tầng kiểm khác nhau**: kho hồ sơ nhận
+mọi chuỗi ≤64, còn bước áp dụng chỉ hiểu năm tên. Gõ `6` là lưu êm rồi hỏng ở
+`apply-units`. `profileSaveBlockedReason()` chặn theo tầng **chặt hơn** — cùng
+cách đã làm với màu `RGB(...)` và bề dày dạng chữ lạ.
+
+Giới hạn độ dài các trường chữ khác gom trong `MAX_LENGTHS` của
+`features/standards/model.ts`: tên layer 255, kiểu nét 255, nhãn ánh xạ 160,
+loại ánh xạ 64.
 
 Hồ sơ mang **hai** chỉ số phiên bản, cố ý không thay thế nhau:
 

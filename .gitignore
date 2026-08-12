@@ -84,3 +84,10 @@ React/
 # xung đột mỗi lần ai đó mở bộ mẫu.
 *.artifact.json
 .od-skills/
+
+# Bộ mẫu thiết kế. Nó là bản dựng thử của người thiết kế, sửa liên tục bằng công
+# cụ sinh mã, và KHÔNG phải mã nguồn của sản phẩm — app thật đọc nó như tài liệu
+# tham chiếu chứ không import dòng nào. Để trong repo thì mỗi lượt chỉnh mẫu lại
+# đẻ ra một diff hàng trăm dòng lẫn vào diff thật.
+# Bản đã commit vẫn nằm trong lịch sử tại 82f5232 nếu cần tra lại.
+mau-thiet-ke/

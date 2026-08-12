@@ -401,9 +401,18 @@ nó.
 Soạn bộ quy tắc mà màn Kiểm tra dùng để quét. **Màn hình này không chạm vào bản
 vẽ** — nó chỉ sửa một hồ sơ nằm trong daemon.
 
-Sửa được: tên hồ sơ, đơn vị, INSUNITS, số lẻ, tỷ lệ model, khổ khung tên, ba
-thiết lập kích thước (tên dimstyle, cao chữ, tỷ lệ tổng), **danh sách layer bắt
-buộc**, **ánh xạ đối tượng**, và **20 thiết lập kích thước nâng cao**.
+Sửa được: tên hồ sơ, đơn vị, kiểu ghi số, INSUNITS, số lẻ, tỷ lệ model, khổ
+khung tên, dung sai khung, ba thiết lập kích thước (tên dimstyle, cao chữ, tỷ lệ
+tổng), **danh sách layer bắt buộc**, **ánh xạ đối tượng**, và **20 thiết lập kích
+thước nâng cao**.
+
+Hai ô dễ bỏ qua:
+
+- **Kiểu ghi số** là LUNITS của AutoCAD. Chỉ nhận năm tên — `Decimal`,
+  `Scientific`, `Engineering`, `Architectural`, `Fractional` — hoặc số 1–5. Gõ
+  thứ khác thì lưu được nhưng lượt áp dụng sẽ không hiểu, nên app chặn trước.
+- **Dung sai khung (%)** quyết định khung tên lệch quá bao nhiêu phần trăm so với
+  khổ giấy thì lượt quét báo lỗi. Từ 0 đến 100.
 
 #### Bảng layer
 
@@ -427,6 +436,10 @@ trùng tên với dòng phía trên, hoặc màu/bề dày ngoài khoảng.
 **Ánh xạ quyết định đối tượng nào bị tính diện tích — sửa sai là sai cả bảng bóc
 tách.** Mỗi mẫu nhận diện là một **thẻ** riêng: gõ rồi Enter (hoặc dấu phẩy) để
 thêm, bấm × để bỏ. Dán được cả danh sách ngăn bằng dấu phẩy.
+
+Ô **Loại** gõ tự do. Chỉ `room` làm lượt quét chạy khác đi (xem mục mẫu chữ bên
+dưới); ngoài ra tên nào chứa `frame`, `sheet`, `title block` hay `khung` sẽ được
+nhận diện là khung tên khi chấm điểm.
 
 **App không xem trước được tác động.** Máy chủ chưa có đường thử một quy tắc
 chưa lưu. Cách kiểm duy nhất: lưu, rồi quét ở màn Kiểm tra và đối chiếu số đối

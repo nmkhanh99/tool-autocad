@@ -33,6 +33,7 @@ import { Tag } from "../../../components/ui/Tag";
 import { DAEMON_BASE, endpoints } from "../../../lib/daemon/endpoints";
 import { daemonFailureText, daemonRecord } from "../../../lib/daemon/client";
 import {
+  LINEAR_FORMATS,
   applyProfileEdits,
   normalizeProfile,
   profileSaveBlockedReason,
@@ -364,6 +365,20 @@ export default function StandardsPage() {
                 <NumberField label="Số lẻ" value={draft.precision}
                   onChange={(precision) => patch({ precision })}
                   hint="Máy chủ đòi một số ở đây; 0 là giá trị hợp lệ, ô trống thì không." />
+                {/* Panel cũ sửa được hai trường dưới đây, màn này thì không —
+                    chúng sống sót qua mỗi lượt lưu nhờ phép vá, nên người dùng
+                    không mất dữ liệu, nhưng cũng không biết chúng tồn tại. Cùng
+                    một lỗi với 20 trường dimension, chỉ nhỏ hơn. */}
+                <label className="field">
+                  <span>Kiểu ghi số</span>
+                  <input className="input" list="acad-linear-formats"
+                    value={draft.linearFormat}
+                    onChange={(event) => patch({ linearFormat: event.target.value })} />
+                  <span className="hint">LUNITS. Năm tên, hoặc số 1–5.</span>
+                </label>
+                <datalist id="acad-linear-formats">
+                  {LINEAR_FORMATS.map((name) => <option key={name} value={name} />)}
+                </datalist>
                 <NumberField label="Tỷ lệ model" value={draft.modelScale}
                   onChange={(modelScale) => patch({ modelScale })} />
               </div>
@@ -378,6 +393,9 @@ export default function StandardsPage() {
                   onChange={(paperWidth) => patch({ paperWidth })} />
                 <NumberField label="Cao" value={draft.paperHeight}
                   onChange={(paperHeight) => patch({ paperHeight })} />
+                <NumberField label="Dung sai khung (%)" value={draft.frameTolerancePercent}
+                  onChange={(frameTolerancePercent) => patch({ frameTolerancePercent })}
+                  hint="Khung lệch quá bao nhiêu phần trăm thì lượt quét báo lỗi. 0–100." />
               </div>
             </section>
 
