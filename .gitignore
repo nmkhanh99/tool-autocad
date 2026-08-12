@@ -78,3 +78,9 @@ cadweb-module-smoke/
 # đẻ ra ở thư mục làm việc. Không phải mã nguồn, và `Cache.db` có thể chứa nội
 # dung request/response.
 React/
+
+# Kết xuất của công cụ dựng mẫu (OpenDesign): metadata artifact và cache skill.
+# Chúng được sinh lại từ chính các file HTML/CSS/JS, nên commit vào chỉ tạo
+# xung đột mỗi lần ai đó mở bộ mẫu.
+*.artifact.json
+.od-skills/

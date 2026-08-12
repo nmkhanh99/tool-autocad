@@ -58,6 +58,12 @@ export type LayerRule = {
 
 export type MappingRule = {
   id: string;
+  /** `id` LÚC NẠP VỀ, để `applyProfileEdits()` tìm lại bản ghi gốc.
+   *
+   * Không có nó thì sửa `id` — kể cả chỉ để chữa một lỗi gõ — làm phép tìm theo
+   * id mới trượt, và `bounds` của quy tắc đó biến mất không một lời báo. Rỗng =
+   * dòng mới thêm ở giao diện, chưa có bản ghi gốc nào để giữ. */
+  sourceId: string;
   label: string;
   kind: string;
   layerPatterns: string[];
@@ -66,6 +72,35 @@ export type MappingRule = {
   entityTypes: string[];
   required: boolean;
 };
+
+/** Ba giá trị bề dày nét mang ý nghĩa thay vì con số. Lưu dạng **chuỗi**.
+ *
+ * `standardLineweight()` của daemon chỉ nhận số trong `0…2.11`, nên gửi −3/−1/−2
+ * (mã DXF của chính ba thứ này) là ăn 400 ngay lúc lưu. Việc đổi sang mã âm là
+ * của `lineweight()` ở bước áp dụng, không phải của kho hồ sơ. */
+export const LINEWEIGHT_NAMES = ["Default", "ByLayer", "ByBlock"] as const;
+
+/** Bề dày nét cho một layer, đúng dạng daemon lưu.
+ *
+ * Đơn vị là **milimét** (`0…2.11`), KHÔNG phải mã 1/100 mm của DXF. Nhầm hai
+ * thang này là mọi giá trị từ 0.05 trở lên bị máy chủ từ chối — và tôi đã nhầm
+ * đúng một lần ở đây. Bước áp dụng nhân 100 để ra group 370. */
+export const LINEWEIGHTS: readonly { value: string | number; label: string }[] = [
+  ...LINEWEIGHT_NAMES.map((value) => ({ value: value as string | number, label: value })),
+  ...[0, 0.05, 0.09, 0.13, 0.15, 0.18, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.53, 0.6,
+    0.7, 0.8, 0.9, 1, 1.06, 1.2, 1.4, 1.58, 2, 2.11].map((value) => ({
+    value: value as string | number,
+    label: `${value.toFixed(2)} mm`,
+  })),
+];
+
+/** Bảng màu ACI có TÊN — bảy màu đầu là quy ước chung của AutoCAD, và người
+ * dùng gọi chúng bằng tên chứ không bằng số. */
+export const ACI_NAMED: readonly { value: number; label: string }[] = [
+  { value: 1, label: "Đỏ" }, { value: 2, label: "Vàng" }, { value: 3, label: "Lục" },
+  { value: 4, label: "Lơ" }, { value: 5, label: "Lam" }, { value: 6, label: "Tím" },
+  { value: 7, label: "Trắng/Đen" }, { value: 8, label: "Xám đậm" }, { value: 9, label: "Xám nhạt" },
+];
 
 export type StandardsProfile = {
   /** Bản ghi GỐC từ máy chủ, giữ nguyên vẹn.
@@ -104,7 +139,17 @@ export type StandardsProfile = {
   dimOverallScale: number | undefined;
   layers: LayerRule[];
   mappings: MappingRule[];
+  /** Những trường `dimension` mà form KHÔNG có ô riêng — 20 trong 23 trường.
+   *
+   * Lộ ra thay vì giấu: giấu chúng đi thì người dùng không biết chúng tồn tại,
+   * và một quy tắc họ chưa từng đặt vẫn bắt lỗi bản vẽ của họ. Bảng dựng từ
+   * chính dữ liệu, nên máy chủ thêm trường mới là nó tự xuất hiện — kể cả
+   * trường giao diện chưa biết cách trình bày. */
+  dimensionExtras: Record<string, unknown>;
 };
+
+/** Ba trường `dimension` form có ô riêng. Mọi trường khác vào bảng nâng cao. */
+const DIMENSION_IN_FORM = ["styleName", "textHeight", "overallScale"] as const;
 
 export function normalizeProfile(value: unknown): StandardsProfile {
   const source = record(value);
@@ -141,10 +186,18 @@ export function normalizeProfile(value: unknown): StandardsProfile {
         required: layer.required !== false,
       };
     }),
+    dimensionExtras: Object.fromEntries(
+      Object.entries(dimension).filter(
+        ([key]) => !(DIMENSION_IN_FORM as readonly string[]).includes(key),
+      ),
+    ),
     mappings: (Array.isArray(source.mappings) ? source.mappings : []).map((item, index) => {
       const mapping = record(item);
       return {
         id: str(mapping.id, `mapping-${index + 1}`),
+        /* Id THẬT của bản ghi gốc — rỗng khi máy chủ không phát, vì lúc đó
+           không có gì để tìm lại và một id bịa ra sẽ khớp nhầm bản ghi khác. */
+        sourceId: str(mapping.id),
         label: str(mapping.label),
         kind: str(mapping.kind, "object"),
         layerPatterns: stringList(mapping.layerPatterns),
@@ -196,16 +249,184 @@ export function applyProfileEdits(profile: StandardsProfile): JsonRecord {
     },
     dimension: {
       ...dimension,
+      /* Trường nâng cao ghi ĐÈ lên bản gốc — người dùng sửa được chúng qua bảng
+         key-value. Trải sau `...dimension` để giá trị đã sửa thắng. */
+      ...profile.dimensionExtras,
       styleName: profile.dimStyleName,
       textHeight: profile.dimTextHeight,
       overallScale: profile.dimOverallScale,
     },
-    /* Layer và mapping đi NGUYÊN từ bản gốc: form chưa sửa được chúng, nên gửi
-       bản đã chuẩn hoá là làm mất những trường chuẩn hoá đã bỏ đi (`bounds` của
-       mapping chẳng hạn). */
-    layers: raw.layers,
-    mappings: raw.mappings,
+    layers: profile.layers.map((layer) => ({
+      name: layer.name,
+      color: layer.color,
+      linetype: layer.linetype,
+      lineweight: layer.lineweight,
+      required: layer.required,
+    })),
+    /* Mapping GHÉP lên bản ghi gốc, không dựng lại từ đầu: bước chuẩn hoá bỏ
+       mất `bounds` (khung giới hạn diện tích), và dựng lại là xoá nó.
+       Tìm theo `sourceId` chứ KHÔNG theo `id` đang hiện — người dùng sửa được ô
+       id, và tìm theo giá trị mới thì vừa chữa một lỗi gõ là mất `bounds`. */
+    mappings: profile.mappings.map((mapping) => {
+      const original = mapping.sourceId
+        ? (Array.isArray(raw.mappings) ? raw.mappings : [])
+          .map(record)
+          .find((item) => str(item.id) === mapping.sourceId) ?? {}
+        : {};
+      return {
+        ...original,
+        id: mapping.id,
+        label: mapping.label,
+        kind: mapping.kind,
+        layerPatterns: mapping.layerPatterns,
+        blockPatterns: mapping.blockPatterns,
+        textPatterns: mapping.textPatterns,
+        entityTypes: mapping.entityTypes,
+        required: mapping.required,
+      };
+    }),
   };
+}
+
+/** Vì sao bảng layer chưa hợp lệ — theo từng dòng. Rỗng nghĩa là dòng đó ổn.
+ *
+ * Trả về theo CHỈ SỐ DÒNG chứ không phải một câu chung: người dùng phải biết
+ * sửa ô nào, và bảng có thể dài hàng chục dòng. */
+export function layerRowErrors(layers: readonly LayerRule[]): (string | null)[] {
+  const seen = new Set<string>();
+  return layers.map((layer) => {
+    const name = layer.name.trim();
+    if (!name) return "Tên layer không được để trống.";
+    /* Hoa/thường theo `en-US` — ĐÚNG cái `assertUnique()` của daemon dùng. Dùng
+       locale khác là mở khe cho một cặp tên mà giao diện cho qua còn máy chủ
+       gọi là trùng. */
+    const key = name.toLocaleUpperCase("en-US");
+    if (seen.has(key)) return "Trùng tên với một layer phía trên.";
+    seen.add(key);
+
+    const color = colorProblem(layer.color);
+    if (color) return color;
+
+    const weight = lineweightProblem(layer.lineweight);
+    if (weight) return weight;
+    return null;
+  });
+}
+
+/** Màu ACI hỏng ở chỗ nào, hoặc rỗng nếu dùng được.
+ *
+ * Hai tầng, và **cả hai** phải qua: `standardColor()` lúc lưu nhận số `0…256`
+ * hoặc bất kỳ chuỗi nào ≤64 ký tự; `numericColor()` lúc áp dụng chỉ hiểu
+ * `ByLayer`/`ByBlock`/chuỗi số và **ném lỗi** cho `RGB(...)`. Chỉ kiểm tầng lưu
+ * là để hồ sơ lưu êm rồi chết ở màn Kiểm tra.
+ */
+function colorProblem(color: string | number): string | null {
+  if (typeof color === "number") {
+    /* `standardColor` gọi `numberValue(..., { integer: true })`, nên số lẻ bị từ
+       chối thẳng chứ không làm tròn. */
+    if (!Number.isInteger(color) || color < 0 || color > 256) {
+      return "Màu ACI phải là số nguyên từ 0 đến 256.";
+    }
+    return null;
+  }
+  const text = color.trim();
+  if (!text) return "Màu không được để trống.";
+  if (/^(bylayer|byblock)$/i.test(text)) return null;
+  const parsed = Number(text);
+  if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed >= 0 && parsed <= 256) {
+    return null;
+  }
+  return `Màu “${text}” lưu được nhưng lượt áp dụng không hiểu — `
+    + "chỉ nhận số 0–256, ByLayer hoặc ByBlock.";
+}
+
+/** Bề dày nét hỏng ở chỗ nào, hoặc rỗng nếu dùng được.
+ *
+ * Chuỗi SỐ là hợp lệ, không chỉ ba cái tên: `standardLineweight()` cho chuỗi
+ * qua, và `lineweight()` lúc áp dụng ép kiểu bằng `Number(value)` rồi nhận
+ * khoảng `-3…211`. Chặn `"0.35"` là chặn một hồ sơ chạy được — và vì phép kiểm
+ * chạy cho MỌI dòng, một hồ sơ cũ như thế sẽ không sửa được gì nữa.
+ */
+function lineweightProblem(weight: string | number): string | null {
+  if (typeof weight === "number") {
+    /* Số: `standardLineweight()` chỉ nhận `0…2.11` (milimét), KHÔNG phải mã
+       1/100 mm của DXF. */
+    if (!Number.isFinite(weight) || weight < 0 || weight > 2.11) {
+      return "Bề dày nét phải từ 0 đến 2.11 mm.";
+    }
+    return null;
+  }
+  const text = weight.trim();
+  if (!text) return "Bề dày nét không được để trống.";
+  if (LINEWEIGHT_NAMES.some((name) => name.toLowerCase() === text.toLowerCase())) return null;
+  const parsed = Number(text);
+  if (Number.isFinite(parsed) && parsed >= -3 && parsed <= 211) return null;
+  return `Bề dày “${text}” lưu được nhưng lượt áp dụng không hiểu — `
+    + `chỉ nhận ${LINEWEIGHT_NAMES.join(", ")} hoặc một con số.`;
+}
+
+/** `kind` duy nhất mà chương trình LISP xử lý KHÁC đi.
+ *
+ * `acadstd:scan-map` chỉ rẽ nhánh trên `"ROOM"` (không phân biệt hoa thường);
+ * mọi giá trị khác chạy chung một đường. Vì vậy `mẫu chữ` chỉ có tác dụng ở
+ * đúng loại này — xem `mappingRowErrors()`. */
+export const ROOM_KIND = "room";
+
+/** Vì sao bảng ánh xạ chưa hợp lệ — theo từng dòng.
+ *
+ * Ràng buộc lấy từ `sanitizeMapping()` + `assertUnique()` của daemon và từ
+ * `acadstd:map-entity-p` trong `standards_lib.lsp`. Bỏ sót một cái là để người
+ * dùng gõ xong rồi ăn 400 — hoặc tệ hơn: lưu êm rồi bóc tách sai.
+ */
+export function mappingRowErrors(mappings: readonly MappingRule[]): (string | null)[] {
+  const seen = new Set<string>();
+  return mappings.map((mapping) => {
+    const id = mapping.id.trim();
+    if (!id) return "Mã ánh xạ không được để trống.";
+    /* Đúng `PROFILE_ID_PATTERN` của daemon: bắt đầu bằng chữ hoặc số, rồi chữ,
+       số, chấm, gạch dưới, gạch ngang — tối đa 96 ký tự. */
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/.test(id)) {
+      return "Mã chỉ được gồm chữ, số, chấm, gạch dưới, gạch ngang — và phải "
+        + "bắt đầu bằng chữ hoặc số.";
+    }
+    /* `assertUnique()` viết hoa theo `en-US` trước khi so, nên `A` và `a` là
+       TRÙNG với máy chủ dù nhìn khác nhau. */
+    const key = id.toLocaleUpperCase("en-US");
+    if (seen.has(key)) return "Trùng mã với một ánh xạ phía trên (không phân biệt hoa thường).";
+    seen.add(key);
+
+    // `stringValue()` từ chối chuỗi rỗng y như với mọi trường chữ khác.
+    if (!mapping.label.trim()) return "Nhãn không được để trống.";
+    if (!mapping.kind.trim()) return "Loại không được để trống.";
+
+    const isRoom = mapping.kind.trim().toLowerCase() === ROOM_KIND;
+
+    /* Mẫu chữ chỉ được đọc trong `acadstd:scan-room`. Ở loại khác nó nằm im —
+       để im lặng là hứa một cách khớp không tồn tại. */
+    if (!isRoom && mapping.textPatterns.length) {
+      return `Mẫu chữ chỉ có tác dụng với loại “${ROOM_KIND}” — ở loại `
+        + `“${mapping.kind.trim()}” lượt quét bỏ qua nó.`;
+    }
+
+    /* KHÔNG xét độ rộng cho `room`: đường `scan-room` tự thu hẹp bằng cấu trúc
+       — nó chỉ nhận đường bao KÍN có một dòng TEXT/MTEXT nằm trong. Một quy tắc
+       room chỉ có mẫu chữ là cấu hình HỢP LỆ và thường gặp: lọc phòng theo nhãn.
+       Tôi từng chặn nó vì đếm độ rộng bằng cùng một công thức cho cả hai đường.
+
+       Đường còn lại thì khác hẳn: `acadstd:pattern-p` trả TRUE cho mẫu rỗng, và
+       `map-entity-p` coi "layer rỗng VÀ block rỗng" là khớp mọi thứ. Không còn
+       bộ lọc nào thì quy tắc vơ cả bản vẽ vào bảng bóc tách — im lặng, và trông
+       như đã cấu hình xong. */
+    if (isRoom) return null;
+
+    const narrows = mapping.layerPatterns.length + mapping.blockPatterns.length
+      + mapping.entityTypes.length;
+    if (!narrows) {
+      return "Chưa có mẫu layer/block hay loại đối tượng — quy tắc này sẽ khớp "
+        + "MỌI đối tượng trong bản vẽ.";
+    }
+    return null;
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -238,6 +459,11 @@ export type Scan = {
   /** Phiên bản hồ sơ LÚC QUÉT — hash, không phải số. Đây là thứ máy chủ so khi
    * áp dụng, và lệch là 409. */
   profileRevision: string;
+  /** Bộ đếm phiên bản LÚC QUÉT, để hiển thị. Máy chủ chụp lại tại thời điểm
+   * quét chứ không tính khi trả lời, nên nó vẫn đúng sau khi hồ sơ đã đổi —
+   * đó là điều làm nó dùng được để nói "lượt quét này theo phiên bản 7, hồ sơ
+   * giờ là 9". `0` = máy chủ bản cũ chưa phát. */
+  profileVersion: number;
   scannedAt: string;
   issues: Issue[];
 };
@@ -315,6 +541,7 @@ export function normalizeScan(value: unknown, fallbackTarget: string): Scan {
     target: str(body.target, fallbackTarget),
     profileId: str(body.profileId),
     profileRevision: str(body.profileRevision),
+    profileVersion: num(body.profileVersion) ?? 0,
     scannedAt: str(body.scannedAt),
     issues: (Array.isArray(body.issues) ? body.issues : []).map(normalizeIssue),
   };
@@ -397,7 +624,15 @@ export function profileDriftNote(
      sửa, mà người dùng không có cách nào gỡ ngoài việc quét lại vô ích. */
   if (!scan.profileRevision || !profile.revision) return "";
   if (scan.profileRevision === profile.revision) return "";
-  return "Nội dung hồ sơ quy tắc đã đổi sau lượt quét này, nên các phát hiện "
+  /* Nói bằng SỐ khi có số. "Quét theo phiên bản 7, hồ sơ giờ là 9" trả lời được
+     câu người dùng thật sự hỏi — đã lỡ mất bao nhiêu lần sửa. Chỉ một vế có số
+     thì im, vì "phiên bản 7 → phiên bản 0" là câu vô nghĩa. */
+  const numbered = scan.profileVersion > 0 && profile.version > 0
+    ? `Lượt quét theo phiên bản ${scan.profileVersion}; hồ sơ giờ là phiên bản `
+      + `${profile.version}. `
+    : "";
+  return numbered
+    + "Nội dung hồ sơ quy tắc đã đổi sau lượt quét này, nên các phát hiện "
     + "bên dưới không còn khớp. Quét lại trước khi sửa.";
 }
 
@@ -480,7 +715,12 @@ export function applySummary(issues: readonly Issue[]): string {
  * đó SAI, và người dùng chỉ phát hiện ra bằng một lỗi 400 sau khi đã gõ xong cả
  * form.
  */
-export function profileSaveBlockedReason(profile: StandardsProfile): string {
+export function profileSaveBlockedReason(
+  profile: StandardsProfile,
+  /** Hồ sơ **đã lưu**, để biết KIỂU của từng trường kích thước nâng cao. Bỏ
+   * trống thì bỏ qua phép kiểm đó — không đoán kiểu từ thứ đang gõ dở. */
+  baseline?: StandardsProfile | null,
+): string {
   /* Khoảng giá trị lấy đúng từ `sanitizeDrawing`/`sanitizePaper`/
      `sanitizeDimension` của daemon. Lệch khỏi nó là hứa một thứ máy chủ sẽ từ
      chối — hoặc chặn một thứ nó chấp nhận. */
@@ -524,6 +764,32 @@ export function profileSaveBlockedReason(profile: StandardsProfile): string {
   ] as const;
   const blank = texts.filter(([, value]) => !value.trim()).map(([label]) => label);
   if (blank.length) return `Không được để trống: ${blank.join(", ")}.`;
+
+  const layerError = layerRowErrors(profile.layers).findIndex(Boolean);
+  if (layerError >= 0) {
+    return `Layer dòng ${layerError + 1}: ${layerRowErrors(profile.layers)[layerError]}`;
+  }
+  const mapError = mappingRowErrors(profile.mappings).findIndex(Boolean);
+  if (mapError >= 0) {
+    return `Ánh xạ dòng ${mapError + 1}: ${mappingRowErrors(profile.mappings)[mapError]}`;
+  }
+
+  /* Bảng kích thước nâng cao là ô chữ tự do trên dữ liệu có kiểu. `numberValue()`
+     của daemon từ chối THẲNG một chuỗi — kể cả `"2"` — nên gõ chữ vào một trường
+     số sẽ ăn 400 kèm một lời báo không chỉ ra ô nào. Kiểu lấy từ bản đã lưu, vì
+     bản nháp có thể đang giữ chính cái giá trị hỏng cần bắt. */
+  if (baseline) {
+    for (const key of Object.keys(profile.dimensionExtras).sort()) {
+      const want = typeof baseline.dimensionExtras[key];
+      const got = profile.dimensionExtras[key];
+      if (want === "number" && typeof got !== "number") {
+        return `Thiết lập kích thước “${key}” phải là một số.`;
+      }
+      if (want === "boolean" && typeof got !== "boolean") {
+        return `Thiết lập kích thước “${key}” phải là có/không.`;
+      }
+    }
+  }
   return "";
 }
 

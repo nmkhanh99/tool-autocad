@@ -38,6 +38,11 @@ import {
   profileSaveBlockedReason,
   type StandardsProfile,
 } from "../../../features/standards/model";
+import {
+  DimensionExtras,
+  LayerTable,
+  MappingTable,
+} from "../../../features/standards/ProfileTables";
 
 /** Trường số: giữ chuỗi rỗng thành `undefined` thay vì `0`.
  *
@@ -157,7 +162,9 @@ export default function StandardsPage() {
     return JSON.stringify(draft) !== JSON.stringify(selected);
   }, [draft, selected]);
 
-  const saveBlocked = draft ? profileSaveBlockedReason(draft) : "Chưa chọn hồ sơ.";
+  const saveBlocked = draft
+    ? profileSaveBlockedReason(draft, selected)
+    : "Chưa chọn hồ sơ.";
 
   const patch = (next: Partial<StandardsProfile>) =>
     setDraft((current) => (current ? { ...current, ...next } : current));
@@ -384,81 +391,20 @@ export default function StandardsPage() {
                 <NumberField label="Tỷ lệ tổng" value={draft.dimOverallScale}
                   onChange={(dimOverallScale) => patch({ dimOverallScale })} />
               </div>
-            </section>
-
-            <section className="panel">
-              <header>
-                <h2>Layer bắt buộc</h2>
-                <div className="actions"><span className="tag mono">{draft.layers.length}</span></div>
-              </header>
-              <div className="tablewrap">
-                <table className="data">
-                  <thead>
-                    <tr><th>Tên</th><th>Màu</th><th>Nét</th><th>Bề dày</th><th>Bắt buộc</th></tr>
-                  </thead>
-                  <tbody>
-                    {draft.layers.map((layer, index) => (
-                      <tr key={`${layer.name}-${index}`}>
-                        <td className="mono">{layer.name}</td>
-                        <td className="mono">{String(layer.color)}</td>
-                        <td className="mono">{layer.linetype}</td>
-                        <td className="mono">{String(layer.lineweight)}</td>
-                        <td>{layer.required ? "có" : "không"}</td>
-                      </tr>
-                    ))}
-                    {!draft.layers.length ? (
-                      <tr><td colSpan={5}>
-                        <span className="hint">Hồ sơ này chưa liệt kê layer nào.</span>
-                      </td></tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </div>
-              <div style={{ padding: "var(--s3) var(--s4)", borderTop: "1px solid var(--border)" }}>
-                <span className="needs-backend">Sửa danh sách layer chưa có ở màn này</span>
-                <span className="hint" style={{ marginLeft: "var(--s2)" }}>
-                  Đọc được nhưng chưa sửa được — dùng <Link href="/">màn hình cũ</Link> cho
-                  tới khi phần soạn layer được dựng.
-                </span>
+              <div style={{ padding: "0 var(--s4) var(--s4)" }}>
+                <DimensionExtras extras={draft.dimensionExtras} disabled={busy}
+                  /* Kiểu từng trường lấy từ bản đã lưu — `draft` có thể đang
+                     giữ một ô gõ dở, và kiểu của thứ gõ dở nói sai về trường. */
+                  baseline={(selected ?? draft).dimensionExtras}
+                  onChange={(dimensionExtras) => patch({ dimensionExtras })} />
               </div>
             </section>
 
-            <section className="panel">
-              <header>
-                <h2>Ánh xạ đối tượng</h2>
-                <div className="actions"><span className="tag mono">{draft.mappings.length}</span></div>
-              </header>
-              <div className="tablewrap">
-                <table className="data">
-                  <thead>
-                    <tr><th>Nhãn</th><th>Loại</th><th>Mẫu layer</th><th>Mẫu block</th><th>Bắt buộc</th></tr>
-                  </thead>
-                  <tbody>
-                    {draft.mappings.map((mapping) => (
-                      <tr key={mapping.id}>
-                        <td>{mapping.label || mapping.id}</td>
-                        <td className="mono">{mapping.kind}</td>
-                        <td className="mono">{mapping.layerPatterns.join(" · ") || "—"}</td>
-                        <td className="mono">{mapping.blockPatterns.join(" · ") || "—"}</td>
-                        <td>{mapping.required ? "có" : "không"}</td>
-                      </tr>
-                    ))}
-                    {!draft.mappings.length ? (
-                      <tr><td colSpan={5}>
-                        <span className="hint">Hồ sơ này chưa có ánh xạ nào.</span>
-                      </td></tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </div>
-              <div style={{ padding: "var(--s3) var(--s4)", borderTop: "1px solid var(--border)" }}>
-                <span className="needs-backend">Sửa ánh xạ chưa có ở màn này</span>
-                <span className="hint" style={{ marginLeft: "var(--s2)" }}>
-                  Ánh xạ quyết định đối tượng nào bị tính diện tích — sửa sai là
-                  sai cả bảng bóc tách, nên phần soạn nó chưa được bê vội.
-                </span>
-              </div>
-            </section>
+            <LayerTable layers={draft.layers} disabled={busy}
+              onChange={(layers) => patch({ layers })} />
+
+            <MappingTable mappings={draft.mappings} disabled={busy}
+              onChange={(mappings) => patch({ mappings })} />
           </>
         ) : null}
       </div>

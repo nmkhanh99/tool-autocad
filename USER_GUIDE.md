@@ -387,21 +387,65 @@ rõ:
   ngay, nhưng nó **không tự quét lại** — quét là việc nặng và bạn có thể đang
   đọc dở danh sách.
 - **Hồ sơ quy tắc đã đổi.** Sửa hồ sơ ở màn Hồ sơ tiêu chuẩn là mọi lượt quét
-  dựa trên nó hết giá trị. Lưu mà không đổi gì thì lượt quét vẫn dùng được.
+  dựa trên nó hết giá trị. Lưu mà không đổi gì thì lượt quét vẫn dùng được. App
+  nói bằng số: *"Lượt quét theo phiên bản 6; hồ sơ giờ là phiên bản 7"*, và nút
+  quét đổi nhãn thành **Quét lại theo phiên bản 7**.
 - **Đang chọn hồ sơ khác** với hồ sơ đã dùng để quét.
+
+Số phiên bản của lượt quét luôn hiện ở phụ đề và ở chip cạnh mã phiên quét. Nó
+được **chụp lúc quét** nên vẫn đúng sau khi hồ sơ đã đổi — đó là cả điểm của
+nó.
 
 ### Hồ sơ tiêu chuẩn (`/standards`)
 
 Soạn bộ quy tắc mà màn Kiểm tra dùng để quét. **Màn hình này không chạm vào bản
 vẽ** — nó chỉ sửa một hồ sơ nằm trong daemon.
 
-Sửa được: tên hồ sơ, đơn vị, INSUNITS, số lẻ, tỷ lệ model, khổ khung tên, và ba
-thiết lập kích thước (tên dimstyle, cao chữ, tỷ lệ tổng).
+Sửa được: tên hồ sơ, đơn vị, INSUNITS, số lẻ, tỷ lệ model, khổ khung tên, ba
+thiết lập kích thước (tên dimstyle, cao chữ, tỷ lệ tổng), **danh sách layer bắt
+buộc**, **ánh xạ đối tượng**, và **20 thiết lập kích thước nâng cao**.
 
-**Chưa sửa được ở đây:** danh sách layer bắt buộc và ánh xạ đối tượng. Chúng
-hiện ra để đọc, nhưng muốn sửa thì dùng màn hình cũ. Ánh xạ quyết định đối tượng
-nào bị tính diện tích — sửa sai là sai cả bảng bóc tách, nên phần soạn nó chưa
-được bê vội.
+#### Bảng layer
+
+Mỗi dòng: tên, màu, kiểu nét, bề dày, có bắt buộc hay không. Thêm dòng bằng
+**Thêm layer**, bỏ dòng bằng **Xoá**.
+
+- **Màu** bấm vào ô màu để mở bảng chọn. Chín màu đầu của AutoCAD có tên và hiện
+  đúng màu; các chỉ số khác nhập bằng số (0–256) và app **không** vẽ ô màu cho
+  chúng — nó không đoán, vì một ô màu sai cạnh tên layer còn tệ hơn không có.
+- **Bề dày** chọn từ danh sách: `Default`, `ByLayer`, `ByBlock`, hoặc một trị số
+  milimét từ `0.00` đến `2.11`.
+- **Kiểu nét** gõ tự do. Màn này không mở bản vẽ nên **không biết bản vẽ đã nạp
+  những kiểu nét nào**; đặt một tên chưa nạp thì lượt áp dụng ở màn Kiểm tra sẽ
+  báo lỗi tại đó, không phải ở đây.
+
+Dòng sai được viền đỏ kèm lý do ngay dưới ô, và nút Lưu khoá lại: tên trống,
+trùng tên với dòng phía trên, hoặc màu/bề dày ngoài khoảng.
+
+#### Bảng ánh xạ đối tượng
+
+**Ánh xạ quyết định đối tượng nào bị tính diện tích — sửa sai là sai cả bảng bóc
+tách.** Mỗi mẫu nhận diện là một **thẻ** riêng: gõ rồi Enter (hoặc dấu phẩy) để
+thêm, bấm × để bỏ. Dán được cả danh sách ngăn bằng dấu phẩy.
+
+**App không xem trước được tác động.** Máy chủ chưa có đường thử một quy tắc
+chưa lưu. Cách kiểm duy nhất: lưu, rồi quét ở màn Kiểm tra và đối chiếu số đối
+tượng.
+
+**Ô mẫu để trống nghĩa là *khớp tất cả*, không phải *bỏ qua*.** Đây là chỗ dễ
+hiểu ngược nhất. Ba cột thu hẹp được một quy tắc: mẫu layer, mẫu block, và loại
+đối tượng. Bỏ trống cả ba thì quy tắc vơ **mọi** đối tượng trong bản vẽ — app
+chặn không cho lưu.
+
+**Mẫu chữ chỉ có tác dụng với loại `room`.** Ở loại đó, lượt quét lấy từng dòng
+TEXT/MTEXT khớp mẫu rồi tìm đường bao kín chứa nó. Ở mọi loại khác, mẫu chữ nằm
+im — app chặn để bạn không gõ đầy rồi tưởng nó đang lọc.
+
+#### 20 thiết lập kích thước nâng cao
+
+Khối gập ở cuối mục Kích thước. Đây là những trường hồ sơ có mà form không dựng
+ô riêng. Bảng dựng từ chính dữ liệu, nên máy chủ thêm trường mới thì nó tự xuất
+hiện — thay vì biến mất khỏi tầm mắt.
 
 **Mọi ô số đều bắt buộc.** Máy chủ không nhận ô trống — nút Lưu sẽ khoá lại và
 nói tên những ô còn thiếu. Số `0` là một giá trị hợp lệ (cho "số lẻ" chẳng hạn),

@@ -301,10 +301,20 @@ route, như `blocks.module.css` vừa làm.
   chọn hiện tại của AutoCAD** và bỏ qua phạm vi hoàn toàn.
 
   **Tách `/review` và `/standards` đã xong (2026-08-12).** `/standards` soạn hồ
-  sơ quy tắc, `/review` quét và sửa. `DrawingStandardsPanel.tsx` (2.411 dòng)
-  **chưa xoá**: phần soạn layer và ánh xạ đối tượng chưa được bê sang, và ánh xạ
-  quyết định đối tượng nào bị tính diện tích — sửa sai là sai cả bảng bóc tách,
-  nên không bê vội. Hai màn hình mới ghi rõ bằng nhãn "chưa có ở màn này".
+  sơ quy tắc, `/review` quét và sửa.
+
+  **Ba bảng còn thiếu đã dựng xong (2026-08-12).** Bảng layer, bảng ánh xạ và
+  bảng 20 trường kích thước nâng cao — cả ba sửa tại chỗ, trong
+  `features/standards/ProfileTables.tsx`. Nhãn "chưa có ở màn này" đã gỡ.
+
+  Việc bê sang làm lộ một lỗi thang đo tôi tự gây: bảng bề dày nét dựng theo mã
+  DXF group 370 (1/100 mm, ba giá trị âm), trong khi kho hồ sơ nhận **milimét
+  `0…2.11`** cộng ba **chuỗi** `Default`/`ByLayer`/`ByBlock`. 26/27 lựa chọn sẽ
+  ăn 400 lúc lưu. Đã đo trực tiếp trên daemon: `40` → 400, `-3` → 400,
+  `"Default"` → 200.
+
+  `DrawingStandardsPanel.tsx` (2.411 dòng) **vẫn chưa xoá** — phải rà từng chức
+  năng của nó đối chiếu hai màn hình mới trước, theo đúng bài học ở trên.
 
   `DocumentReviewPanel.tsx` (1.348 dòng) là chuyện khác: prototype PDF, thành
   `/review-pdf` ở giai đoạn 10 theo D2.

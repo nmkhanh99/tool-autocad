@@ -64,6 +64,9 @@ apps/web/
 │   │                        tạo từ bộ chọn, nguồn thư viện)
 │   ├── lisp/                model + hook đọc + actions + 2 hộp thoại
 │   │                        (nạp vào phiên, thư mục gốc)
+│   ├── standards/           model (hồ sơ + lượt quét + mọi ràng buộc) và
+│   │                        ProfileTables.tsx — ba bảng sửa tại chỗ của
+│   │                        /standards, dùng chung bởi /standards và /review
 │   └── staged-ops/          hàng chờ hai pha
 ├── lib/                     hạ tầng dùng chung, không thuộc feature nào
 │   ├── acadState.ts         kiểu + nhãn + canWrite của trạng thái AutoCAD
@@ -579,7 +582,7 @@ Hai màn hình dùng chung một API, và ràng buộc giữa chúng là thứ d
 |---|---|---|
 | `GET/POST /profiles` | Danh sách, tạo | không |
 | `PUT /profiles/:id` | Sửa. Nhận `If-Match` | không |
-| `POST /scan` | Quét, trả `scanId` + `profileRevision` | không |
+| `POST /scan` | Quét, trả `scanId` + `profileRevision` + `profileVersion` | không |
 | `POST /apply` | Sửa theo phát hiện | **CÓ — một pha** |
 
 > **Khe còn lại, đã biết:** `runJob()` **kích hoạt** bản vẽ đích trước khi chạy
@@ -619,11 +622,80 @@ là gì để so nội dung.
 lệch. `profileDriftNote()` bắt trước ở giao diện — panel legacy không cần nó vì
 nó khoá nút quét khi hồ sơ còn thay đổi chưa lưu.
 
+`profileVersion` được **chụp vào phiên quét** chứ không tính lúc trả lời. Đọc bộ
+đếm hiện tại khi vẽ màn hình sẽ khoác số mới cho một lượt quét cũ — đúng thứ mà
+chip này sinh ra để bác bỏ.
+
 > **Ghi hồ sơ phải VÁ lên bản ghi gốc.** Bản nháp trong giao diện là hình dạng
 > phẳng do màn hình tự đặt cho dễ dựng form; máy chủ lưu dạng lồng với
-> `dimension` **23 trường** mà form chỉ đụng 3. Gửi thẳng bản nháp là ghi đè 20
-> trường còn lại bằng mặc định — không lỗi nào báo và không test nào đỏ. Xem
-> `applyProfileEdits()`.
+> `dimension` **23 trường** mà form có ô riêng cho 3. Gửi thẳng bản nháp là ghi
+> đè 20 trường còn lại bằng mặc định — không lỗi nào báo và không test nào đỏ.
+> Xem `applyProfileEdits()`.
+>
+> 20 trường đó nay **hiện ra và sửa được** ở bảng `DimensionExtras`, dựng từ
+> chính dữ liệu hồ sơ. `ObjectMapping` cũng có `bounds` tuỳ chọn mà form không
+> mô hình hoá, nên `applyProfileEdits()` vá mapping lên bản ghi gốc thay vì dựng
+> lại. `LayerStandard` thì **đúng năm trường**, không có gì để giữ.
+>
+> Phép vá bám `MappingRule.sourceId` — mã **lúc nạp về** — chứ không bám `id`
+> đang hiện. Ô mã sửa được, và bám `id` thì vừa chữa một lỗi gõ là phép tìm
+> trượt và `bounds` biến mất không một lời báo. `sourceId` rỗng = dòng thêm mới
+> ở giao diện, không có bản ghi gốc nào để giữ.
+
+Bảng `DimensionExtras` là ô chữ tự do trên dữ liệu **có kiểu**, nên kiểu phải
+lấy từ hồ sơ **đã lưu**, không từ giá trị đang gõ: xoá trắng một trường số làm
+nó thành `""`, và suy kiểu từ đó thì mọi ký tự gõ tiếp đều thành chuỗi.
+`numberValue()` từ chối thẳng chuỗi — kể cả `"2"` — và `booleanValue()` từ chối
+`"false"`. Vì vậy `profileSaveBlockedReason()` nhận thêm tham số `baseline`, và
+trường boolean render bằng ô tích chứ không phải ô chữ.
+
+#### Bề dày nét có HAI kiểu dữ liệu, và hai thang đo khác nhau
+
+Đây là chỗ tôi đã sai một lần, và cái sai không lộ ra cho tới lúc lưu:
+
+| Nơi | Dạng đặc biệt | Dạng số |
+|---|---|---|
+| Kho hồ sơ (`standardLineweight`) | **chuỗi** `Default`/`ByLayer`/`ByBlock` | **milimét**, `0 … 2.11` |
+| DXF group 370 (sau `lineweight()`) | `-3` / `-1` / `-2` | 1/100 mm, `0 … 211` |
+
+Bảng chọn của giao diện phải theo cột **kho hồ sơ**. Dựng theo cột DXF thì 26
+trong 27 lựa chọn ăn 400 lúc lưu. Đo trực tiếp trên daemon: `40` → 400 *"phải
+nhỏ hơn hoặc bằng 2.11"*, `-3` → 400 *"phải lớn hơn hoặc bằng 0"*, `"Default"`
+→ 200. Việc đổi sang mã âm là của `lineweight()` ở bước **áp dụng**, không phải
+của kho.
+
+Một chuỗi ngoài ba tên trên **lưu được** nhưng `lineweight()` không hiểu, nên nó
+hỏng ở bước áp dụng. `layerRowErrors()` chặn tại chỗ nhập vì lỗi hiện ra nơi sửa
+được thì rẻ hơn nhiều.
+
+#### `kind` của ánh xạ chỉ có HAI hành vi, không phải bốn
+
+`acadstd:scan-map` trong `acad-lisp/headless/standards_lib.lsp` rẽ nhánh đúng
+một lần, trên `"ROOM"` (so bằng `strcase`). Mọi giá trị khác chạy chung
+`acadstd:map-entity-p`, và hàm đó đọc `nth 3` (layer), `nth 4` (block), `nth 6`
+(loại đối tượng) — **không bao giờ đọc `nth 5` (mẫu chữ)**.
+
+| `kind` | mẫu layer | mẫu block | mẫu chữ | loại đối tượng |
+|---|---|---|---|---|
+| `room` | dùng | dùng | **dùng** — chọn nhãn TEXT/MTEXT rồi tìm đường bao kín chứa nó | dùng |
+| mọi giá trị khác | dùng | dùng | **bỏ qua** | dùng |
+
+`kind` vẫn có ý nghĩa thứ hai ở tầng daemon: `standardsEngine.ts` nhận diện
+khung tên bằng `/frame|sheet|title.?block|khung/i` trên `kind` + `mappingId`.
+
+**Mẫu rỗng nghĩa là KHỚP TẤT CẢ, không phải "bỏ qua".** `acadstd:pattern-p` trả
+`T` ngay khi mẫu rỗng, và `map-entity-p` coi *layer rỗng VÀ block rỗng* là khớp
+mọi thứ. Một ánh xạ không có mẫu layer/block/loại nào sẽ vơ cả bản vẽ vào bảng
+bóc tách — im lặng, và trông như đã cấu hình xong. `mappingRowErrors()` chặn nó.
+
+#### Không có đường xem trước ánh xạ
+
+`drawingStandards.ts` phát đúng bảy route: `GET/POST /profiles`,
+`PUT/DELETE /profiles/:id`, `POST /scan`, `POST /apply`, `POST /action`. **Không
+có dry-run.** Bộ mẫu `mau-thiet-ke/` có nút "Thử trên bản vẽ đang mở" nhưng nó
+chạy trên dữ liệu giả trong trình duyệt; bê nguyên sang app thật là bịa ra một
+con số người dùng sẽ tin. Màn hình thật nói thẳng là chưa có, và chỉ đường kiểm
+duy nhất: lưu → quét → đối chiếu.
 
 ### Bộ đếm revision bản vẽ KHÔNG được đếm biến hệ thống của phiên
 

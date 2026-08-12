@@ -65,6 +65,7 @@ type ScanSession = {
   exactTarget: string;
   profileId: string;
   profileRevision: string;
+  profileVersion: number;
   drawingRevision: string;
   scannedAt: string;
   settings: Record<string, string>;
@@ -854,6 +855,11 @@ export function drawingStandardsRouter(
         exactTarget,
         profileId: profile.id,
         profileRevision: profile.revision,
+        /* Số phiên bản LÚC QUÉT, chỉ để hiển thị. Chốt tranh chấp vẫn là
+           `profileRevision`; nhưng "quét theo phiên bản 7" là câu người dùng đọc
+           được, còn `f304e8e7` thì không. Phải chụp tại đây — đọc bộ đếm hiện
+           tại khi vẽ màn hình sẽ cho ra số MỚI của một lượt quét CŨ. */
+        profileVersion: profile.version,
         /* Mốc cho `/apply` là revision SAU lượt quét: chính lượt quét đã làm
            bộ đếm nhảy, nên lưu giá trị trước đó là bảo đảm `/apply` luôn 409. */
         drawingRevision: verifiedDrawingRevision,
@@ -870,6 +876,7 @@ export function drawingStandardsRouter(
         target: session.target,
         profileId: profile.id,
         profileRevision: profile.revision,
+        profileVersion: profile.version,
         scannedAt,
         current: {
           settings: parsed.settings,

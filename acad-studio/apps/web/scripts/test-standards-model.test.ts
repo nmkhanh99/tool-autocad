@@ -25,7 +25,12 @@ import {
   profileSaveBlockedReason,
   targetOf,
   unsupportedFixReason,
+  LINEWEIGHTS,
+  layerRowErrors,
+  mappingRowErrors,
   type Issue,
+  type LayerRule,
+  type MappingRule,
   type Scan,
   type StandardsProfile,
 } from "../features/standards/model";
@@ -40,6 +45,7 @@ const scan = (over: Partial<Scan> = {}): Scan => ({
   target: "/x.dwg",
   profileId: "p1",
   profileRevision: "hash-a",
+  profileVersion: 0,
   scannedAt: "",
   issues: [],
   ...over,
@@ -228,7 +234,7 @@ test("lưu hồ sơ KHÔNG được xoá những trường form chưa mô hình 
       arrowhead: "ClosedFilled", fit: "best", textVertical: "above",
       extendBeyondDimLines: 1.25,
     },
-    layers: [{ name: "A", bounds: { x: 1 } }],
+    layers: [{ name: "A", color: 3, linetype: "HIDDEN", lineweight: 0.35, required: false }],
     mappings: [{ id: "m1", bounds: { minX: 0 } }],
   };
   const edited = { ...normalizeProfile(source), dimTextHeight: 3.5 };
@@ -243,10 +249,18 @@ test("lưu hồ sơ KHÔNG được xoá những trường form chưa mô hình 
   assert.equal(payload.dimension.extendBeyondDimLines, 1.25);
   assert.equal(payload.description, "ghi chú của người dùng");
 
-  /* Layer và mapping đi NGUYÊN từ bản gốc, kể cả `bounds` mà bước chuẩn hoá đã
-     bỏ đi — gửi bản đã chuẩn hoá là làm mất chúng. */
-  assert.deepEqual(payload.layers, source.layers);
-  assert.deepEqual(payload.mappings, source.mappings);
+  /* Layer đi trọn năm trường — đúng bằng `LayerStandard` của daemon, không hơn
+     không kém. Sửa được ở giao diện nên KHÔNG chép nguyên bản gốc nữa, nhưng
+     dòng nào không đụng tới thì phải giống hệt lúc nạp về. */
+  assert.deepEqual(payload.layers, [
+    { name: "A", color: 3, linetype: "HIDDEN", lineweight: 0.35, required: false },
+  ]);
+
+  /* Mapping thì NGƯỢC LẠI: `ObjectMapping` có `bounds` tuỳ chọn mà form không mô
+     hình hoá, nên bản gửi đi phải vá lên bản ghi gốc theo `id`. Dựng lại từ bản
+     đã chuẩn hoá là xoá mất khung giới hạn của một quy tắc bóc tách. */
+  assert.equal(payload.mappings[0].bounds.minX, 0);
+  assert.equal(payload.mappings[0].id, "m1");
 
   /* Xoá trắng một ô là CỐ Ý — phải ghi thành `undefined` thật, không phải bị bỏ
      qua rồi giữ lại giá trị cũ. */
@@ -334,4 +348,349 @@ test("ô số của hồ sơ là BẮT BUỘC, không phải 'trống = không r
   assert.equal(profileSaveBlockedReason({ ...full, paperWidth: 0.001 }), "");
   /* Cao chữ = 0 là HỢP LỆ — dimstyle annotative lấy chiều cao từ style. */
   assert.equal(profileSaveBlockedReason({ ...full, dimTextHeight: 0 }), "");
+});
+
+test("bề dày nét: milimét 0–2.11, ba tên là CHUỖI", () => {
+  /* Tôi từng dựng bảng này bằng mã DXF group 370 (1/100 mm, ba giá trị âm) —
+     SAI. `standardLineweight()` của daemon chỉ nhận số trong `0…2.11`, nên mọi
+     bề dày từ 0.05 trở lên sẽ ăn 400 lúc lưu, và ba giá trị âm cũng vậy. Việc
+     đổi sang mã âm là của `lineweight()` ở bước áp dụng, không phải của kho. */
+  const numeric = LINEWEIGHTS.filter((item) => typeof item.value === "number")
+    .map((item) => item.value as number);
+  assert.ok(numeric.length > 0);
+  for (const value of numeric) {
+    assert.ok(value >= 0 && value <= 2.11, `${value} ngoài khoảng daemon nhận`);
+  }
+  /* Ba tên phải là chuỗi, không phải số âm. */
+  assert.deepEqual(
+    LINEWEIGHTS.filter((item) => typeof item.value === "string").map((item) => item.value),
+    ["Default", "ByLayer", "ByBlock"],
+  );
+});
+
+test("bảng layer chặn đúng những gì daemon sẽ từ chối", () => {
+  const rows = (over: Partial<LayerRule>[] = []): LayerRule[] => over.map((item) => ({
+    name: "A", color: 7, linetype: "Continuous", lineweight: "Default", required: true,
+    ...item,
+  }));
+
+  assert.deepEqual(layerRowErrors(rows([{ name: "TRUC" }])), [null]);
+
+  /* Tên rỗng: `stringValue()` từ chối chuỗi rỗng. */
+  assert.match(layerRowErrors(rows([{ name: " " }]))[0] ?? "", /không được để trống/);
+
+  /* Trùng tên KHÔNG gây lỗi ở máy chủ — nó chỉ khiến một trong hai quy tắc
+     không bao giờ có tác dụng, im lặng. So không phân biệt hoa thường vì
+     AutoCAD cũng vậy. */
+  const dup = layerRowErrors(rows([{ name: "Truc" }, { name: "TRUC" }]));
+  assert.equal(dup[0], null);
+  assert.match(dup[1] ?? "", /Trùng tên/);
+
+  /* Màu ACI: số nguyên 0–256. */
+  assert.match(layerRowErrors(rows([{ color: 300 }]))[0] ?? "", /0 đến 256/);
+  assert.match(layerRowErrors(rows([{ color: 2.5 }]))[0] ?? "", /số nguyên/);
+  assert.equal(layerRowErrors(rows([{ color: 256 }]))[0], null);
+  /* Bề dày số: khoảng milimét, không phải mã 1/100 mm. */
+  assert.equal(layerRowErrors(rows([{ lineweight: 0.35 }]))[0], null);
+  assert.equal(layerRowErrors(rows([{ lineweight: 0 }]))[0], null);
+  assert.match(layerRowErrors(rows([{ lineweight: 35 }]))[0] ?? "", /2\.11 mm/);
+
+  /* Bề dày dạng chữ: ba tên hợp lệ… */
+  for (const name of ["Default", "ByLayer", "ByBlock", "bylayer"]) {
+    assert.equal(layerRowErrors(rows([{ lineweight: name }]))[0], null, name);
+  }
+  /* …và cả CHUỖI SỐ. `lineweight()` lúc áp dụng ép kiểu bằng `Number(value)` rồi
+     nhận khoảng -3…211, nên `"0.35"` và `"35"` đều chạy được. Chặn chúng là
+     chặn một hồ sơ đang hoạt động — và vì phép kiểm chạy cho MỌI dòng, hồ sơ đó
+     sẽ không sửa được gì nữa, kể cả thứ chẳng liên quan. */
+  assert.equal(layerRowErrors(rows([{ lineweight: "0.35" }]))[0], null);
+  assert.equal(layerRowErrors(rows([{ lineweight: "35" }]))[0], null);
+  /* Chuỗi KHÔNG hiểu được thì mới chặn — nó lưu êm rồi ném lỗi ở bước áp dụng. */
+  assert.match(layerRowErrors(rows([{ lineweight: "Mỏng" }]))[0] ?? "", /không hiểu/);
+  assert.match(layerRowErrors(rows([{ lineweight: " " }]))[0] ?? "", /không được để trống/);
+
+  /* Màu dạng chữ: `numericColor()` hiểu ByLayer/ByBlock và chuỗi số, nhưng NÉM
+     LỖI cho `RGB(...)`. Cho qua là để hồ sơ lưu được mà không áp dụng được. */
+  assert.equal(layerRowErrors(rows([{ color: "ByLayer" }]))[0], null);
+  assert.equal(layerRowErrors(rows([{ color: "7" }]))[0], null);
+  assert.match(layerRowErrors(rows([{ color: "RGB(255,0,0)" }]))[0] ?? "", /không hiểu/);
+});
+
+test("bảng ánh xạ chặn đúng những gì daemon VÀ chương trình LISP từ chối", () => {
+  const rows = (over: Partial<MappingRule>[]): MappingRule[] => over.map((item) => ({
+    id: "m1", sourceId: "m1", label: "Tường", kind: "object",
+    layerPatterns: ["A-*"], blockPatterns: [], textPatterns: [], entityTypes: [],
+    required: false,
+    ...item,
+  }));
+
+  assert.deepEqual(mappingRowErrors(rows([{}])), [null]);
+  assert.match(mappingRowErrors(rows([{ id: "" }]))[0] ?? "", /không được để trống/);
+
+  /* `PROFILE_ID_PATTERN` của daemon: bắt đầu bằng chữ/số, rồi chữ số . _ -
+     Không kiểm ở đây là để người dùng gõ `foo/bar` rồi ăn 400. */
+  assert.match(mappingRowErrors(rows([{ id: "foo/bar" }]))[0] ?? "", /chỉ được gồm/);
+  assert.match(mappingRowErrors(rows([{ id: "-mo-dau" }]))[0] ?? "", /bắt đầu bằng/);
+  assert.equal(mappingRowErrors(rows([{ id: "living-room.2_x" }]))[0], null);
+
+  /* `assertUnique()` VIẾT HOA trước khi so, nên `A` và `a` là trùng với máy chủ
+     dù nhìn khác nhau. So phân biệt hoa thường là cho qua một hồ sơ sẽ bị 400. */
+  const dup = mappingRowErrors(rows([{ id: "abc" }, { id: "ABC" }]));
+  assert.equal(dup[0], null);
+  assert.match(dup[1] ?? "", /Trùng mã/);
+
+  // `stringValue()` từ chối nhãn rỗng.
+  assert.match(mappingRowErrors(rows([{ label: " " }]))[0] ?? "", /Nhãn không được/);
+
+  /* `acadstd:pattern-p` trả TRUE cho mẫu rỗng, và `map-entity-p` coi "layer
+     rỗng VÀ block rỗng" là khớp mọi thứ. Đây KHÔNG phải "không khớp gì" như tôi
+     viết lúc đầu — nó ngược lại, và ngược đúng hướng nguy hiểm. */
+  assert.match(
+    mappingRowErrors(rows([{ layerPatterns: [] }]))[0] ?? "",
+    /khớp MỌI đối tượng/,
+  );
+
+  /* Ba thứ thu hẹp được: mẫu layer, mẫu block, loại đối tượng. Mẫu CHỮ không
+     nằm trong đó — `map-entity-p` không đọc nó. */
+  assert.equal(
+    mappingRowErrors(rows([{ layerPatterns: [], blockPatterns: ["WC-*"] }]))[0],
+    null,
+  );
+  assert.equal(
+    mappingRowErrors(rows([{ layerPatterns: [], entityTypes: ["LWPOLYLINE"] }]))[0],
+    null,
+  );
+
+  /* Mẫu chữ ở loại KHÔNG phải `room` nằm im — `acadstd:scan-map` chỉ rẽ nhánh
+     trên "ROOM". Để im lặng là hứa một cách khớp không tồn tại. */
+  assert.match(
+    mappingRowErrors(rows([{ kind: "object", textPatterns: ["WC*"] }]))[0] ?? "",
+    /chỉ có tác dụng với loại/,
+  );
+  assert.equal(
+    mappingRowErrors(rows([{ kind: "room", textPatterns: ["WC*"] }]))[0],
+    null,
+  );
+  // Hoa/thường của `kind` không quan trọng: LISP so bằng `strcase`.
+  assert.equal(
+    mappingRowErrors(rows([{ kind: "ROOM", textPatterns: ["WC*"] }]))[0],
+    null,
+  );
+
+  /* Quy tắc `room` CHỈ có mẫu chữ là hợp lệ — và tôi từng chặn nhầm nó.
+     `acadstd:scan-room` tự thu hẹp bằng cấu trúc: nó chỉ nhận đường bao KÍN có
+     một dòng TEXT/MTEXT nằm trong, và dùng chính mẫu chữ để chọn dòng đó. Lọc
+     phòng theo nhãn là cách dùng thường gặp nhất của loại này. */
+  assert.equal(
+    mappingRowErrors(rows([{
+      kind: "room", layerPatterns: [], blockPatterns: [], entityTypes: [],
+      textPatterns: ["*PHÒNG*"],
+    }]))[0],
+    null,
+  );
+  /* Và một quy tắc `room` trống trơn cũng không bị chặn: "mọi đường bao kín có
+     nhãn" là thứ diễn đạt được, khác hẳn "mọi đối tượng trong bản vẽ". */
+  assert.equal(
+    mappingRowErrors(rows([{
+      kind: "room", layerPatterns: [], blockPatterns: [], entityTypes: [],
+      textPatterns: [],
+    }]))[0],
+    null,
+  );
+});
+
+test("dòng bảng hỏng thì CHẶN LƯU, kèm số dòng", () => {
+  /* Hai bảng này không đi qua `numberValue()` như các ô số, nên nếu
+     `profileSaveBlockedReason` bỏ qua chúng thì một layer trùng tên hay một ánh
+     xạ không mẫu nào sẽ lưu êm — rồi hỏng ở màn Kiểm tra. */
+  const base = normalizeProfile({
+    id: "p", name: "M", revision: "h",
+    drawing: {
+      unit: "mm", insunits: 4, precision: 0, modelScale: 1,
+      paper: { name: "A3", width: 420, height: 297 },
+    },
+    dimension: { styleName: "ACAD", textHeight: 2.5, overallScale: 1 },
+  });
+  assert.equal(profileSaveBlockedReason(base), "");
+
+  const badLayer = profileSaveBlockedReason({
+    ...base,
+    layers: [{ name: "", color: 7, linetype: "Continuous", lineweight: "Default", required: true }],
+  });
+  assert.match(badLayer, /[Ll]ayer/);
+  assert.match(badLayer, /1/);
+
+  const badMapping = profileSaveBlockedReason({
+    ...base,
+    mappings: [{
+      id: "m1", sourceId: "m1", label: "", kind: "object",
+      layerPatterns: [], blockPatterns: [], textPatterns: [], entityTypes: [],
+      required: false,
+    }],
+  });
+  assert.match(badMapping, /nh xạ/);
+});
+
+test("lưu layer và ánh xạ đã sửa THẬT SỰ đi vào bản gửi", () => {
+  /* Cả hai bảng trước đây chỉ đọc, và `applyProfileEdits` chép nguyên từ bản
+     gốc. Bê chúng thành sửa được mà quên bước ghi ngược là người dùng gõ xong,
+     bấm Lưu, thấy báo thành công — và không có gì đổi. */
+  const source = {
+    id: "p1", name: "Mẫu", revision: "hash-a",
+    drawing: { unit: "mm", insunits: 4, precision: 0, paper: { name: "A3", width: 420, height: 297 } },
+    dimension: { styleName: "ACAD", textHeight: 2.5, overallScale: 1, arrowhead: "Closed" },
+    layers: [{ name: "A", color: 7, linetype: "Continuous", lineweight: "Default", required: true }],
+    mappings: [{
+      id: "m1", label: "Tường", kind: "object", layerPatterns: ["A-*"],
+      blockPatterns: [], textPatterns: [], entityTypes: [], required: true,
+      bounds: { minX: 0 },
+    }],
+  };
+  const loaded = normalizeProfile(source);
+  const payload = applyProfileEdits({
+    ...loaded,
+    layers: [
+      ...loaded.layers,
+      { name: "DIM", color: 2, linetype: "HIDDEN", lineweight: 0.18, required: false },
+    ],
+    mappings: loaded.mappings.map((item) => ({ ...item, layerPatterns: ["A-*", "W-*"] })),
+    dimensionExtras: { ...loaded.dimensionExtras, arrowhead: "Oblique" },
+  }) as Record<string, any>;
+
+  assert.equal(payload.layers.length, 2);
+  assert.deepEqual(payload.layers[1], {
+    name: "DIM", color: 2, linetype: "HIDDEN", lineweight: 0.18, required: false,
+  });
+  assert.deepEqual(payload.mappings[0].layerPatterns, ["A-*", "W-*"]);
+  /* `bounds` không nằm trong form nhưng phải sống sót qua lượt sửa. */
+  assert.equal(payload.mappings[0].bounds.minX, 0);
+  /* Trường dimension nâng cao sửa qua bảng cũng phải tới nơi. */
+  assert.equal(payload.dimension.arrowhead, "Oblique");
+  /* …và ba ô có form riêng vẫn ở đúng chỗ của chúng. */
+  assert.equal(payload.dimension.textHeight, 2.5);
+});
+
+test("chip phiên bản của lượt quét chụp lúc quét, không đọc lại sau", () => {
+  /* Máy chủ trả `profileVersion` cùng lượt quét. Nếu màn hình đọc bộ đếm HIỆN
+     TẠI của hồ sơ để hiển thị thì một lượt quét cũ sẽ tự khoác số mới — đúng
+     thứ mà chip này sinh ra để bác bỏ. */
+  const parsed = normalizeScan(
+    { scanId: "s1", profileId: "p1", profileRevision: "hash-a", profileVersion: 7 },
+    "/x.dwg",
+  );
+  assert.equal(parsed.profileVersion, 7);
+  /* Máy chủ bản cũ chưa phát trường này — `0` để giao diện biết mà im, thay vì
+     hiện "phiên bản NaN". */
+  assert.equal(normalizeScan({ scanId: "s2" }, "/x.dwg").profileVersion, 0);
+
+  /* Có đủ hai số thì lời cảnh báo nói bằng SỐ. */
+  const note = profileDriftNote(
+    scan({ profileRevision: "hash-a", profileVersion: 7 }),
+    profile({ revision: "hash-b", version: 9 }),
+  );
+  assert.match(note, /phiên bản 7/);
+  assert.match(note, /phiên bản 9/);
+
+  /* Thiếu một vế thì KHÔNG bịa số — vẫn cảnh báo, nhưng không nói "phiên bản 0". */
+  const silent = profileDriftNote(
+    scan({ profileRevision: "hash-a", profileVersion: 0 }),
+    profile({ revision: "hash-b", version: 9 }),
+  );
+  assert.doesNotMatch(silent, /phiên bản/);
+  assert.match(silent, /đã đổi sau lượt quét/);
+});
+
+test("đổi mã ánh xạ KHÔNG được làm mất bounds", () => {
+  /* Ô mã sửa được, và một lỗi gõ là thứ người ta sẽ sửa. Nếu `applyProfileEdits`
+     tìm bản ghi gốc theo mã ĐANG HIỆN thì phép tìm trượt ngay lúc đó, và
+     `bounds` — khung giới hạn diện tích của quy tắc bóc tách — biến mất không
+     một lời báo. Tìm theo `sourceId` (mã lúc nạp về) mới đúng. */
+  const source = {
+    id: "p1", name: "Mẫu", revision: "hash-a",
+    drawing: { unit: "mm", insunits: 4, precision: 0, paper: { name: "A3", width: 420, height: 297 } },
+    dimension: { styleName: "ACAD", textHeight: 2.5, overallScale: 1 },
+    mappings: [{
+      id: "living-romm", label: "Phòng khách", kind: "room",
+      layerPatterns: ["PHONG"], blockPatterns: [], textPatterns: [], entityTypes: [],
+      required: false, bounds: { minArea: 6, maxArea: 80 },
+    }],
+  };
+  const loaded = normalizeProfile(source);
+  assert.equal(loaded.mappings[0].sourceId, "living-romm");
+
+  // Chữa lỗi gõ trong mã.
+  const renamed = applyProfileEdits({
+    ...loaded,
+    mappings: [{ ...loaded.mappings[0], id: "living-room" }],
+  }) as Record<string, any>;
+  assert.equal(renamed.mappings[0].id, "living-room");
+  assert.deepEqual(renamed.mappings[0].bounds, { minArea: 6, maxArea: 80 });
+
+  /* Dòng THÊM MỚI ở giao diện có `sourceId` rỗng — không được vơ lấy bản ghi
+     nào cả, kể cả khi mã của nó tình cờ trùng một bản ghi đang có. */
+  const added = applyProfileEdits({
+    ...loaded,
+    mappings: [
+      loaded.mappings[0],
+      {
+        id: "living-romm", sourceId: "", label: "Trùng mã", kind: "object",
+        layerPatterns: ["X"], blockPatterns: [], textPatterns: [], entityTypes: [],
+        required: false,
+      },
+    ],
+  }) as Record<string, any>;
+  assert.deepEqual(added.mappings[0].bounds, { minArea: 6, maxArea: 80 });
+  assert.equal(added.mappings[1].bounds, undefined);
+});
+
+test("bảng kích thước nâng cao không được đổi KIỂU của trường", () => {
+  /* Bảng này là ô chữ tự do trên dữ liệu có kiểu. `numberValue()` của daemon từ
+     chối thẳng một chuỗi — kể cả `"2"` — nên gõ chữ vào một trường số phải bị
+     chặn TẠI ĐÂY, chứ không phải bằng một lỗi 400 không chỉ ra ô nào. */
+  const saved = normalizeProfile({
+    id: "p", name: "M", revision: "h",
+    drawing: {
+      unit: "mm", insunits: 4, precision: 0, modelScale: 1,
+      paper: { name: "A3", width: 420, height: 297 },
+    },
+    dimension: {
+      styleName: "ACAD", textHeight: 2.5, overallScale: 1,
+      textGap: 0.625, annotative: false, fit: "Best fit",
+    },
+  });
+  assert.equal(profileSaveBlockedReason(saved, saved), "");
+
+  /* Xoá trắng một trường số rồi gõ lại là đường sinh ra chuỗi — đúng ca đã hỏng
+     khi kiểu được suy từ giá trị đang gõ thay vì từ bản đã lưu. */
+  const asText = {
+    ...saved,
+    dimensionExtras: { ...saved.dimensionExtras, textGap: "0.7" },
+  };
+  assert.match(profileSaveBlockedReason(asText, saved), /textGap/);
+  assert.match(profileSaveBlockedReason(asText, saved), /phải là một số/);
+
+  /* Trường boolean cũng vậy: "false" là một chuỗi, và nó trông đúng nhất khi
+     nhìn — `booleanValue()` từ chối. */
+  const asBoolText = {
+    ...saved,
+    dimensionExtras: { ...saved.dimensionExtras, annotative: "false" },
+  };
+  assert.match(profileSaveBlockedReason(asBoolText, saved), /annotative/);
+  assert.match(profileSaveBlockedReason(asBoolText, saved), /có\/không/);
+
+  // Sửa đúng kiểu thì qua.
+  assert.equal(profileSaveBlockedReason(
+    { ...saved, dimensionExtras: { ...saved.dimensionExtras, textGap: 0.7, annotative: true } },
+    saved,
+  ), "");
+
+  /* Trường chuỗi vẫn tự do — `fit` là prose, không phải số. */
+  assert.equal(profileSaveBlockedReason(
+    { ...saved, dimensionExtras: { ...saved.dimensionExtras, fit: "Text only" } },
+    saved,
+  ), "");
+
+  /* Không có bản đã lưu để đối chiếu thì KHÔNG kết luận: đoán kiểu từ bản nháp
+     là đoán từ chính cái giá trị hỏng cần bắt. */
+  assert.equal(profileSaveBlockedReason(asText), "");
 });

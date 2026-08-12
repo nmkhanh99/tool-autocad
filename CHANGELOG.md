@@ -1,5 +1,176 @@
 # CHANGELOG
 
+## 2026-08-12 — Ba bảng của bộ mẫu vào app thật
+
+### Added — `/standards` sửa được layer, ánh xạ và 20 trường kích thước
+
+Ba khối cuối của bộ mẫu, dựng trong `features/standards/ProfileTables.tsx`:
+
+- **Bảng layer** — tên, màu (bảng chọn ACI), kiểu nét, bề dày, bắt buộc; thêm và
+  xoá dòng. Dòng sai viền đỏ kèm lý do ngay dưới ô, và khoá nút Lưu.
+- **Bảng ánh xạ** — mỗi mẫu nhận diện là một **thẻ** riêng thay vì một chuỗi
+  ngăn bằng dấu phẩy. Lý do: một dấu phẩy thừa tạo ra mẫu rỗng — thứ khớp mọi
+  đối tượng, và không ai nhìn ra vì nó vô hình.
+- **20 thiết lập kích thước nâng cao** — khối gập, dựng từ chính dữ liệu hồ sơ.
+  Trước đó chúng bị `applyProfileEdits()` giữ lại nhưng không ai thấy được.
+
+`applyProfileEdits()` nay ghi ngược cả ba. Mapping vá theo `id` lên bản ghi gốc
+để `bounds` sống sót; layer thì ghi trọn năm trường vì `LayerStandard` chỉ có
+đúng năm. Đã kiểm trên hồ sơ thật của daemon: thêm mẫu, đổi bề dày, đổi
+`arrowhead` — cả hai `bounds` (`420×297` và `minArea 6–80 m²`) và cả 23 trường
+`dimension` còn nguyên.
+
+### Added — lượt quét mang số phiên bản hồ sơ đọc được
+
+`POST /scan` trả thêm `profileVersion`, **chụp lúc quét**. Đọc bộ đếm hiện tại
+khi vẽ màn hình sẽ khoác số mới cho một lượt quét cũ — đúng thứ chip này sinh ra
+để bác bỏ.
+
+`/review` hiện nó ở phụ đề và ở chip cạnh mã phiên (hash để trong `title`). Khi
+hồ sơ đã đổi, cảnh báo nói bằng số — *"Lượt quét theo phiên bản 6; hồ sơ giờ là
+phiên bản 7"* — và nút quét đổi nhãn thành **Quét lại theo phiên bản 7**. Thiếu
+một vế thì không bịa số: vẫn cảnh báo, nhưng không nói "phiên bản 0".
+
+### Fixed — bảng bề dày nét dựng sai thang đo
+
+Tôi dựng nó theo mã DXF group 370: 1/100 mm, ba giá trị âm cho
+`Default`/`ByLayer`/`ByBlock`. Kho hồ sơ nhận **milimét `0…2.11`** cộng ba
+**chuỗi**. 26 trong 27 lựa chọn sẽ ăn 400 ngay lúc lưu.
+
+Đo trực tiếp trên daemon thay vì suy: `40` → 400 *"phải nhỏ hơn hoặc bằng
+2.11"*, `-3` → 400 *"phải lớn hơn hoặc bằng 0"*, `"Default"` → 200. Việc đổi
+sang mã âm là của `lineweight()` ở bước **áp dụng**, không phải của kho — hai
+thang đo, hai tầng, tôi gộp làm một.
+
+Đây là lần thứ hai trong cùng một màn hình tôi đoán khoảng giá trị thay vì đọc
+`standardsProfile.ts`. Lần trước là các ô số của form.
+
+### Fixed — ba khe do chính ba bảng mới mở ra
+
+Tự rà lại trước khi commit, cả ba đều thuộc cùng một dạng: **một thao tác trông
+vô hại làm mất hoặc làm hỏng dữ liệu mà giao diện không mô hình hoá.**
+
+1. **Sửa mã một ánh xạ làm mất `bounds`.** `applyProfileEdits()` tìm bản ghi gốc
+   theo mã đang hiện, nên vừa chữa một lỗi gõ là phép tìm trượt và khung giới
+   hạn diện tích biến mất. Nay `MappingRule` mang thêm `sourceId` — mã **lúc nạp
+   về** — và phép ghép bám theo nó. Dòng thêm mới có `sourceId` rỗng nên không
+   vơ nhầm bản ghi nào, kể cả khi mã của nó trùng một bản ghi đang có.
+
+2. **Xoá trắng một trường kích thước số rồi gõ lại biến nó thành chuỗi.** Kiểu
+   được suy từ giá trị *đang gõ*; xoá trắng làm nó thành `""`, và từ đó mọi ký
+   tự vào đều là chuỗi. `numberValue()` của daemon từ chối thẳng chuỗi — kể cả
+   `"2"`. Nay kiểu lấy từ bản **đã lưu**, trường boolean render bằng ô tích thay
+   vì ô chữ, và `profileSaveBlockedReason()` chặn trước kèm tên trường. Đo trên
+   daemon: `textGap: "0.7"` → 400 *"phải là số hữu hạn"*, `annotative: "false"`
+   → 400 *"phải là boolean"*.
+
+3. **Bấm × một thẻ mẫu xoá cả thẻ trùng với nó.** Ô thẻ khử trùng lặp lúc thêm
+   nhưng dữ liệu máy chủ thì không, và nút xoá lọc theo **giá trị**. Nay xoá
+   theo vị trí.
+
+### Fixed — Codex review: bảng ánh xạ hứa ba thứ chương trình LISP không làm
+
+Đọc `acad-lisp/headless/standards_lib.lsp` mới thấy hết. `acadstd:scan-map` chỉ
+rẽ nhánh trên `"ROOM"`; mọi `kind` khác chạy chung `acadstd:map-entity-p`, và
+hàm đó đọc `nth 3` (layer), `nth 4` (block), `nth 6` (loại đối tượng) — **không
+bao giờ đọc `nth 5` (mẫu chữ)**.
+
+| `kind` | mẫu layer | mẫu block | mẫu chữ | loại đối tượng |
+|---|---|---|---|---|
+| `room` | dùng | dùng | **dùng** — chọn nhãn TEXT/MTEXT | dùng |
+| mọi giá trị khác | dùng | dùng | **bỏ qua** | dùng |
+
+Ba hệ quả, cả ba đã sửa:
+
+- **Loại `text` là thứ tôi bịa ra.** Nó hứa một cách khớp không tồn tại. Đã bỏ
+  khỏi danh sách chọn; cột mẫu chữ ghi rõ “(chỉ room)”, và đặt mẫu chữ ở loại
+  khác thì bị chặn kèm lý do.
+- **Không có cột loại đối tượng.** Ánh xạ mới khởi tạo `entityTypes: []`, mà
+  `acadstd:pattern-p` trả TRUE cho mẫu rỗng — nên quy tắc vơ mọi loại đối tượng.
+  Hồ sơ mặc định *đang dùng* trường này (`INSERT`, `LWPOLYLINE`, `HATCH`…) và
+  giao diện không cho thấy nó. Đã thêm cột.
+- **“Không có mẫu nào” tôi mô tả ngược.** Tôi viết là “sẽ không khớp đối tượng
+  nào”; `map-entity-p` dòng 168 coi *layer rỗng VÀ block rỗng* là **khớp mọi
+  thứ**. Ngược đúng hướng nguy hiểm.
+
+### Fixed — Codex review: bốn ràng buộc của daemon giao diện chưa kiểm
+
+Mỗi cái đều để nút Lưu sáng rồi kết thúc bằng 400:
+
+- **Mã ánh xạ** phải khớp `PROFILE_ID_PATTERN` (`foo/bar`, `-mo-dau` bị từ chối).
+- **Trùng mã** so sau khi VIẾT HOA (`assertUnique`), nên `abc` và `ABC` là trùng.
+  Phép so của layer cũng đổi từ locale `vi` sang `en-US` cho khớp daemon.
+- **Nhãn ánh xạ** không được rỗng.
+- **Bề dày và màu dạng CHUỖI SỐ** thì tôi chặn nhầm: `lineweight()` ép kiểu bằng
+  `Number(value)` nên `"0.35"` và `"35"` đều chạy; `numericColor()` hiểu `"7"`,
+  `ByLayer`, `ByBlock`. Vì phép kiểm chạy cho mọi dòng, một hồ sơ cũ như thế sẽ
+  không sửa được gì nữa. Ngược lại `RGB(...)` thì **phải** chặn — nó lưu êm rồi
+  ném lỗi lúc áp dụng.
+
+Ô thẻ cũng đã nhận `disabled`: trước đó thêm một mẫu trong lúc PUT đang bay thì
+nó biến mất khi phản hồi máy chủ thay bản nháp.
+
+### Fixed — Codex review vòng hai: ba lỗi nữa, một trong đó làm cảnh báo vô hình
+
+- **`var(--danger)` không tồn tại.** Tôi bịa ra một token thay vì đọc bảng token
+  của hệ — nó đơn sắc có chủ ý: đen, xám, một xanh nhấn. Trình duyệt bỏ cả ba
+  khai báo, nên **dòng sai trông y hệt dòng đúng**. Tệ hơn nữa: tôi từng chụp
+  màn hình và nghĩ đã thấy viền đỏ — thứ tôi thấy là vòng focus xanh của ô vừa
+  gõ. Nay báo bằng độ đậm và mực như `mau-thiet-ke/css/app.css` làm: nền hàng
+  `--fg-02`, viền `--fg` 1.5px, lời báo có dấu vuông đặc.
+- **Không gõ được số thập phân ở bảng nâng cao.** `Number("2.")` là `2`, nên ô
+  điều khiển chuẩn hoá ngay khi vừa gõ dấu chấm. Bình luận tôi viết nói ô này
+  giữ được `2.` — bình luận đúng, mã thì không. `NumberField` ở `page.tsx` đã
+  giải đúng bài này từ trước; nay tách `ExtraValueField` dùng cùng cách.
+- **Chặn nhầm quy tắc `room` chỉ có mẫu chữ.** `acadstd:scan-room` tự thu hẹp
+  bằng cấu trúc — chỉ nhận đường bao KÍN có TEXT/MTEXT nằm trong — và dùng chính
+  mẫu chữ để chọn nhãn. Lọc phòng theo nhãn là cách dùng thường gặp nhất của
+  loại này, và tôi đếm độ rộng bằng cùng một công thức cho cả hai đường quét.
+
+Khoá dòng ánh xạ cũng đổi từ chỉ số sang `sourceId`: xoá một dòng phía trên làm
+React tái dùng component của dòng dưới cho một ánh xạ khác, mang theo cả chữ
+đang gõ dở trong ô thẻ.
+
+### Không sửa — có lý do
+
+- **Khoảng giá trị của 20 trường kích thước nâng cao.** Chúng khác nhau thật
+  (`min: 0`, `0.01`, `0.000001`; `font` có `allowEmpty`), và chép sang web sẽ
+  trôi lệch ngay khi máy chủ thêm trường — phá đúng tính chất khiến bảng này
+  đáng tin (dựng từ dữ liệu). Lỗi khoảng của daemon đã nêu đích danh trường và
+  bờ (`profile.dimension.widthFactor: phải lớn hơn hoặc bằng 0.01`) và
+  `daemonFailureText()` hiện nguyên văn. Phép kiểm **kiểu** thì giữ, vì lỗi kiểu
+  mới là loại cho ra lời báo khó lần.
+- **Hai phát hiện nằm trong `mau-thiet-ke/`, không phải app.** Bảng màu ACI
+  10–249 suy màu bằng HSL, và ô thẻ của bộ mẫu không nhận chữ đang gõ khi rời ô.
+  Bản dựng thật cố ý **không** đoán màu, và **có** nhận chữ khi rời ô. Cần báo
+  lại cho người thiết kế; bộ mẫu không nằm trong commit này.
+
+### Changed — nói thẳng chỗ không có
+
+Bộ mẫu có nút "Thử trên bản vẽ đang mở" cho ánh xạ. `drawingStandards.ts` phát
+đúng bảy route và **không có dry-run** — nút đó trong mẫu chạy trên dữ liệu giả
+trong trình duyệt. Bê nguyên là bịa ra một con số người dùng sẽ tin. Màn hình
+thật ghi rõ là chưa có, và chỉ đường kiểm duy nhất: lưu → quét → đối chiếu.
+
+Tương tự, ô kiểu nét gõ tự do chứ không phải danh sách chọn: màn này không mở
+bản vẽ nên không biết bản vẽ đã nạp những kiểu nét nào.
+
+### Technical
+
+- Popover chọn màu dùng `position: fixed` — bảng nằm trong `.tablewrap` có
+  `overflow: auto`, nên `absolute` bị cắt cụt tại mép bảng. Vị trí **đo bằng
+  `useLayoutEffect`** rồi lật lên trên nếu tràn đáy; bản đầu đoán sẵn 260px
+  trong khi phần tử thật cao hơn 300px, và hàng cuối bảng mở ra một popover cụt.
+- Màu ACI chỉ vẽ ô màu cho chỉ số 1–9. Từ 10 trở đi là bảng tra của AutoCAD;
+  đoán bằng công thức cho ra màu sai, mà một ô màu sai cạnh tên layer tệ hơn
+  không có ô nào — người dùng dựa vào đúng nó để tìm nhầm lẫn.
+- 8 test mới trong `test-standards-model.test.ts` (11 → 19). Một test cũ phải
+  sửa: nó khẳng định layer đi **nguyên** từ bản gốc kèm `bounds`, trong khi
+  `sanitizeLayer` của daemon vốn đã bỏ `bounds` — nó ghi lại hành vi của giao
+  diện, không phải hợp đồng của máy chủ.
+
+---
+
 ## 2026-08-12 — Bộ đếm phiên bản hồ sơ, và truy tiếp lỗi revision
 
 ### Added — hồ sơ quy tắc có số phiên bản đọc được

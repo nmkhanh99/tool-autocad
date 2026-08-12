@@ -324,12 +324,22 @@ export default function ReviewPage() {
       title="Kiểm tra bản vẽ"
       sub={scan
         ? `${issues.length} phát hiện · phiên ${scan.scanId}`
+          + (scan.profileVersion > 0 ? ` · quét theo hồ sơ phiên bản ${scan.profileVersion}` : "")
         : "Chưa quét lượt nào"}
       actions={
         <>
           <Button onClick={() => void runScan()} disabled={!!scanBlocked}
             title={scanBlocked || undefined}>
-            {scanBusy ? "Đang quét…" : scan ? "Quét lại" : "Quét bản vẽ"}
+            {/* Nhãn nói RÕ sẽ quét theo phiên bản nào khi hồ sơ đã đổi — người
+                dùng đang nhìn một lượt quét cũ, và "Quét lại" trơn không cho
+                biết lần này sẽ khác ở đâu. */}
+            {scanBusy
+              ? "Đang quét…"
+              : !scan
+                ? "Quét bản vẽ"
+                : profile && profile.version > 0 && profile.version !== scan.profileVersion
+                  ? `Quét lại theo phiên bản ${profile.version}`
+                  : "Quét lại"}
           </Button>
           <WriteButton
             variant="primary"
@@ -366,7 +376,9 @@ export default function ReviewPage() {
                 onClick={() => { loadProfiles(); void runScan(); }}
                 disabled={!!scanBlocked}
               >
-                Quét lại
+                {profile && profile.version > 0
+                  ? `Quét lại theo phiên bản ${profile.version}`
+                  : "Quét lại"}
               </Button>
             </span>
           </div>
@@ -404,6 +416,13 @@ export default function ReviewPage() {
           <header>
             <h2>Lượt quét</h2>
             <div className="actions">
+              {scan?.profileVersion ? (
+                /* Hash để trong `title` cho ai cần đối chiếu — nó mới là thứ máy
+                   chủ so khi áp dụng. Số đếm là thứ đọc được. */
+                <span className="tag mono" title={scan.profileRevision}>
+                  quét theo phiên bản {scan.profileVersion}
+                </span>
+              ) : null}
               {scan ? <span className="tag mono">{scan.scanId}</span> : null}
             </div>
           </header>
