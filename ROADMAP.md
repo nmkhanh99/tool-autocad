@@ -366,7 +366,7 @@ route, như `blocks.module.css` vừa làm.
   | # | Việc | Vì sao ở vị trí này |
   |---|---|---|
   | ~~1~~ | **2.1** Bảng đối tượng đã nhận diện — **XONG 2026-08-12** | `features/standards/RecognizedObjects.tsx`. Bẫy đơn vị đã bịt (daemon gửi bản quy đổi, giao diện hiện `areaUnit` chứ không ghim `m²`). Bản vẽ thật dạy thêm: `area: 0` là *chưa đo được*, không phải diện tích bằng không |
-  | 2 | **1.1** Nhập layer từ bản vẽ | Đối chiếu chứ không thay sạch; nhớ quy đổi bề dày DXF→mm |
+  | ~~2~~ | **1.1** Nhập layer từ bản vẽ — **XONG 2026-08-13** | `features/standards/ImportLayers.tsx`. Đối chiếu ba nhóm, mặc định an toàn. Quy đổi group 370 chia thẳng 100 (không dùng ngưỡng đoán như bộ mẫu) và làm tròn 2 chữ số vì `13/100` là `0.13000000000000003` |
   | 3 | **2.2** Chọn + zoom đối tượng trong AutoCAD | Cây cầu duy nhất từ danh sách phát hiện sang bản vẽ |
   | 4 | **1.2** Sửa `bounds` bằng hai nhóm ô có nhãn, KHÔNG phải ô JSON | Xem bảng ba nghĩa của `bounds` ở trên |
   | 5 | **2.3** Bảng dimension + DIMSPACE | Mở khoá hành động thứ 5/5; hẹp hơn bốn mục trên |
@@ -400,6 +400,25 @@ route, như `blocks.module.css` vừa làm.
 
   Tiêu chí nghiệm thu `grep -c "scopeMatches" = 0` hiện là **4** — tự đạt khi xoá
   panel.
+
+  **Nợ kỹ thuật của 1.1 — các ca biên đã biết, chưa xử lý.** Mục này qua **12 vòng
+  Codex review, ~50 phát hiện**, và mọi đường **mất hoặc bịa dữ liệu** đã bịt.
+  Phần còn lại là các ca hiếm, ghi ra để không mất dấu:
+
+  - Bản vẽ **chưa lưu** chỉ định danh được bằng tiêu đề. Hiện fail-closed: trùng
+    tiêu đề thì bị loại khỏi ô chọn, thiếu `instance` thì từ chối áp. Muốn dùng
+    được thật thì `/drawing-info` phải nhận đích theo `instance`.
+  - Layer **màu thật** không nhập được, kể cả khi người dùng chấp nhận quy về ACI
+    gần nhất — schema hồ sơ không có chỗ cho nó.
+  - Bảng layer quá **500 dòng** thì nhóm xoá bị ẩn vĩnh viễn. Muốn gỡ thì plugin
+    phải phát bảng layer theo trang.
+
+  Bài học đắt nhất, ghi lại nguyên văn: tôi dựng một cơ chế **giữ ảnh chụp cho
+  tươi** (`instance` + `revision` + sự kiện + dấu thời gian) và tám vòng liên tiếp
+  đều tìm ra khe trong chính nó — vì nguyên nhân chung là **có một khoảng thời
+  gian giữa lúc đọc và lúc ghi**, không phải thiếu tín hiệu. Bỏ hẳn khoảng đó
+  (đọc lại ngay lúc bấm Nhận) mới cắt được cả họ lỗi. Thấy ba vòng liền ra lỗi
+  cùng dạng thì đó là dấu hiệu **thiết kế sai**, không phải cần thêm một bản vá.
 
   **Xoá panel khi xong 2.1 + 1.1 + 2.2** — lúc đó nó không còn giữ thứ gì thiết
   yếu. 1.2, 2.3 và hai mục 6–7 làm sau cũng được.

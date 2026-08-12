@@ -428,8 +428,37 @@ Mỗi dòng: tên, màu, kiểu nét, bề dày, có bắt buộc hay không. Th
   những kiểu nét nào**; đặt một tên chưa nạp thì lượt áp dụng ở màn Kiểm tra sẽ
   báo lỗi tại đó, không phải ở đây.
 
-Dòng sai được viền đỏ kèm lý do ngay dưới ô, và nút Lưu khoá lại: tên trống,
+Dòng sai được viền đậm kèm lý do ngay dưới ô, và nút Lưu khoá lại: tên trống,
 trùng tên với dòng phía trên, hoặc màu/bề dày ngoài khoảng.
+
+#### Lấy layer từ một bản vẽ
+
+Nút **Lấy layer từ bản vẽ** ở đầu bảng đọc bảng layer của một bản vẽ đang mở rồi
+**đối chiếu** với hồ sơ — nó *không* thay thế danh sách. Ba nhóm, và **không dòng
+nào đổi trừ khi bạn tích**:
+
+| Nhóm | Mặc định | Tích nghĩa là |
+|---|---|---|
+| Chỉ có trong bản vẽ | **tích sẵn** | thêm vào hồ sơ |
+| Khác thuộc tính | không tích | ghi đè màu · nét · bề dày |
+| Chỉ có trong hồ sơ | không tích | **xoá** khỏi hồ sơ |
+
+Vài điều cần biết:
+
+- **Phải chọn bản vẽ nguồn** ngay trong hộp thoại. Màn Hồ sơ không gắn với bản vẽ
+  nào, nên nó không tự đoán được bạn muốn lấy từ đâu.
+- **Cột "bắt buộc" không bị đụng tới.** Đó là quyết định của bạn, không phải thứ
+  đọc được từ bản vẽ.
+- **Nhận xong vẫn chưa lưu.** Kết quả vào bản nháp; bạn còn phải bấm **Lưu hồ
+  sơ**, và lúc đó mọi ràng buộc lưu vẫn áp dụng như thường.
+- **Bản vẽ quá nhiều layer thì nhóm "chỉ có trong hồ sơ" bị ẩn.** Plugin chỉ trả
+  tối đa 500 dòng, và một danh sách cụt không đủ để nói layer nào *không còn*
+  trong bản vẽ — đoán sai ở đó là xoá nhầm. Hai nhóm kia vẫn dùng được.
+- **Hồ sơ tối đa 500 layer.** Vượt thì nút Lưu khoá lại và nói rõ, thay vì để lượt
+  lưu thất bại.
+- **Bản vẽ nguồn bị đóng, mất kết nối, hoặc mở lại thành phiên khác** trong lúc
+  hộp thoại còn mở thì kết quả đọc bị bỏ và hộp thoại nói rõ — nhập từ một ảnh
+  chụp đã cũ nguy hiểm hơn là phải làm lại.
 
 #### Bảng ánh xạ đối tượng
 

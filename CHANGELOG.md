@@ -1,5 +1,304 @@
 # CHANGELOG
 
+## 2026-08-12 — Nhập layer từ bản vẽ (mục 1.1)
+
+### Added — `/standards` lấy được bảng layer từ một bản vẽ đang mở
+
+Hồ sơ mặc định có 5 layer; một bộ quy chuẩn thật của công ty có 30–80. Gõ tay
+tên, màu, kiểu nét, bề dày cho từng dòng là việc không ai làm đến hết — và cách
+lập hồ sơ tự nhiên nhất là lấy từ một bản vẽ đã chuẩn rồi tỉa lại.
+
+**Đối chiếu, không thay thế.** Panel cũ hỏi một câu rồi thay sạch danh sách: ai
+đã tinh chỉnh cột "bắt buộc" và bề dày cho 40 layer sẽ mất hết trong một cú bấm,
+không có bước hoàn tác nào. Hộp thoại mới chia ba nhóm và **không dòng nào đổi
+trừ khi được tích**, với mặc định nghiêng về phía an toàn:
+
+| Nhóm | Mặc định | Vì sao |
+|---|---|---|
+| Chỉ có trong bản vẽ | **tích sẵn** | cộng thêm, không lấy đi gì |
+| Khác thuộc tính | không tích | ghi đè là lấy đi giá trị bạn đã đặt |
+| Chỉ có trong hồ sơ | không tích | tích nghĩa là **xoá** |
+
+Cột **bắt buộc** không nằm trong phép đối chiếu: nó là quyết định của người lập
+hồ sơ, không phải thuộc tính đọc được từ bản vẽ. Đưa nó vào là mời người dùng
+ghi đè chính lựa chọn của mình bằng một mặc định.
+
+Nhận xong **chưa lưu** — kết quả vào bản nháp, nút Lưu hồ sơ vẫn là bước ghi
+thật và `If-Match` vẫn chốt tranh chấp như mọi lần lưu khác.
+
+### Fixed — Codex review: ba lỗ hổng của chính đường nhập
+
+- **Danh sách bản vẽ chỉ nạp một lần (P1).** Mở `/standards` trước khi AutoCAD
+  sẵn sàng thì `docs` rỗng mãi và nút nhập khoá vĩnh viễn; mở hay đóng một bản vẽ
+  trong lúc trang còn mở thì danh sách nguồn hoặc thiếu, hoặc mời một bản vẽ đã
+  đóng. Nay bám bus sự kiện có sẵn, cùng cách `/review` làm — và một lượt đọc
+  hỏng giữ nguyên danh sách cũ thay vì khoá nút.
+- **Bảng layer bị cắt vẫn được đem đi đối chiếu (P1).** Plugin cắt ở
+  `maxTableItems` = **500 dòng** và phát `layers_truncated`. Đường nhập bỏ qua
+  cảnh báo đó, nên với bản vẽ nhiều layer thì những layer thật của hồ sơ — chỉ
+  đơn giản nằm ngoài phần được trả về — sẽ hiện dưới nhóm **"chỉ có trong hồ
+  sơ"**, và tích một dòng ở đó là **xoá** nó. Nay nhóm xoá bị ẩn khi danh sách bị
+  cắt, kèm lời giải thích; hai nhóm còn lại vẫn dùng được vì chúng chỉ chạm tới
+  layer thật sự đọc được. Khoá cả hộp thoại sẽ chặn đúng người dùng cần nó nhất.
+- **Mất đường lùi payload lồng.** `/drawing-info` để bảng layer ở **ba chỗ** tuỳ
+  phiên bản plugin; panel cũ lùi qua cả ba, tôi chỉ đọc `tables.layers`. Một phản
+  hồi lồng cũ sẽ bị báo "không có bảng layer nào" trong khi nó có đủ. Đã gom phép
+  đọc vào `readDrawingLayers()` ở model để test được cả ba dạng.
+
+### Fixed — Codex review vòng hai: ba lỗ hổng nữa của cùng đường nhập
+
+- **Dòng thiếu thuộc tính bị điền giá trị bịa (P1).** Một dòng chỉ có `name`
+  (và `handle`) không phải một dòng bảng layer — plugin luôn phát đủ `aci`,
+  `linetype`, `lineweight`. Nhận nó rồi điền `7`/`Continuous`/`Default` là **bịa
+  ra thuộc tính** rồi trình bày như thể đọc được từ bản vẽ, ngay trong tính năng
+  mà cả điểm của nó là *"lấy đúng giá trị bản vẽ đang dùng"*. Nay bỏ những dòng
+  đó và **nói ra số lượng** thay vì im lặng.
+- **`layers_unavailable` bị gộp với "bản vẽ trống".** Hai cảnh báo
+  `layers_unavailable` / `layers_iterator_unavailable` nghĩa là plugin **không
+  đọc được** bảng layer — khác hẳn "bản vẽ không có layer nào", điều không tồn
+  tại: mọi bản vẽ đều có ít nhất layer `0`. Nay báo đúng và chỉ đường build lại
+  plugin.
+- **Quá 500 layer thì lưu hỏng mà không ai báo trước.** `MAX_LAYERS` của daemon
+  là 500. Nhập từ một bản vẽ lớn sẽ báo "đã nhận vào bản nháp" rồi để lượt PUT
+  ăn 400. Nay `profileSaveBlockedReason()` chặn trước, cho cả layer lẫn ánh xạ.
+- **Danh sách bản vẽ thiếu vé.** Lượt đọc lúc gắn trang và lượt do sự kiện `doc*`
+  kích hoạt chồng nhau thì phản hồi **cũ** ghi đè ảnh chụp **mới** — ô chọn nguồn
+  bày một tệp đã đóng, rồi lượt nhập đọc từ sai nguồn. `/review` đã có
+  `docsSequence` cho đúng chuyện này; nay `/standards` cũng có.
+
+### Fixed — Codex review vòng ba: năm điểm, hai P1
+
+- **Bản sửa vòng hai chỉ đúng một nửa (P1).** Bộ lọc dùng `||`, nên một dòng
+  `{name, aci}` vẫn lọt và hai thuộc tính còn lại vẫn bị bịa. Nay đòi **đủ cả
+  ba**. Một bản sửa nửa vời còn khó thấy hơn không sửa, vì nó trông như đã có
+  chốt chặn.
+- **Bản vẽ nguồn bị đóng trong lúc hộp thoại còn mở (P1).** Ô chọn không còn mục
+  đó nhưng ảnh chụp layer thì vẫn nguyên, và nút Nhận vẫn đổ nó vào hồ sơ — nhập
+  từ một bản vẽ không còn tồn tại. Nay vứt ảnh chụp và nói ra.
+- **`alive: false` vẫn bật nút nhập.** Giữ danh sách cũ khi một lượt đọc hỏng là
+  đúng, nhưng nút lại chỉ nhìn `docs.length`, nên giao diện mời một đường dẫn có
+  thể đã chết. Nay cờ sống tách riêng và chính nó quyết nút.
+- **Không nghe `drawingSaved`.** Plugin gọi `writeDocs()` rồi phát sự kiện đó
+  ngay trong `saveComplete` — chú thích trong chính plugin nói *"UI nạp lại danh
+  sách theo sự kiện, `writeDocs()` một mình không đánh thức ai cả"*. Một lượt
+  **Save As** đổi đường dẫn tệp, đúng thứ `targetOf()` ưu tiên, nên không nghe là
+  mọi lượt đọc layer sau đó trả `not_found`.
+- **Ném lỗi làm mất chẩn đoán vừa dựng.** Khi mọi dòng đều thiếu thuộc tính,
+  `skipped` khác 0 nhưng lệnh `throw` rơi vào `catch` và `catch` xoá luôn nó —
+  hộp thoại chỉ còn "không có bảng layer nào", tức mất đúng lời giải thích.
+
+### Fixed — Codex review vòng bốn: ảnh chụp phải biết nó thuộc về bản vẽ nào
+
+- **Lượt đọc bảng layer thiếu vé (P1).** Đổi nguồn hai lần liên tiếp thì phản hồi
+  của lượt **cũ** có thể về sau và ghi đè ảnh chụp của lượt **mới**, trong khi ô
+  chọn và câu tóm tắt vẫn ghi tên bản vẽ mới. Tôi vừa thêm vé cho danh sách bản
+  vẽ ở vòng trước mà quên chính lượt đọc layer.
+- **Định danh ảnh chụp là đường dẫn, đáng lẽ phải là `instance` (P1).** Đường dẫn
+  không đủ ở ba ca: đóng hết bản vẽ (`docs` rỗng làm cờ cũ im hẳn), `/docs` hỏng
+  (trang cha giữ danh sách cũ), và **mở lại cùng một tệp** — cùng đường dẫn nhưng
+  `instance` khác, tức một database khác mang ảnh chụp của database cũ.
+- **Thiếu tài liệu.** Rule `documentation-maintenance` đòi cập nhật
+  `USER_GUIDE.md` cho thay đổi người dùng thấy được và `DEVELOPMENT.md` cho thay
+  đổi kiến trúc/state. Tôi cập nhật CHANGELOG và ROADMAP rồi dừng.
+
+### Changed — Codex review vòng năm: gộp 5 mảnh trạng thái thành MỘT
+
+Bốn vòng liền, mỗi vòng đều tìm ra **một cặp trạng thái bị lệch** trong hộp
+thoại nhập: xoá định danh thì cờ hợp lệ tự tắt và cảnh báo biến mất; xoá danh
+sách layer mà quên `picks` thì nút Nhận vẫn sáng. Đó không còn là chuỗi lỗi rời
+rạc mà là **một component mang 8 mảnh trạng thái phải cùng đúng cùng sai**.
+
+Nay gom `drawingLayers` · `snapshotOf` · `truncated` · `skipped` · cờ hợp lệ vào
+một khối `Snapshot | null`. Tính hợp lệ **suy ra** từ khối đó chứ không giữ cờ
+riêng — không còn cặp nào để lệch. Hành vi không đổi: vẫn 42/0/4 trên bản vẽ
+thật.
+
+Hai P1 đi kèm:
+
+- **Định danh phải lấy từ chính phản hồi `/drawing-info`**, không phải từ lượt
+  `/docs` trước đó. Bản vẽ có thể bị đóng rồi mở lại **giữa hai lượt gọi**, và
+  khi đó số layer trả về thuộc một database khác với thứ `/docs` vừa mô tả.
+  Phản hồi mang sẵn `document.instance`.
+- **Đích biến mất thì DỜI sang bản vẽ khác còn mở.** Giữ nguyên là ô chọn trỏ vào
+  một mục không tồn tại, và người dùng phải đóng hộp thoại rồi mở lại mới chọn
+  được gì.
+
+### Fixed — kiểm KIỂU chứ không chỉ kiểm "có mặt"
+
+`Number(null)` là `0` và `Number("")` cũng là `0`, nên một dòng
+`{aci: null, linetype: null, lineweight: null}` lọt qua phép kiểm `!== undefined`
+rồi chuẩn hoá thành màu `0`, `Continuous`, bề dày `0` — vẫn là **bịa dữ liệu**,
+chỉ khó thấy hơn. Đây là lần thứ **ba** siết bộ lọc này; hai lần trước đều siết
+nửa vời (`||` thay vì `&&`, rồi `!== undefined` thay vì kiểm kiểu).
+
+### Fixed — Codex review vòng sáu: `instance` bắt "bản vẽ khác", không bắt "đã sửa"
+
+Sửa một layer trong AutoCAD **giữ nguyên** `instance` — chỉ bộ đếm revision nhảy.
+Nên chốt định danh ở vòng trước vẫn cho ảnh chụp cũ đi qua, rồi ghi màu và bề dày
+lỗi thời vào hồ sơ trong im lặng. Nay so cả `revision`, và `/standards` nghe thêm
+`drawingModified` để bộ đếm ấy được làm mới.
+
+Một đánh đổi đã cân nhắc và ghi ra: **đổi tab trong AutoCAD cũng làm revision
+nhảy** (AutoCAD dựng lại viewport — xem chú thích ở `docs.ts`), nên chốt này báo
+cả khi người dùng không sửa gì. Chấp nhận, vì hai vế lệch nhau rất xa: báo thừa
+tốn một cú bấm trên một lệnh **chỉ đọc**, còn bỏ sót thì hỏng dữ liệu hồ sơ.
+
+Kèm một điểm nhỏ: hai bản vẽ **cùng tên tệp ở hai thư mục** phát cùng một `title`,
+và ô chọn nguồn chỉ hiện tiêu đề — người dùng không phân biệt được, chọn nhầm là
+nhập bảng layer của bản vẽ khác. Trùng thì nay hiện luôn đường dẫn.
+
+### Fixed — Codex review vòng bảy: sửa CA thay vì sửa NGUYÊN TẮC
+
+Nhóm "chỉ có trong hồ sơ" bị ẩn khi danh sách **bị cắt**, nhưng vẫn hiện khi có
+dòng **đọc không nổi**. Hai thứ đó là **cùng một tình huống nhận thức**: không
+đọc được thì không biết bản vẽ còn những layer nào — mà "không biết" thì không
+được kết luận "layer này không còn", và tích một dòng ở đó là **xoá khỏi hồ sơ**.
+Nay gom thành một khái niệm `incomplete`, đúng cho cả hai nguồn.
+
+- **Bản vẽ chưa lưu trùng tiêu đề không thể chỉ đích danh.** Chúng không có đường
+  dẫn nên `targetOf()` lùi về tiêu đề, và hai bản vẽ như vậy cho ra **cùng một
+  đích** — máy chủ từ chối vì mơ hồ, còn ô chọn thì có hai mục giống hệt.
+  `/drawing-info` nhận đích theo đường dẫn hoặc tiêu đề, **không** nhận
+  `instance`, nên không định danh nào cứu được. Bỏ chúng khỏi danh sách và nói lý
+  do, thay vì bày một lựa chọn chắc chắn hỏng.
+- **Khe đua giữa sự kiện và lượt đọc lại.** Trang cha nghe `drawingModified` rồi
+  gọi `loadDocs()` — bất đồng bộ, và trong khoảng chờ ấy bộ đếm revision hộp thoại
+  nhìn thấy vẫn là số cũ, nút Nhận vẫn sáng. Nay mốc thay đổi đi thẳng qua prop và
+  vô hiệu ảnh chụp **ngay**. Tín hiệu phải đi qua prop chứ không nghe thẳng:
+  `check:boundaries` chặn `features/standards` import `features/acad-connection`
+  — và nó chặn đúng, tôi đã thử đường tắt đó và bị bắt.
+
+### Changed — Codex review vòng tám: bỏ hẳn cơ chế "giữ ảnh chụp cho tươi"
+
+Tám vòng, và ba vòng gần nhất đều là **bản vá của tôi đẻ ra vấn đề mới**. Nhìn
+lại thì nguyên nhân chung rất rõ: tôi cố canh cho một ảnh chụp luôn khớp bản vẽ
+bằng cách thêm tín hiệu — `instance`, `revision`, `changedAt`, `readAt`,
+`collectedAt` — và các tín hiệu bắt đầu mâu thuẫn nhau:
+
+- So `revision` giữa **hai lượt đọc khác nhau** vừa báo **sót** (bản vẽ đổi giữa
+  lúc plugin thu thập và lúc phản hồi về) vừa báo **thừa** (đổi tab cũng làm nó
+  nhảy). Riêng đường `withLegacySelectionCatalog()` tự làm revision nhảy rồi kẹt
+  vĩnh viễn ở trạng thái "đã đổi", thử lại bao nhiêu lần cũng vậy.
+- Sự kiện thì bất đồng bộ, nên luôn còn một khe giữa lúc AutoCAD đổi và lúc giao
+  diện biết — bịt bằng cách nghe thêm sự kiện chỉ làm khe hẹp lại, không đóng.
+
+Không khe nào đóng được bằng cách thêm tín hiệu, vì nguyên nhân chung là **có
+một khoảng thời gian giữa lúc đọc và lúc ghi**.
+
+Nên bỏ hẳn khoảng đó: bảng trong hộp thoại là **bản xem trước**, còn lúc bấm Nhận
+thì **đọc lại** và áp trên số liệu vừa đọc. Tích của người dùng gắn với tên layer
+nên sống sót qua lượt đọc lại; thứ gì đã tích mà lượt đọc mới không còn thấy thì
+**dừng lại và bày số liệu mới**, thay vì ghi bừa. Nếu lượt đọc lại cho thấy bảng
+không đầy đủ mà người dùng đang tích dòng xoá thì cũng dừng.
+
+Gỡ được: `changedAt`, `readAt`, `revision`, phép so instance-để-đo-độ-tươi, và
+prop nối giữa trang với hộp thoại. Hành vi trên bản vẽ thật không đổi (42/0/4),
+và đường Nhận đã chạy end-to-end: đọc lại → áp vào bản nháp → nút Lưu bật, máy
+chủ vẫn nguyên v10 với 5 layer.
+
+### Fixed — Codex review vòng chín: năm lỗi biên của thiết kế đọc-lại
+
+- **Huỷ giữa lúc đang đọc lại vẫn sửa bản nháp (P1).** `apply()` chờ một lượt
+  đọc, và trong khoảng đó Huỷ / Esc / bấm nền vẫn ăn — hộp thoại gỡ khỏi cây
+  nhưng phần tiếp sau của hàm bất đồng bộ vẫn chạy và vẫn gọi `onApply`. Nay khoá
+  mọi đường đóng khi đang bận, và có cờ huỷ chặn ở phía sau.
+- **Bản vẽ chưa lưu chỉ định danh bằng tiêu đề (P1).** Đóng nó rồi mở một bản vẽ
+  chưa lưu khác trùng tiêu đề thì máy chủ giải ra bản thay thế, và hộp thoại áp
+  lựa chọn của bản vẽ này lên bảng layer của bản vẽ kia. Nay ảnh chụp mang
+  `document.instance` của **chính phản hồi**, và lượt đọc lại phải khớp.
+
+  Khác hẳn cách dùng `instance` đã bỏ ở vòng tám: ở đây so **hai phản hồi với
+  nhau** (xem trước ↔ đọc lại), không so phản hồi với một lượt `/docs` đọc ở thời
+  điểm khác. Cùng nguồn, cùng loại, nên không có đua.
+- **Tiêu đề trùng phải so với MỌI bản vẽ**, không chỉ với các bản vẽ chưa lưu
+  khác: một bản vẽ chưa lưu trùng tiêu đề với một bản vẽ **đã lưu** cũng làm máy
+  chủ trả `target_ambiguous`.
+- **`aci: null` biến thành màu 0.** `num()` gọi `Number()`, mà `Number(null)` là
+  `0` và hữu hạn — nên `num(aci) ?? num(color)` cho ra `0` và đường lùi `color`
+  không bao giờ chạy. Layer nhập vào mang màu 0 thay vì màu thật. Nay chọn theo
+  **kiểu**.
+- **Ô tích vẫn bấm được lúc đang đọc lại.** `apply()` chụp tập đã tích *trước*
+  khi chờ, nên tích thêm lúc đó chỉ đổi thứ hiện trên màn hình còn thứ được áp
+  vẫn là tập cũ — người dùng thấy một đằng, app ghi một nẻo.
+
+### Fixed — Codex review vòng mười: bốn P1 cùng một câu hỏi, và một mất mát im lặng
+
+Bốn phát hiện đầu đều là **cùng một câu hỏi diễn đạt bốn kiểu**: *"thứ đang áp có
+đúng là thứ người dùng vừa xem không, và ta có BIẾT điều đó không?"* Bốn lỗ:
+
+- **Đóng hết bản vẽ** → hiệu ứng dời đích thoát sớm ở nhánh `!docs.length`, nên
+  hộp thoại tiếp tục bày số liệu của một bản vẽ đã đóng và nút Nhận vẫn sáng.
+- **Đích đổi trong lúc đọc lại** → phần tiếp sau chỉ kiểm cờ huỷ, không kiểm đích
+  còn là đích cũ không.
+- **Thiếu `instance`** → chốt định danh bỏ qua phép so, tức **fail open**. Nay
+  fail closed cho bản vẽ **chưa lưu** (chúng chỉ định danh được bằng tiêu đề);
+  bản vẽ đã lưu thì đường dẫn đã là định danh duy nhất nên không cần.
+- **Đích ban đầu có thể không chọn được** → khởi tạo từ `docs` thay vì từ danh
+  sách đã lọc, nên hộp thoại mở ra đã hỏng sẵn khi bản vẽ đang hoạt động là một
+  bản chưa lưu trùng tiêu đề.
+
+Và một mất mát im lặng: **layer dùng màu thật (true color)**. Hồ sơ chỉ biểu diễn
+được chỉ số ACI `0…256` hoặc ba tên. Plugin gửi `aci` = `colorIndex()`, mà với
+màu thật thì chỉ số đó **không** mang màu người dùng đặt — nhập vào là lặng lẽ
+thay màu layer bằng một ACI sai. Nay bỏ chúng và đếm vào `skipped`, đúng nguyên
+tắc đã dùng cho dòng thiếu thuộc tính: **không biểu diễn được thì không bịa**.
+Dấu hiệu là `rgb` khác `[0,0,0]`; đo trên bản vẽ thật thì 43 layer đều dùng ACI
+và cả 43 đều `rgb: [0,0,0]`, nên bộ lọc không loại nhầm dòng nào.
+
+### Fixed — Codex review vòng mười một: phép so luôn đúng, và màu đen tuyền
+
+- **Chốt "đích đã đổi" của vòng trước là phép so vô nghĩa (P1).** `startedFor` và
+  `target` **cùng đóng gói từ một lần render**, nên chúng luôn bằng nhau và chốt
+  không bao giờ phát hiện được gì. Muốn biết đích đã đổi thì phải đọc một ô nhớ
+  **sống** (`useRef`), không phải một biến đã đông cứng lúc hàm được tạo.
+- **Vứt đích mà không huỷ lượt đọc đang bay (P1).** `preview("")` thoát ngay ở
+  `if (!file) return` nên không cấp vé mới, và phản hồi cũ qua được phép kiểm vé
+  rồi dựng lại ảnh chụp của bản vẽ đã đóng — bật lại nút Nhận.
+- **Màu thật ĐEN TUYỀN không phân biệt được với ACI.** `rgb: [0,0,0]` giống hệt
+  một layer dùng ACI, và payload không mang `colorMethod`. Nhưng nó lộ ở chỗ
+  khác: `colorIndex()` của layer màu thật trả `0`, mà `0` (ByBlock) và `256`
+  (ByLayer) đều **không phải màu hợp lệ cho một layer** — một layer không kế thừa
+  màu từ chính nó, và `layerColor()` của daemon lặng lẽ đổi cả hai thành `7` lúc
+  áp dụng. Nay bỏ chúng.
+
+### Fixed — Codex review vòng mười hai: lỗi cũ đè lên bản xem trước mới
+
+Nguồn A bị đóng giữa chừng, hộp thoại dời sang B và nạp xong bản xem trước của B
+— rồi lượt đọc của A hỏng và ghi lỗi của A đè lên. Bảng của B vẫn nằm đó nhưng bị
+giấu sau một thông báo lỗi không liên quan, và lượt nạp thành công thì không xoá
+lỗi. Nay `catch` và `finally` cũng kiểm vé, không chỉ đường thành công — và
+`apply()` dùng **chung** bộ đếm vé với `preview()`, vì hai đường cùng ghi vào
+`snapshot`/`error`/`busy`.
+
+### Technical — bề dày phải quy đổi, và không được đoán
+
+Plugin gửi thẳng `(int)layer->lineWeight()`, tức **luôn là mã DXF group 370**;
+kho hồ sơ nhận ba **tên** và số **milimét** `0…2.11`. Bỏ bước đổi là mọi layer
+nhập vào bị máy chủ từ chối từng dòng một.
+
+`lineweightFromDxf()` chia thẳng cho 100 chứ không dùng ngưỡng đoán. Bộ mẫu đoán
+bằng `n > 2.11 ? n/100 : n`; trên bản vẽ thật hai cách cho cùng kết quả (giá trị
+hợp lệ duy nhất ≤ 2.11 là `0`, mà `0/100` cũng là `0`), nhưng ngưỡng ấy sẽ đọc
+một giá trị lạ như `2` thành *2 mm* thay vì *0.02 mm*. Nguồn đã chắc chắn là
+group 370 thì không có gì để đoán.
+
+Phải làm tròn hai chữ số: `13/100` trong dấu phẩy động là `0.13000000000000003`,
+và giá trị đó không khớp mục nào trong ô chọn — dòng vừa nhập sẽ hiện ra như một
+giá trị lạ. Test khoá điều kiện **mọi giá trị quy đổi đều tồn tại trong
+`LINEWEIGHTS`**.
+
+- `features/standards/ImportLayers.tsx` (mới); `reconcileLayers()`,
+  `applyLayerReconcile()`, `lineweightFromDxf()`, `normalizeDrawingLayers()`,
+  `countLayerPicks()` trong `model.ts`.
+- 2 test mới (27 test cho module này) dùng đúng phân bố group 370 đo được trên
+  bản vẽ thật: `-3 · 0 · 5 · 9 · 13 · 15 · 18 · 30 · 35 · 40`.
+- **Đã kiểm trên AutoCAD 2027 thật:** bản vẽ 43 layer đối chiếu với hồ sơ 5 layer
+  cho ra **42 thêm · 0 khác · 4 chỉ-có-ở-hồ-sơ** — phép cộng khớp, vì đúng layer
+  `0` trùng nhau hoàn toàn. Quy đổi hiện đúng trên màn hình: `-3`→`Default`,
+  `13`→`0.13`, `5`→`0.05`, `15`→`0.15`. Bấm Huỷ, hồ sơ vẫn nguyên 5 layer.
+
+---
+
 ## 2026-08-12 — Bảng đối tượng đã nhận diện (mục 2.1)
 
 ### Added — `/review` hiện đối tượng các ánh xạ bắt được

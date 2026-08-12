@@ -25,7 +25,7 @@
  * `PUT /profiles/:id` nhận `if-match` là revision đang giữ. Gửi kèm nó nghĩa là
  * hai tab cùng sửa một hồ sơ sẽ có một bên bị từ chối thay vì im lặng ghi đè.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "../../../components/shell/AppShell";
 import { Button } from "../../../components/ui/Button";
@@ -44,6 +44,9 @@ import {
   LayerTable,
   MappingTable,
 } from "../../../features/standards/ProfileTables";
+import { ImportLayers } from "../../../features/standards/ImportLayers";
+import { fetchDocs, type AcadDocument } from "../../../lib/daemon/docs";
+import { useAcadEvents } from "../../../features/acad-connection/events";
 
 /** Trường số: giữ chuỗi rỗng thành `undefined` thay vì `0`.
  *
@@ -119,6 +122,16 @@ export default function StandardsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [savedNote, setSavedNote] = useState("");
+  /* Màn này KHÔNG gắn với bản vẽ nào — nó chỉ sửa một hồ sơ trong daemon. Danh
+     sách bản vẽ chỉ dùng cho một việc: hộp thoại nhập layer phải hỏi lấy từ đâu.
+     Một lượt đọc hỏng không được làm gì ngoài việc khoá đúng cái nút đó. */
+  const [docs, setDocs] = useState<AcadDocument[]>([]);
+  /* Danh sách còn SỐNG hay không, tách khỏi nội dung danh sách. Giữ danh sách cũ
+     khi một lượt đọc hỏng là đúng — nhưng nếu chỉ nhìn `docs.length` để bật nút
+     nhập thì giao diện sẽ mời một đường dẫn có thể đã chết, và người dùng chỉ
+     biết sau khi mở hộp thoại rồi ăn lỗi. */
+  const [docsAlive, setDocsAlive] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   /** `throwOnFailure` cho đường LƯU: ở đó một lượt nạp lại hỏng KHÔNG được im
    *  lặng, vì bản nháp sẽ giữ `revision` cũ và lần lưu sau gửi `If-Match` đã
@@ -144,6 +157,47 @@ export default function StandardsPage() {
   }, []);
 
   useEffect(() => { void loadProfiles(); }, [loadProfiles]);
+
+  /* Đọc MỘT LẦN lúc gắn là không đủ: mở `/standards` trước khi AutoCAD sẵn sàng
+     thì `docs` rỗng mãi và nút nhập layer khoá vĩnh viễn; mở hoặc đóng một bản vẽ
+     trong lúc trang còn mở thì danh sách nguồn hoặc thiếu, hoặc mời một bản vẽ đã
+     đóng. Bám bus sự kiện có sẵn — cùng cách `/review` làm. */
+  /* Vé cho lượt đọc danh sách. Lượt đọc lúc gắn trang và lượt do sự kiện `doc*`
+     kích hoạt có thể chồng nhau, và không có vé thì phản hồi CŨ ghi đè lên ảnh
+     chụp MỚI — ô chọn nguồn sẽ bày một tệp đã đóng, hoặc đánh dấu nhầm bản vẽ
+     đang hoạt động, rồi lượt nhập layer đọc từ sai nguồn. `/review` đã có vé
+     `docsSequence` cho đúng chuyện này. */
+  const docsSequence = useRef(0);
+  const loadDocs = useCallback(() => {
+    const ticket = ++docsSequence.current;
+    fetchDocs(DAEMON_BASE)
+      .then((snapshot) => {
+        if (ticket !== docsSequence.current) return;
+        /* Một lượt đọc hỏng KHÔNG phải bằng chứng AutoCAD không còn bản vẽ nào —
+           giữ danh sách cũ thay vì xoá trắng vì một lần trục trặc. Nhưng cờ sống
+           thì hạ xuống, và chính nó mới quyết nút nhập có bật hay không. */
+        setDocsAlive(snapshot.alive);
+        if (snapshot.alive) setDocs(snapshot.docs);
+      })
+      .catch(() => {
+        if (ticket !== docsSequence.current) return;
+        setDocsAlive(false);
+      });
+  }, []);
+  useEffect(loadDocs, [loadDocs]);
+
+  useAcadEvents(DAEMON_BASE, (event) => {
+    /* `drawingSaved` cũng phải nghe. Plugin gọi `writeDocs()` rồi phát sự kiện đó
+       ngay trong `saveComplete` — và một lượt "Save As" đổi ĐƯỜNG DẪN tệp, tức
+       đúng thứ `targetOf()` ưu tiên. Không nghe thì danh sách nguồn giữ đường dẫn
+       cũ, và mọi lượt đọc layer sau đó trả `not_found` cho tới lần mở/đóng bản vẽ
+       kế tiếp. */
+    /* Nghe rộng để ô chọn nguồn của hộp thoại nhập layer luôn đúng. Việc bảo
+       đảm số liệu không cũ thì KHÔNG dựa vào đây — hộp thoại đọc lại ngay tại
+       lúc bấm Nhận, nên không có khoảng thời gian nào để canh. */
+    if (event.type.startsWith("doc") || event.type === "drawingSaved"
+      || event.type === "drawingModified" || event.type === "pluginLoaded") loadDocs();
+  });
 
   const selected = profiles.find((item) => item.id === selectedId) ?? null;
 
@@ -419,13 +473,32 @@ export default function StandardsPage() {
             </section>
 
             <LayerTable layers={draft.layers} disabled={busy}
-              onChange={(layers) => patch({ layers })} />
+              onChange={(layers) => patch({ layers })}
+              /* Không có bản vẽ nào đang mở thì KHÔNG truyền hàm — nút sẽ mờ và
+                 nói lý do, thay vì mở một hộp thoại rỗng rồi báo lỗi. */
+              onImport={docsAlive && docs.length ? () => setImportOpen(true) : undefined} />
 
             <MappingTable mappings={draft.mappings} disabled={busy}
               onChange={(mappings) => patch({ mappings })} />
           </>
         ) : null}
       </div>
+
+      {importOpen && draft ? (
+        <ImportLayers
+          layers={draft.layers}
+          docs={docs}
+          docsAlive={docsAlive}
+          onCancel={() => setImportOpen(false)}
+          onApply={(layers, summary) => {
+            patch({ layers });
+            setImportOpen(false);
+            /* Nói rõ CHƯA LƯU. Kết quả vào bản nháp; nút Lưu hồ sơ vẫn là bước
+               ghi thật, và `If-Match` vẫn chốt tranh chấp như mọi lần lưu khác. */
+            setSavedNote(summary);
+          }}
+        />
+      ) : null}
     </AppShell>
   );
 }

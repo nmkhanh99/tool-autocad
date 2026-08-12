@@ -735,6 +735,38 @@ khung tên bằng `/frame|sheet|title.?block|khung/i` trên `kind` + `mappingId`
 mọi thứ. Một ánh xạ không có mẫu layer/block/loại nào sẽ vơ cả bản vẽ vào bảng
 bóc tách — im lặng, và trông như đã cấu hình xong. `mappingRowErrors()` chặn nó.
 
+#### Nhập layer từ bản vẽ — ba cái bẫy của một tính năng "chỉ đọc rồi chép"
+
+`/standards` **không gắn với bản vẽ nào**, nên nó chỉ đọc `/api/acad/docs` cho
+đúng một việc: hỏi hộp thoại nhập layer lấy từ đâu. Danh sách đó bám bus sự kiện
+(`doc*`, `drawingSaved`, `pluginLoaded`) và có vé chống đua như `/review`.
+
+Ba thứ dữ liệu phải đúng, và cả ba đều từng sai:
+
+1. **Bề dày là mã DXF group 370, không phải milimét.** Plugin gửi thẳng
+   `(int)layer->lineWeight()`. Kho hồ sơ nhận ba **tên** và số **milimét**
+   `0…2.11`. `lineweightFromDxf()` chia thẳng cho 100 — không dùng ngưỡng đoán —
+   và làm tròn hai chữ số, vì `13/100` trong dấu phẩy động là
+   `0.13000000000000003`, một giá trị không khớp mục nào trong ô chọn.
+2. **`layers_truncated` phải chặn kết luận "không còn".** Plugin cắt bảng ở
+   `maxTableItems` = 500. Một danh sách cụt không đủ để nói layer nào *không còn*
+   trong bản vẽ — nên nhóm xoá bị ẩn khi cờ này bật, còn hai nhóm kia vẫn dùng
+   được vì chúng chỉ chạm tới layer thật sự đọc được.
+3. **Dòng thiếu thuộc tính phải bị bỏ, không được điền mặc định.** Plugin luôn
+   phát đủ `aci` · `linetype` · `lineweight`; một dòng thiếu bất kỳ cái nào không
+   phải dòng bảng layer. Điền `7`/`Continuous`/`Default` vào rồi trình bày như
+   thể đọc từ bản vẽ là bịa dữ liệu, ngay trong tính năng mà cả điểm của nó là
+   "lấy đúng giá trị bản vẽ đang dùng".
+
+`layers_unavailable` / `layers_iterator_unavailable` **khác** "bản vẽ không có
+layer nào" — điều sau không tồn tại, mọi bản vẽ đều có ít nhất layer `0`. Hai
+cảnh báo đó nghĩa là plugin không đọc được bảng, và câu thông báo phải chỉ đường
+build lại plugin.
+
+**Định danh ảnh chụp là `instance`, không phải đường dẫn.** Đóng rồi mở lại cùng
+một tệp cho ra `instance` khác — cùng đường dẫn nhưng là một database khác, và
+ảnh chụp cũ khi đó nói về thứ không còn tồn tại.
+
 #### Không có đường xem trước ánh xạ
 
 `drawingStandards.ts` phát đúng bảy route: `GET/POST /profiles`,

@@ -245,10 +245,13 @@ function AciPicker({ value, onChange, disabled }: {
  * Bảng layer
  * ------------------------------------------------------------------ */
 
-export function LayerTable({ layers, onChange, disabled }: {
+export function LayerTable({ layers, onChange, disabled, onImport }: {
   layers: readonly LayerRule[];
   onChange: (next: LayerRule[]) => void;
   disabled: boolean;
+  /** Mở hộp thoại nhập layer từ bản vẽ. `undefined` = không có bản vẽ nào đang
+   * mở, và nút phải nói lý do chứ không chỉ mờ đi. */
+  onImport?: () => void;
 }) {
   const errors = layerRowErrors(layers);
   /* Gợi ý lấy từ chính hồ sơ này, KHÔNG từ một danh sách linetype dựng sẵn.
@@ -266,6 +269,10 @@ export function LayerTable({ layers, onChange, disabled }: {
         <h2>Layer bắt buộc</h2>
         <div className="actions">
           <span className="tag mono">{layers.length}</span>
+          <Button disabled={disabled || !onImport}
+            title={onImport ? undefined
+              : "Bảng layer đọc từ một bản vẽ đang mở trong AutoCAD; hiện chưa có bản vẽ nào."}
+            onClick={() => onImport?.()}>Lấy layer từ bản vẽ</Button>
           <Button disabled={disabled} onClick={() => onChange([...layers, {
             name: "", color: 7, linetype: "Continuous", lineweight: "Default", required: true,
           }])}>Thêm layer</Button>

@@ -942,6 +942,16 @@ export function profileSaveBlockedReason(
       + `chỉ nhận ${LINEAR_FORMATS.join(", ")} hoặc số 1–5.`;
   }
 
+  /* `MAX_LAYERS`/`MAX_MAPPINGS` của daemon đều là 500. Không kiểm ở đây thì một
+     lượt nhập layer từ bản vẽ lớn sẽ báo "đã nhận vào bản nháp" rồi để lượt PUT
+     sau đó ăn 400 — người dùng không biết vì sao. */
+  if (profile.layers.length > 500) {
+    return `Hồ sơ không được quá 500 layer; đang có ${profile.layers.length}.`;
+  }
+  if (profile.mappings.length > 500) {
+    return `Hồ sơ không được quá 500 ánh xạ; đang có ${profile.mappings.length}.`;
+  }
+
   const layerError = layerRowErrors(profile.layers).findIndex(Boolean);
   if (layerError >= 0) {
     return `Layer dòng ${layerError + 1}: ${layerRowErrors(profile.layers)[layerError]}`;
@@ -968,6 +978,260 @@ export function profileSaveBlockedReason(
     }
   }
   return "";
+}
+
+
+/* ------------------------------------------------------------------ *
+ * Nhập layer từ bản vẽ
+ * ------------------------------------------------------------------ */
+
+/** Một dòng của bảng layer đọc từ bản vẽ (`/drawing-info` → `tables.layers`). */
+export type DrawingLayer = {
+  name: string;
+  color: number | undefined;
+  linetype: string;
+  /** Bề dày **theo mã DXF group 370**, chưa quy đổi. */
+  lineweight370: number | undefined;
+};
+
+/** Đổi bề dày từ mã DXF group 370 sang dạng kho hồ sơ nhận.
+ *
+ * Plugin gửi thẳng `(int)layer->lineWeight()`, tức **luôn là group 370**: ba giá
+ * trị âm mang ý nghĩa, phần còn lại là 1/100 mm. Kho hồ sơ thì nhận ba **tên**
+ * và số **milimét** `0…2.11`. Bỏ bước đổi này là mọi layer nhập vào đều bị máy
+ * chủ từ chối từng dòng một.
+ *
+ * Chia thẳng cho 100, không dùng ngưỡng đoán. Bộ mẫu đoán bằng
+ * `n > 2.11 ? n/100 : n` — trên bản vẽ thật hai cách cho cùng kết quả (giá trị
+ * hợp lệ duy nhất ≤ 2.11 là `0`, mà `0/100` cũng là `0`), nhưng ngưỡng ấy sẽ
+ * đọc một giá trị lạ như `2` thành *2 mm* thay vì *0.02 mm*. Nguồn đã chắc chắn
+ * là group 370 thì không có gì để đoán.
+ *
+ * Đo trên bản vẽ thật, 43 layer: `-3 · 0 · 5 · 9 · 13 · 15 · 18 · 30 · 35 · 40`
+ * — tất cả đều là giá trị hợp lệ của `AcDb::LineWeight`.
+ */
+export function lineweightFromDxf(raw: number | undefined): string | number {
+  if (raw === undefined || !Number.isFinite(raw)) return "Default";
+  if (raw === -3) return "Default";
+  if (raw === -2) return "ByBlock";
+  if (raw === -1) return "ByLayer";
+  if (raw < 0) return "Default";
+  /* Làm tròn hai chữ số: `13/100` trong dấu phẩy động là `0.13000000000000003`,
+     và một giá trị như thế không khớp mục nào trong ô chọn — dòng vừa nhập vào
+     sẽ hiện ra như một giá trị lạ. */
+  return Math.round(raw) / 100;
+}
+
+/** Bảng layer đọc từ phản hồi `/drawing-info`, kèm cờ danh sách bị cắt.
+ *
+ * Hợp đồng có bảng layer ở **ba chỗ** tuỳ phiên bản plugin. Chỉ đọc
+ * `tables.layers` là một bản phản hồi lồng cũ sẽ bị báo "không có bảng layer
+ * nào" trong khi nó có đủ — panel cũ đã lùi qua cả ba, và bỏ đường lùi đó là
+ * một bước lùi tương thích.
+ *
+ * `layers_truncated` quan trọng hơn nó trông: plugin cắt bảng ở 500 dòng
+ * (`maxTableItems`), và một danh sách cụt **không đủ** để kết luận "layer này
+ * không còn trong bản vẽ" — nó có thể chỉ nằm ngoài phần được trả về. Kết luận
+ * sai ở đó dẫn thẳng tới xoá một layer thật khỏi hồ sơ.
+ */
+export function readDrawingLayers(body: unknown): {
+  layers: DrawingLayer[];
+  truncated: boolean;
+  /** Số dòng bị bỏ vì KHÔNG mang thuộc tính layer nào. */
+  skipped: number;
+  /** Plugin nói thẳng là nó không đọc được bảng layer. Khác hẳn "bản vẽ không có
+   * layer nào" — cái sau không tồn tại, mọi bản vẽ đều có ít nhất layer `0`. */
+  unavailable: boolean;
+} {
+  const source = record(body);
+  const rows = record(source.tables).layers
+    ?? record(source.drawing).layers
+    ?? source.layers;
+  const warnings = Array.isArray(source.warnings) ? source.warnings.map(String) : [];
+  const all = Array.isArray(rows) ? rows.map(record) : [];
+  /* Dòng chỉ có `name` (và có thể `handle`) KHÔNG phải một dòng bảng layer —
+     plugin luôn phát đủ `aci`, `linetype`, `lineweight` cho mỗi layer. Nhận nó
+     rồi điền `7`/`Continuous`/`Default` là **bịa ra thuộc tính** rồi trình bày
+     như thể đọc được từ bản vẽ, ngay trong một tính năng mà cả điểm của nó là
+     "lấy đúng giá trị bản vẽ đang dùng".
+
+     Đòi ĐỦ CẢ BA, không phải "có ít nhất một". Bản trước dùng `||`, nên một dòng
+     `{name, aci}` vẫn lọt và hai thuộc tính còn lại vẫn bị bịa — sửa nửa vời còn
+     khó thấy hơn không sửa. */
+  /* Kiểm KIỂU chứ không chỉ kiểm "có mặt". `Number(null)` là `0` và
+     `Number("")` cũng là `0`, nên một dòng `{aci: null, linetype: null,
+     lineweight: null}` lọt qua phép kiểm `!== undefined` rồi chuẩn hoá thành
+     màu `0`, `Continuous`, bề dày `0` — vẫn là bịa dữ liệu, chỉ khó thấy hơn.
+     Đây là lần thứ ba tôi siết bộ lọc này; hai lần trước đều siết nửa vời. */
+  const isNumber = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value);
+  /* Layer dùng MÀU THẬT (true color) không biểu diễn được trong hồ sơ: schema
+     chỉ nhận chỉ số ACI `0…256` hoặc ba tên. Plugin gửi `aci` = `colorIndex()`,
+     và với màu thật thì chỉ số đó không mang màu người dùng đặt — nhập vào là
+     lặng lẽ thay màu của layer bằng một ACI sai.
+     Dấu hiệu: `rgb` khác `[0,0,0]`. Đo trên bản vẽ thật 43 layer đều dùng ACI,
+     cả 43 đều `rgb: [0,0,0]`. Bỏ chúng và đếm vào `skipped` — đúng nguyên tắc đã
+     dùng cho dòng thiếu thuộc tính: không biểu diễn được thì không bịa. */
+  const trueColor = (row: JsonRecord) => {
+    const rgb = row.rgb;
+    if (Array.isArray(rgb) && rgb.length >= 3
+      && rgb.some((channel) => typeof channel === "number" && channel !== 0)) return true;
+    /* Màu thật ĐEN TUYỀN có `rgb: [0,0,0]`, không phân biệt được với một layer
+       dùng ACI — payload không mang `colorMethod`. Nhưng nó lộ ra ở chỗ khác:
+       `colorIndex()` của một layer màu thật trả về `0`, và `0` (ByBlock) cùng
+       `256` (ByLayer) đều KHÔNG phải màu hợp lệ cho một layer — một layer không
+       kế thừa màu từ chính nó. `layerColor()` của daemon lặng lẽ đổi cả hai
+       thành `7` lúc áp dụng, tức layer nhập vào đổi màu mà không ai báo.
+       Không biểu diễn được thì không nhập. */
+    const index = typeof row.aci === "number" ? row.aci
+      : (typeof row.color === "number" ? row.color : undefined);
+    return index === 0 || index === 256;
+  };
+  const usable = all.filter((row) =>
+    (isNumber(row.aci) || isNumber(row.color))
+    && typeof row.linetype === "string" && row.linetype.trim() !== ""
+    && isNumber(row.lineweight)
+    && !trueColor(row));
+  return {
+    layers: normalizeDrawingLayers(usable),
+    truncated: warnings.includes("layers_truncated"),
+    skipped: all.filter((row) => str(row.name)).length
+      - usable.filter((row) => str(row.name)).length,
+    unavailable: warnings.includes("layers_unavailable")
+      || warnings.includes("layers_iterator_unavailable"),
+  };
+}
+
+export function normalizeDrawingLayers(value: unknown): DrawingLayer[] {
+  const rows = Array.isArray(value) ? value : [];
+  return rows.map(record).map((row) => ({
+    name: str(row.name),
+    /* `aci` là chỉ số màu; `color` của payload cũng là số nhưng `aci` mới là
+       trường daemon dùng khi so sánh layer.
+       Chọn theo KIỂU, không theo `??`: `num()` gọi `Number()` rồi kiểm hữu hạn,
+       mà `Number(null)` là `0` và `Number(false)` cũng là `0` — nên `aci: null`
+       cho ra `0` và đường lùi `color` không bao giờ chạy. Layer nhập vào sẽ mang
+       màu 0 thay vì màu thật của nó. */
+    color: typeof row.aci === "number" && Number.isFinite(row.aci)
+      ? row.aci
+      : (typeof row.color === "number" && Number.isFinite(row.color)
+        ? row.color
+        : undefined),
+    linetype: str(row.linetype, "Continuous"),
+    lineweight370: num(row.lineweight),
+  })).filter((layer) => layer.name);
+}
+
+/** Một dòng khác biệt giữa hồ sơ và bản vẽ. */
+export type LayerDiffField = { label: string; from: string; to: string };
+
+export type LayerReconcile = {
+  /** Có trong bản vẽ, chưa có trong hồ sơ. */
+  add: LayerRule[];
+  /** Có ở cả hai nhưng khác thuộc tính. */
+  differ: { name: string; incoming: LayerRule; fields: LayerDiffField[] }[];
+  /** Có trong hồ sơ, không còn trong bản vẽ. */
+  gone: LayerRule[];
+};
+
+/** Đối chiếu bảng layer của bản vẽ với hồ sơ — KHÔNG thay thế.
+ *
+ * Panel cũ hỏi một câu rồi **thay sạch** danh sách: ai đã tinh chỉnh cột "bắt
+ * buộc" và bề dày cho 40 layer sẽ mất hết trong một cú bấm. Hàm này chỉ mô tả
+ * khác biệt; việc áp dụng do người dùng tích từng dòng.
+ *
+ * So tên **không phân biệt hoa thường**, đúng `assertUnique()` của daemon.
+ */
+export function reconcileLayers(
+  profileLayers: readonly LayerRule[],
+  drawingLayers: readonly DrawingLayer[],
+): LayerReconcile {
+  const key = (name: string) => name.trim().toLocaleUpperCase("en-US");
+  const inProfile = new Map(profileLayers.map((layer) => [key(layer.name), layer]));
+  const seen = new Set<string>();
+
+  const add: LayerRule[] = [];
+  const differ: LayerReconcile["differ"] = [];
+
+  for (const source of drawingLayers) {
+    seen.add(key(source.name));
+    const incoming: LayerRule = {
+      name: source.name,
+      color: source.color ?? 7,
+      linetype: source.linetype,
+      lineweight: lineweightFromDxf(source.lineweight370),
+      /* Layer nhập từ bản vẽ mặc định BẮT BUỘC — đó là lý do người ta lấy một
+         bản vẽ đã chuẩn làm gốc. Sửa lại từng dòng vẫn được sau khi nhận. */
+      required: true,
+    };
+    const current = inProfile.get(key(source.name));
+    if (!current) { add.push(incoming); continue; }
+
+    const fields: LayerDiffField[] = [];
+    if (String(current.color) !== String(incoming.color)) {
+      fields.push({ label: "Màu", from: String(current.color), to: String(incoming.color) });
+    }
+    if (current.linetype !== incoming.linetype) {
+      fields.push({ label: "Nét", from: current.linetype, to: incoming.linetype });
+    }
+    if (String(current.lineweight) !== String(incoming.lineweight)) {
+      fields.push({
+        label: "Bề dày",
+        from: String(current.lineweight),
+        to: String(incoming.lineweight),
+      });
+    }
+    /* KHÔNG so `required`: nó là quyết định của người lập hồ sơ, không phải
+       thuộc tính đọc được từ bản vẽ. Đưa nó vào danh sách khác biệt là mời người
+       dùng ghi đè chính lựa chọn của mình bằng một mặc định. */
+    if (fields.length) differ.push({ name: current.name, incoming, fields });
+  }
+
+  const gone = profileLayers.filter((layer) => layer.name && !seen.has(key(layer.name)));
+  return { add, differ, gone };
+}
+
+/** Áp các dòng đã tích vào danh sách layer. Trả về danh sách MỚI.
+ *
+ * `picks` là tập khoá `"add:TÊN"` / `"diff:TÊN"` / `"gone:TÊN"` — cùng tên với
+ * khoá hộp thoại dùng, để không có bước ánh xạ nào ở giữa làm lệch.
+ */
+export function applyLayerReconcile(
+  profileLayers: readonly LayerRule[],
+  plan: LayerReconcile,
+  picks: ReadonlySet<string>,
+): LayerRule[] {
+  const key = (name: string) => name.trim().toLocaleUpperCase("en-US");
+  const removing = new Set(
+    plan.gone.filter((layer) => picks.has(`gone:${layer.name}`)).map((l) => key(l.name)),
+  );
+  const updates = new Map(
+    plan.differ
+      .filter((row) => picks.has(`diff:${row.name}`))
+      .map((row) => [key(row.name), row.incoming]),
+  );
+
+  const kept = profileLayers
+    .filter((layer) => !removing.has(key(layer.name)))
+    .map((layer) => {
+      const update = updates.get(key(layer.name));
+      /* Giữ `required` của hồ sơ, chỉ nhận ba thuộc tính đọc được từ bản vẽ —
+         đúng những gì đã hiện trong danh sách khác biệt. */
+      return update
+        ? { ...layer, color: update.color, linetype: update.linetype,
+            lineweight: update.lineweight }
+        : layer;
+    });
+
+  const added = plan.add.filter((layer) => picks.has(`add:${layer.name}`));
+  return [...kept, ...added];
+}
+
+/** Đếm số thay đổi đã tích — cho nhãn nút. */
+export function countLayerPicks(plan: LayerReconcile, picks: ReadonlySet<string>): number {
+  return plan.add.filter((l) => picks.has(`add:${l.name}`)).length
+    + plan.differ.filter((r) => picks.has(`diff:${r.name}`)).length
+    + plan.gone.filter((l) => picks.has(`gone:${l.name}`)).length;
 }
 
 /** Đích thao tác: ĐƯỜNG DẪN TỆP, không phải tiêu đề — hai bản vẽ cùng tên mở

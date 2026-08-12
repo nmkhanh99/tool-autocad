@@ -238,9 +238,9 @@
       <div class="why">2.1 → 1.1 → 2.2 → 1.2 → 2.3. Không mục nào cần backend mới.</div>
     </div>
     <div>
-      <div class="n">4</div>
+      <div class="n">5</div>
       <div class="k">Bộ mẫu cần sửa</div>
-      <div class="why">Ba trong bốn là hiểu nhầm bản dựng thật vừa sửa xong.</div>
+      <div class="why">Bốn trong năm là hiểu nhầm bản dựng thật đã sửa xong.</div>
     </div>
   </div>
 
@@ -687,9 +687,9 @@
   </div>
 
   <!-- =========================================================== -->
-  <h2>Bộ mẫu hiện tại cần sửa — 4 điểm</h2>
+  <h2>Bộ mẫu hiện tại cần sửa — 5 điểm</h2>
   <p class="lede">
-    Bốn điểm này nằm trong <code>mau-thiet-ke/js/standards.js</code>. Ba trong số đó
+    Năm điểm này nằm trong <code>mau-thiet-ke/js/</code>. Bốn trong số đó
     <b>trùng đúng những hiểu nhầm tôi cũng mắc</b> khi dựng bảng ánh xạ — bản dựng thật
     đã sửa rồi, nhưng bộ mẫu thì chưa, nên người thiết kế sẽ thiết kế tiếp trên nền sai.
   </p>
@@ -751,6 +751,35 @@
       <p class="tight">
         Bản dựng thật nhận chữ khi rời ô. Bộ mẫu nên làm giống.
       </p>
+    </div>
+  </div>
+
+  <div class="rec">
+    <div class="key"><div class="id">M5</div></div>
+    <div>
+      <h3>“Chưa đo được” trong bộ mẫu là <code>null</code>, máy chủ thật gửi <code>0</code></h3>
+      <p>
+        <code>fmtArea()</code> kiểm <code>a == null</code> và trả “—”. Đúng tinh thần,
+        sai giá trị: dữ liệu mẫu có <b>36</b> chỗ <code>a: null</code> và
+        <b>không một chỗ nào</b> <code>a: 0</code>, trong khi chương trình LISP trả
+        <code>0</code> cho thứ nó không đo nổi và <b>không bao giờ trả</b>
+        <code>null</code>.
+      </p>
+      <p class="tight">
+        Đo trên bản vẽ thật: 8 đối tượng khung tên, cả 8 đều
+        <code>area: 0, width: 0, height: 0</code> — và chính bộ máy gọi đó là
+        <code>frame-unmeasurable</code>, <em>“chưa đo được kích thước tự động”</em>.
+        Với phép kiểm <code>== null</code>, cả tám sẽ hiện <b>“0,00 m²”</b>: tám vùng
+        rỗng bịa ra ngay tại con số dùng để bóc tách.
+      </p>
+      <p class="tight">
+        Bản dựng thật đã sửa thành <b>“đo được nghĩa là dương”</b>, áp cho cả diện
+        tích lẫn rộng và cao. Bộ mẫu nên đổi theo — và đáng đổi luôn dữ liệu mẫu để
+        có ít nhất một nhóm mang <code>0</code>, vì đây là ca <b>chỉ bản vẽ thật dạy
+        được</b>: dữ liệu mẫu hiện không có nó, nên không thiết kế nào dựng trên bộ
+        mẫu có thể tự phát hiện.
+      </p>
+      <div class="from"><b>mau-thiet-ke/js/review.js</b> 222–224 · <b>standards_lib.lsp</b> · đo trực tiếp qua <code>POST /scan</code></div>
     </div>
   </div>
 

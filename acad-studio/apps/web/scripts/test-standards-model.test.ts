@@ -27,7 +27,13 @@ import {
   unsupportedFixReason,
   LINEAR_FORMATS,
   LINEWEIGHTS,
+  applyLayerReconcile,
+  countLayerPicks,
   groupObjectsByMapping,
+  lineweightFromDxf,
+  normalizeDrawingLayers,
+  readDrawingLayers,
+  reconcileLayers,
   layerRowErrors,
   mappingRowErrors,
   type Issue,
@@ -943,4 +949,248 @@ test("hồ sơ đã đổi sau lượt quét thì KHÔNG dựng dòng bắt 0 t�
   }]);
   assert.equal(withNew.length, 2);
   assert.equal(withNew[0].count, 0);
+});
+
+test("nhập layer từ bản vẽ: đổi mã DXF sang milimét", () => {
+  /* Plugin gửi thẳng `(int)layer->lineWeight()` — LUÔN là group 370. Kho hồ sơ
+     nhận ba TÊN và số MILIMÉT `0…2.11`. Bỏ bước đổi này là mọi layer nhập vào
+     bị máy chủ từ chối từng dòng một.
+
+     Mười giá trị dưới đây là phân bố THẬT đo được trên bản vẽ 43 layer. */
+  assert.equal(lineweightFromDxf(-3), "Default");
+  assert.equal(lineweightFromDxf(-2), "ByBlock");
+  assert.equal(lineweightFromDxf(-1), "ByLayer");
+  for (const [dxf, mm] of [[0, 0], [5, 0.05], [9, 0.09], [13, 0.13], [15, 0.15],
+                           [18, 0.18], [30, 0.3], [35, 0.35], [40, 0.4],
+                           [211, 2.11]] as const) {
+    assert.equal(lineweightFromDxf(dxf), mm, `group370 ${dxf}`);
+  }
+  /* Thiếu hoặc rác thì về `Default`, không để `NaN` đi vào hồ sơ. */
+  assert.equal(lineweightFromDxf(undefined), "Default");
+  assert.equal(lineweightFromDxf(Number.NaN), "Default");
+
+  /* MỌI giá trị quy đổi phải tồn tại trong ô chọn, nếu không dòng vừa nhập sẽ
+     hiện ra như một giá trị lạ. `13/100` trong dấu phẩy động là
+     `0.13000000000000003` — đó là lý do phải làm tròn. */
+  for (const dxf of [0, 5, 9, 13, 15, 18, 30, 35, 40, 211]) {
+    const value = lineweightFromDxf(dxf);
+    assert.ok(
+      LINEWEIGHTS.some((item) => item.value === value),
+      `bề dày ${value} (từ ${dxf}) không có trong ô chọn`,
+    );
+  }
+});
+
+test("nhập layer: ĐỐI CHIẾU, không thay thế", () => {
+  /* Panel cũ hỏi một câu rồi thay sạch danh sách — ai đã tinh chỉnh cột "bắt
+     buộc" và bề dày cho 40 layer sẽ mất hết trong một cú bấm. */
+  const layer = (name: string, over: Partial<LayerRule> = {}): LayerRule => ({
+    name, color: 7, linetype: "Continuous", lineweight: "Default", required: true, ...over,
+  });
+  const profile = [
+    layer("0"),
+    layer("KHUNG", { color: 7, lineweight: 0.35, required: false }),
+    layer("CHI-CO-O-HO-SO"),
+  ];
+  const drawing = normalizeDrawingLayers([
+    { name: "0", aci: 7, linetype: "Continuous", lineweight: -3 },
+    { name: "khung", aci: 2, linetype: "HIDDEN", lineweight: 40 },
+    { name: "MOI", aci: 1, linetype: "Continuous", lineweight: 18 },
+  ]);
+
+  const plan = reconcileLayers(profile, drawing);
+  assert.deepEqual(plan.add.map((l) => l.name), ["MOI"]);
+  assert.deepEqual(plan.gone.map((l) => l.name), ["CHI-CO-O-HO-SO"]);
+  /* So tên KHÔNG phân biệt hoa thường — đúng `assertUnique()` của daemon. `0`
+     giống hệt nên không vào danh sách khác biệt. */
+  assert.deepEqual(plan.differ.map((r) => r.name), ["KHUNG"]);
+  assert.deepEqual(
+    plan.differ[0].fields.map((f) => [f.label, f.from, f.to]),
+    [["Màu", "7", "2"], ["Nét", "Continuous", "HIDDEN"], ["Bề dày", "0.35", "0.4"]],
+  );
+
+  /* Layer nhập mới mặc định BẮT BUỘC — đó là lý do người ta lấy một bản vẽ đã
+     chuẩn làm gốc. */
+  assert.equal(plan.add[0].required, true);
+
+  /* KHÔNG tích gì thì KHÔNG đổi gì. */
+  assert.deepEqual(applyLayerReconcile(profile, plan, new Set()), profile);
+  assert.equal(countLayerPicks(plan, new Set()), 0);
+
+  /* Tích cả ba nhóm. */
+  const picks = new Set(["add:MOI", "diff:KHUNG", "gone:CHI-CO-O-HO-SO"]);
+  assert.equal(countLayerPicks(plan, picks), 3);
+  const next = applyLayerReconcile(profile, plan, picks);
+  assert.deepEqual(next.map((l) => l.name), ["0", "KHUNG", "MOI"]);
+
+  const khung = next.find((l) => l.name === "KHUNG")!;
+  assert.equal(khung.color, 2);
+  assert.equal(khung.linetype, "HIDDEN");
+  assert.equal(khung.lineweight, 0.4);
+  /* `required` của hồ sơ PHẢI giữ nguyên: nó là quyết định của người lập hồ sơ,
+     không phải thuộc tính đọc được từ bản vẽ. Ghi đè nó là lấy mất chính lựa
+     chọn người dùng vừa cân nhắc. */
+  assert.equal(khung.required, false, "required của hồ sơ bị ghi đè");
+});
+
+test("đọc bảng layer từ cả ba dạng payload, và bắt cờ danh sách bị cắt", () => {
+  /* Hợp đồng `/drawing-info` để bảng layer ở ba chỗ tuỳ phiên bản plugin. Panel
+     cũ lùi qua cả ba; chỉ đọc `tables.layers` là một phản hồi lồng cũ bị báo
+     "không có bảng layer nào" trong khi nó có đủ. */
+  const row = { name: "A", aci: 3, linetype: "HIDDEN", lineweight: 35 };
+  for (const [nhan, body] of [
+    ["tables.layers", { tables: { layers: [row] } }],
+    ["drawing.layers", { drawing: { layers: [row] } }],
+    ["layers", { layers: [row] }],
+  ] as const) {
+    const read = readDrawingLayers(body);
+    assert.equal(read.layers.length, 1, nhan);
+    assert.equal(read.layers[0].name, "A", nhan);
+    assert.equal(read.layers[0].lineweight370, 35, nhan);
+  }
+  /* `tables` được ưu tiên khi có cả hai. */
+  assert.equal(
+    readDrawingLayers({ tables: { layers: [row] }, drawing: { layers: [] } }).layers.length,
+    1,
+  );
+
+  /* Cờ cắt: plugin cắt bảng ở 500 dòng và phát `layers_truncated`. Bỏ qua nó là
+     coi một danh sách cụt như danh sách đủ — rồi mời người dùng XOÁ những layer
+     chỉ đơn giản nằm ngoài phần được trả về. Đó là mất dữ liệu thật. */
+  assert.equal(readDrawingLayers({ layers: [row] }).truncated, false);
+  assert.equal(
+    readDrawingLayers({ layers: [row], warnings: ["layers_truncated"] }).truncated,
+    true,
+  );
+  assert.equal(
+    readDrawingLayers({ layers: [row], warnings: ["blocks_truncated"] }).truncated,
+    false,
+  );
+
+  /* Dòng chỉ có `name`/`handle` KHÔNG phải một dòng bảng layer — plugin luôn
+     phát đủ `aci`, `linetype`, `lineweight`. Nhận nó rồi điền
+     `7`/`Continuous`/`Default` là BỊA ra thuộc tính rồi trình bày như thể đọc
+     được từ bản vẽ, ngay trong tính năng mà cả điểm của nó là "lấy đúng giá trị
+     bản vẽ đang dùng". */
+  const sparse = readDrawingLayers({
+    layers: [row, { name: "CHI-CO-TEN", handle: "2FB9" }, { name: "TRONG" }],
+  });
+  assert.deepEqual(sparse.layers.map((l) => l.name), ["A"]);
+  assert.equal(sparse.skipped, 2);
+
+  /* Đòi ĐỦ CẢ BA thuộc tính, không phải "có ít nhất một". Bản đầu dùng `||` nên
+     `{name, aci}` vẫn lọt và hai thuộc tính còn lại vẫn bị bịa — một bản sửa nửa
+     vời còn khó thấy hơn không sửa, vì nó trông như đã có chốt chặn. */
+  const partial = readDrawingLayers({
+    layers: [
+      { name: "CHI-CO-MAU", aci: 3 },
+      { name: "THIEU-BE-DAY", aci: 3, linetype: "HIDDEN" },
+      { name: "THIEU-NET", aci: 3, lineweight: 35 },
+    ],
+  });
+  assert.deepEqual(partial.layers, [], "dòng thiếu thuộc tính vẫn phải bị bỏ");
+  assert.equal(partial.skipped, 3);
+
+  /* Kiểm KIỂU chứ không chỉ "có mặt". `Number(null)` là `0`, `Number("")` cũng
+     là `0` — nên một dòng toàn `null` lọt qua phép kiểm `!== undefined` rồi
+     chuẩn hoá thành màu `0`, `Continuous`, bề dày `0`. Vẫn là bịa dữ liệu, chỉ
+     khó thấy hơn. */
+  const nulls = readDrawingLayers({
+    layers: [
+      { name: "TOAN-NULL", aci: null, linetype: null, lineweight: null },
+      { name: "NET-RONG", aci: 3, linetype: "", lineweight: 35 },
+      { name: "MAU-CHUOI", aci: "3", linetype: "HIDDEN", lineweight: 35 },
+      { name: "BE-DAY-NAN", aci: 3, linetype: "HIDDEN", lineweight: Number.NaN },
+    ],
+  });
+  assert.deepEqual(nulls.layers, [], "dòng có thuộc tính SAI KIỂU vẫn phải bị bỏ");
+  assert.equal(nulls.skipped, 4);
+
+  /* Plugin nói thẳng nó KHÔNG đọc được bảng layer — khác hẳn "bản vẽ không có
+     layer nào", điều không tồn tại: mọi bản vẽ đều có ít nhất layer `0`. */
+  for (const w of ["layers_unavailable", "layers_iterator_unavailable"]) {
+    assert.equal(readDrawingLayers({ layers: [], warnings: [w] }).unavailable, true, w);
+  }
+  assert.equal(readDrawingLayers({ layers: [row] }).unavailable, false);
+
+  // Rác thì trả rỗng chứ không ném.
+  assert.deepEqual(readDrawingLayers(null),
+    { layers: [], truncated: false, skipped: 0, unavailable: false });
+  assert.deepEqual(readDrawingLayers({ tables: "x" }),
+    { layers: [], truncated: false, skipped: 0, unavailable: false });
+});
+
+test("hồ sơ quá 500 layer hoặc 500 ánh xạ thì CHẶN LƯU", () => {
+  /* `MAX_LAYERS`/`MAX_MAPPINGS` của daemon đều là 500. Không kiểm ở giao diện thì
+     một lượt nhập layer từ bản vẽ lớn báo "đã nhận vào bản nháp" rồi để lượt PUT
+     sau đó ăn 400 — và người dùng không có cách nào biết vì sao. */
+  const base = normalizeProfile({
+    id: "p", name: "M", revision: "h",
+    drawing: {
+      unit: "mm", linearFormat: "Decimal", insunits: 4, precision: 0, modelScale: 1,
+      frameTolerancePercent: 1,
+      paper: { name: "A3", width: 420, height: 297 },
+    },
+    dimension: { styleName: "ACAD", textHeight: 2.5, overallScale: 1 },
+  });
+  const layer = (i: number): LayerRule => ({
+    name: `L${i}`, color: 7, linetype: "Continuous", lineweight: "Default", required: false,
+  });
+  const many = (n: number) => Array.from({ length: n }, (_, i) => layer(i));
+
+  assert.equal(profileSaveBlockedReason({ ...base, layers: many(500) }, base), "");
+  assert.match(
+    profileSaveBlockedReason({ ...base, layers: many(501) }, base),
+    /không được quá 500 layer/,
+  );
+});
+
+test("màu lấy theo KIỂU, không theo `??` — `aci: null` không được thành màu 0", () => {
+  /* `num()` gọi `Number()` rồi kiểm hữu hạn, mà `Number(null)` là `0` và
+     `Number(false)` cũng là `0`. Nên `num(row.aci) ?? num(row.color)` cho ra `0`
+     ngay khi `aci` là `null`, và đường lùi `color` KHÔNG BAO GIỜ chạy — layer
+     nhập vào mang màu 0 thay vì màu thật. */
+  const read = readDrawingLayers({
+    layers: [
+      { name: "LUI-VE-COLOR", aci: null, color: 5, linetype: "Continuous", lineweight: 35 },
+      { name: "ACI-DUNG", aci: 3, color: 9, linetype: "Continuous", lineweight: 35 },
+    ],
+  });
+  assert.deepEqual(read.layers.map((l) => [l.name, l.color]), [
+    ["LUI-VE-COLOR", 5],
+    ["ACI-DUNG", 3],
+  ]);
+});
+
+test("layer dùng MÀU THẬT bị bỏ, không bịa ra một ACI", () => {
+  /* Hồ sơ chỉ biểu diễn được chỉ số ACI `0…256` hoặc ba tên — không có chỗ cho
+     true color. Plugin gửi `aci` = `colorIndex()`, và với màu thật thì chỉ số đó
+     KHÔNG mang màu người dùng đặt: nhập vào là lặng lẽ thay màu layer bằng một
+     ACI sai.
+     Dấu hiệu là `rgb` khác `[0,0,0]`. Đo trên bản vẽ thật: 43 layer đều dùng ACI
+     và cả 43 đều `rgb: [0,0,0]`. */
+  const read = readDrawingLayers({
+    layers: [
+      { name: "ACI", aci: 3, linetype: "Continuous", lineweight: 35, rgb: [0, 0, 0] },
+      { name: "KHONG-CO-RGB", aci: 3, linetype: "Continuous", lineweight: 35 },
+      { name: "MAU-THAT", aci: 0, linetype: "Continuous", lineweight: 35, rgb: [255, 128, 0] },
+    ],
+  });
+  assert.deepEqual(read.layers.map((l) => l.name), ["ACI", "KHONG-CO-RGB"]);
+  assert.equal(read.skipped, 1);
+
+  /* Màu thật ĐEN TUYỀN có `rgb: [0,0,0]` — không phân biệt được với layer dùng
+     ACI, vì payload không mang `colorMethod`. Nhưng nó lộ ở chỗ khác:
+     `colorIndex()` của layer màu thật trả `0`, mà `0` (ByBlock) và `256`
+     (ByLayer) đều không phải màu hợp lệ cho một layer — `layerColor()` của
+     daemon lặng lẽ đổi cả hai thành `7` lúc áp dụng. */
+  const black = readDrawingLayers({
+    layers: [
+      { name: "DEN-TUYEN", aci: 0, linetype: "Continuous", lineweight: 35, rgb: [0, 0, 0] },
+      { name: "BYLAYER", aci: 256, linetype: "Continuous", lineweight: 35 },
+      { name: "BINH-THUONG", aci: 7, linetype: "Continuous", lineweight: 35 },
+    ],
+  });
+  assert.deepEqual(black.layers.map((l) => l.name), ["BINH-THUONG"]);
+  assert.equal(black.skipped, 2);
 });
