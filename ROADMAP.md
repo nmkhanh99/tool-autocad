@@ -300,11 +300,25 @@ route, như `blocks.module.css` vừa làm.
   phải biết: `select` chạy theo **phạm vi**, còn `move-to-layer` chạy trên **bộ
   chọn hiện tại của AutoCAD** và bỏ qua phạm vi hoàn toàn.
 
-  Tách `/review` và `/standards`: `/standards` quản lý hồ sơ quy tắc
-  (`/standards/profiles`), `/review` chạy quét và xử lý phát hiện
-  (`/standards/scan|apply|action`). Hôm nay hai việc đó nằm chung trong
-  `DrawingStandardsPanel.tsx` (2411 dòng), còn `DocumentReviewPanel.tsx` (1348
-  dòng) là prototype chỉ gọi đúng một API.
+  **Tách `/review` và `/standards` đã xong (2026-08-12).** `/standards` soạn hồ
+  sơ quy tắc, `/review` quét và sửa. `DrawingStandardsPanel.tsx` (2.411 dòng)
+  **chưa xoá**: phần soạn layer và ánh xạ đối tượng chưa được bê sang, và ánh xạ
+  quyết định đối tượng nào bị tính diện tích — sửa sai là sai cả bảng bóc tách,
+  nên không bê vội. Hai màn hình mới ghi rõ bằng nhãn "chưa có ở màn này".
+
+  `DocumentReviewPanel.tsx` (1.348 dòng) là chuyện khác: prototype PDF, thành
+  `/review-pdf` ở giai đoạn 10 theo D2.
+
+  **Nợ kỹ thuật phát sinh — bộ chạy job kích hoạt bản vẽ đích.** `runJob()` gọi
+  `executeInApplicationContext(pDoc, cmd, !readOnly, …)`: job GHI luôn kích hoạt
+  bản vẽ đích trước khi chạy. Hệ quả: người dùng đổi tab trong quãng giữa lúc
+  daemon kiểm và lúc job chạy thì AutoCAD nhảy về bản vẽ cũ rồi ghi vào đó —
+  trong khi họ đang nhìn bản vẽ khác. Ba tầng chốt hiện có (giao diện, daemon,
+  chương trình LISP) đều đọc trạng thái TRƯỚC mốc đó nên không bịt được.
+
+  Cách bịt: cho job ghi một chế độ "không kích hoạt, từ chối nếu đích chưa
+  active". Chạm tới bộ chạy dùng chung cho MỌI lệnh ghi (chèn block, LISP, sửa
+  tiêu chuẩn), nên phải làm thành một lượt riêng có test cho từng đường.
 - **Giai đoạn 7** — `/changes` (trục xoay), `/takeoff`, `/settings`.
 - **Giai đoạn 8** — `/publish`, `/batch`, `/cadweb`, `/` Tổng quan. Phạm vi đã
   chốt qua D3/D4/D5; **backend phải xong trước** (xem mục dưới).

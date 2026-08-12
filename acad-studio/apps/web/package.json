@@ -6,7 +6,7 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "test:cadweb-viewer": "node scripts/test-cadweb-viewer.mjs && pnpm --filter @acad/cadweb exec tsx --test ../web/scripts/test-cadweb-transform.test.ts ../web/scripts/test-cadweb-incremental.test.ts ../web/scripts/test-cadweb-recovery.test.ts",
-    "test:contract": "node scripts/test-contract.mjs && pnpm --filter @acad/cadweb exec tsx --test ../web/scripts/test-preconstruction.test.ts ../web/scripts/test-acad-events.test.ts ../web/scripts/test-chat-messages.test.ts ../web/scripts/test-blocks-model.test.ts ../web/scripts/test-lisp-model.test.ts ../web/scripts/test-workspace-model.test.ts ../web/scripts/test-drawing-info-model.test.ts",
+    "test:contract": "node scripts/test-contract.mjs && pnpm --filter @acad/cadweb exec tsx --test ../web/scripts/test-preconstruction.test.ts ../web/scripts/test-acad-events.test.ts ../web/scripts/test-chat-messages.test.ts ../web/scripts/test-blocks-model.test.ts ../web/scripts/test-lisp-model.test.ts ../web/scripts/test-workspace-model.test.ts ../web/scripts/test-drawing-info-model.test.ts ../web/scripts/test-standards-model.test.ts",
     "check:css": "node scripts/check-css-collisions.mjs",
     "check:boundaries": "node scripts/check-import-boundaries.mjs",
     "check:guards": "node scripts/extract-guard-codes.mjs",

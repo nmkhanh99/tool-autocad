@@ -4590,13 +4590,40 @@ public:
         gDirty = true;
         if (db) ++gDatabaseRevisions[db];
     }
+    // Bien he thong nao KHONG phai noi dung ban ve.
+    //
+    // AutoCAD ban hanh headerSysVarChanged cho MOI setvar, ke ca nhung bien luu
+    // trong registry chu khong luu trong file DWG.  Dem chung vao bo dem revision
+    // la bien chinh cong viec cua app thanh "ban ve da thay doi":
+    //
+    //   · `loadLib()` cua daemon chay `(setvar "FILEDIA" 0)(setvar "CMDDIA" 0)`
+    //     truoc MOI job.  Rieng no da +2 revision.
+    //   · `/standards/scan` doc revision truoc va sau roi so — nen no tu loai bo
+    //     ket qua cua chinh minh, LAN NAO CUNG VAY.  Do that: 16 -> 24.
+    //
+    // Danh sach nay chi gom bien PHIEN/UNG DUNG.  Bien thuoc noi dung ban ve —
+    // CLAYER, INSUNITS, LUPREC, CTAB, TILEMODE… — KHONG duoc co mat: bo qua
+    // chung la de mot thay doi that di qua ma khong ai biet.
+    static bool isSessionPreference(const std::string& name) {
+        static const std::set<std::string> kSessionVars = {
+            "TRUSTEDPATHS",  // duong dan tin cay khi nap ma
+            "FILEDIA", "CMDDIA",  // hien hop thoai hay khong
+            "CMDECHO",       // in lenh ra dong lenh
+        };
+        // CO Y KHONG co: ATTREQ, ATTDIA, EXPERT.  Chung chi duoc dat trong
+        // duong CHEN BLOCK — ma duong do ghi that vao ban ve, nen bo dem tang
+        // len la DUNG.  Va neu mot trong so do hoa ra co luu trong DWG thi mien
+        // no la de mot thay doi that di qua ma khong ai biet.  Danh sach nay chi
+        // giai quyet dung mot van de: `loadLib()` dat FILEDIA/CMDDIA truoc MOI
+        // job, ke ca job chi doc.
+        return kSessionVars.count(name) > 0;
+    }
+
     void headerSysVarChanged(const AcDbDatabase* db, const ACHAR* name, bool success) override {
-        // TRUSTEDPATHS is an application preference used only while loading a
-        // queued job; it must not make a read-only drawing review look stale.
-        if (success && (!name || toUtf8(name) != "TRUSTEDPATHS")) {
-            gDirty = true;
-            if (db) ++gDatabaseRevisions[db];
-        }
+        if (!success) return;
+        if (name && isSessionPreference(toUtf8(name))) return;
+        gDirty = true;
+        if (db) ++gDatabaseRevisions[db];
     }
 };
 // AcRxEventReactor la NOI DUY NHAT trong ObjectARX bao "da luu xong":

@@ -343,11 +343,77 @@ nhãn "đã lưu" sai là đúng thứ khiến bạn đóng AutoCAD và mất ph
 Khối gập ở cuối trang in nguyên phản hồi của máy chủ. Dùng khi màn hình và
 AutoCAD nói khác nhau và bạn cần biết bên nào sai.
 
+### Kiểm tra bản vẽ (`/review`)
+
+Quét bản vẽ theo một **hồ sơ quy tắc**, rồi sửa những phát hiện bạn chọn.
+
+Chọn bản vẽ và hồ sơ ở khối trên, bấm **Quét bản vẽ**. Kết quả là danh sách phát
+hiện, lọc được theo mức (Lỗi · Cảnh báo · Gợi ý) và tìm được theo từ khoá. Bấm
+một dòng để xem chi tiết: giá trị hiện tại, giá trị theo hồ sơ, và những đối
+tượng liên quan.
+
+#### Sửa là GHI MỘT PHA — đọc kỹ chỗ này
+
+Khác phần lớn lệnh ghi của app, **không có bước chuẩn bị**. Bấm xác nhận là
+AutoCAD sửa ngay; thao tác **không** xuất hiện ở màn Thay đổi chờ duyệt và app
+**không hoàn tác được**. Đường duy nhất quay lại là gõ `UNDO` trong AutoCAD.
+
+Vì vậy màn hình **không tự tích sẵn** phát hiện nào. Bạn tự chọn từng mục, hoặc
+tích cả nhóm đang lọc.
+
+#### Có phát hiện app không sửa được
+
+Ô tích của chúng bị khoá kèm lý do. Hai loại:
+
+- **Chỉ để xem** — máy chủ chưa có cách sửa tự động cho loại đó.
+- **Căn hàng dimension** — cần chọn một DIM làm chuẩn để những cái khác căn
+  theo, mà màn hình này chưa hỏi được. Dùng màn hình cũ.
+
+Nếu máy chủ vẫn bỏ qua mục nào trong lô bạn gửi, app sẽ nói số lượng sau khi
+ghi — để bạn không tưởng cả lô đã xong.
+
+#### Chỉ quét được bản vẽ đang mở
+
+Chọn một bản vẽ khác trong ô sẽ khoá nút quét. Lý do: quét một bản vẽ không hoạt
+động khiến AutoCAD **tự đổi tab** sang nó, và bạn chỉ biết khi ngẩng lên thấy
+bản vẽ khác. Chuyển tab trong AutoCAD là việc của bạn.
+
+#### Ba lý do lượt quét bị coi là đã cũ
+
+Gặp lý do nào cũng phải **quét lại** trước khi sửa; app sẽ khoá nút sửa và nói
+rõ:
+
+- **Bản vẽ đã thay đổi sau lượt quét.** App nghe sự kiện từ AutoCAD nên biết
+  ngay, nhưng nó **không tự quét lại** — quét là việc nặng và bạn có thể đang
+  đọc dở danh sách.
+- **Hồ sơ quy tắc đã đổi.** Sửa hồ sơ ở màn Hồ sơ tiêu chuẩn là mọi lượt quét
+  dựa trên nó hết giá trị. Lưu mà không đổi gì thì lượt quét vẫn dùng được.
+- **Đang chọn hồ sơ khác** với hồ sơ đã dùng để quét.
+
+### Hồ sơ tiêu chuẩn (`/standards`)
+
+Soạn bộ quy tắc mà màn Kiểm tra dùng để quét. **Màn hình này không chạm vào bản
+vẽ** — nó chỉ sửa một hồ sơ nằm trong daemon.
+
+Sửa được: tên hồ sơ, đơn vị, INSUNITS, số lẻ, tỷ lệ model, khổ khung tên, và ba
+thiết lập kích thước (tên dimstyle, cao chữ, tỷ lệ tổng).
+
+**Chưa sửa được ở đây:** danh sách layer bắt buộc và ánh xạ đối tượng. Chúng
+hiện ra để đọc, nhưng muốn sửa thì dùng màn hình cũ. Ánh xạ quyết định đối tượng
+nào bị tính diện tích — sửa sai là sai cả bảng bóc tách, nên phần soạn nó chưa
+được bê vội.
+
+**Mọi ô số đều bắt buộc.** Máy chủ không nhận ô trống — nút Lưu sẽ khoá lại và
+nói tên những ô còn thiếu. Số `0` là một giá trị hợp lệ (cho "số lẻ" chẳng hạn),
+chỉ ô **trống** mới là thiếu.
+
+Nút **Lưu hồ sơ** chỉ sáng khi có thay đổi. Nếu hai tab cùng sửa một hồ sơ, bên
+lưu sau sẽ bị từ chối kèm lời nhắc tải lại — thay vì im lặng ghi đè.
+
 ### Các màn hình còn lại
 
-Chưa dựng. Thứ tự dự kiến: Kiểm tra · Hồ sơ tiêu chuẩn · Thay đổi chờ duyệt ·
-Bóc tách · Kết nối AutoCAD · Xuất bản PDF · Xử lý thư mục · Đồng bộ CadWeb ·
-Tổng quan · Trợ lý AI.
+Chưa dựng. Thứ tự dự kiến: Thay đổi chờ duyệt · Bóc tách · Kết nối AutoCAD ·
+Xuất bản PDF · Xử lý thư mục · Đồng bộ CadWeb · Tổng quan · Trợ lý AI.
 
 Riêng **Khung bản vẽ** (`/workspace`) đã dựng ở giai đoạn 5 nhưng chưa có mục
 hướng dẫn riêng ở đây — sẽ bổ sung sau.

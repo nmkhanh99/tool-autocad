@@ -28,7 +28,8 @@ export type NavGroup = { group: string; items: NavItem[] };
 /** Route đã tồn tại. Thêm vào đây trong CÙNG commit với việc tạo route —
  * danh sách này lệch là rail nói dối. */
 const BUILT = new Set<string>([
-  "/changes", "/drawing-info", "/library/blocks", "/library/lisp", "/workspace",
+  "/changes", "/drawing-info", "/library/blocks", "/library/lisp", "/review",
+  "/standards", "/workspace",
 ]);
 
 export const NAV: NavGroup[] = [

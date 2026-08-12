@@ -299,7 +299,32 @@ function setUnitsExpression(drawing: DrawingStandard): string {
     `${Math.trunc(finiteNumber(drawing.precision, "precision", { min: 0, max: 8 }))})`;
 }
 
-function actionProgram(expression: string, options: { mutates?: boolean } = {}): string {
+/** Chốt CUỐI CÙNG: chương trình tự từ chối nếu nó không chạy trên đúng bản vẽ.
+ *
+ * Mọi chốt phía trên — giao diện, rồi daemon lúc nhận yêu cầu — đều đọc trạng
+ * thái ở một thời điểm TRƯỚC khi AutoCAD thật sự chạy lệnh. Giữa hai mốc đó
+ * người dùng đổi tab được, và `dispatchLiveJob` với job ghi sẽ **kích hoạt lại**
+ * bản vẽ đích rồi ghi vào đó. Chỗ duy nhất không còn khe nào là bên trong chính
+ * chương trình, chạy trên main thread của AutoCAD.
+ *
+ * So cả đường dẫn đầy đủ lẫn tên tệp: bản vẽ CHƯA LƯU không có đường dẫn, và
+ * `exactTarget` lúc đó là tiêu đề.
+ */
+function documentGuardLisp(exactTarget: string): string {
+  return `(if (and (/= (strcat (getvar "DWGPREFIX") (getvar "DWGNAME"))
+                 ${lispString(exactTarget)})
+            (/= (getvar "DWGNAME") ${lispString(exactTarget)}))
+  (progn
+    (acad:write-result "error"
+      "code=wrong_document message=Ban ve dang mo khong phai ban ve da chuan bi")
+    (exit)))
+`;
+}
+
+function actionProgram(
+  expression: string,
+  options: { mutates?: boolean; guardTarget?: string } = {},
+): string {
   const begin = options.mutates
     ? `(setq acadstd:outer-error *error*)
 (setq *error*
@@ -316,9 +341,10 @@ function actionProgram(expression: string, options: { mutates?: boolean } = {}):
 (command "_.REGEN")
 `
     : "";
+  const guard = options.guardTarget ? documentGuardLisp(options.guardTarget) : "";
   return `${readStandardsLib().trimEnd()}
 
-${begin}(setq acadstd:action-result ${expression})
+${guard}${begin}(setq acadstd:action-result ${expression})
 ${end}(acad:write-result "ok"
   (strcat "result=" (acadstd:text acadstd:action-result)))
 (princ)
@@ -872,12 +898,28 @@ export function drawingStandardsRouter(
           error: "Mẫu quy chuẩn đã đổi; hãy quét lại",
         });
       }
-      const { exactTarget } = await resolveDocument(
+      const { document, exactTarget } = await resolveDocument(
         session.exactTarget,
         dependencies,
       );
       if (exactTarget !== session.exactTarget) {
         throw new Error("Bản vẽ đích không còn khớp lần quét");
+      }
+      // Bản vẽ đích phải ĐANG HOẠT ĐỘNG.
+      //
+      // `/apply` dispatch một job không read-only, nên nếu đích không active thì
+      // AutoCAD sẽ TỰ kích hoạt nó rồi ghi vào đó — trong khi người dùng đang
+      // nhìn một bản vẽ khác. Giao diện có chốt riêng, nhưng nó đọc `/docs` ở
+      // một thời điểm trước đó và người dùng đổi tab bất cứ lúc nào; chốt duy
+      // nhất không có khe đua là chốt ngay tại đây, sát lúc dispatch.
+      if (!document.active) {
+        return res.status(409).json({
+          ok: false,
+          code: "drawing_not_active",
+          error:
+            "Bản vẽ của lần quét không còn là bản vẽ đang mở; hãy chuyển về " +
+            "đúng tab rồi thử lại",
+        });
       }
       const currentSnapshot = await dependencies.requestDrawingInfo(
         exactTarget,
@@ -954,7 +996,7 @@ export function drawingStandardsRouter(
       }
       const lisp = actionProgram(
         `(progn ${programs.join("\n")} ${programs.length})`,
-        { mutates: true },
+        { mutates: true, guardTarget: exactTarget },
       );
       const job = await dependencies.dispatchLiveJob(lisp, exactTarget, 30_000);
       if (job.state !== "done" || job.result?.status !== "ok") {

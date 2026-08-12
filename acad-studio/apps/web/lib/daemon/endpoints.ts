@@ -79,6 +79,26 @@ export const endpoints = {
    * hành động có hệ quả nhìn thấy được. */
   acadOpen: (base: string) => `${trim(base)}/api/acad/open`,
 
+  /** Danh sách hồ sơ quy tắc. GET đọc, POST tạo. */
+  standardsProfiles: (base: string) => `${trim(base)}/api/acad/standards/profiles`,
+
+  /** Sửa một hồ sơ. Mỗi lần ghi là tăng `revision`, và **mọi lượt quét gắn với
+   * revision cũ lập tức hết giá trị** — `/standards/apply` trả 409. Đó là ràng
+   * buộc nối `/standards` với `/review`; xem `profileDriftNote()`. */
+  standardsProfile: (base: string, id: string) =>
+    `${trim(base)}/api/acad/standards/profiles/${encodeURIComponent(id)}`,
+
+  /** Quét bản vẽ theo một hồ sơ. Trả `scanId` + `profileRevision` — cả hai đều
+   * cần cho lượt sửa sau đó. Phiên quét HẾT HẠN được. */
+  standardsScan: (base: string) => `${trim(base)}/api/acad/standards/scan`,
+
+  /** Sửa các phát hiện đã chọn.
+   *
+   * **Ghi MỘT PHA.** Khác `/selection/prepare`, endpoint này dispatch LISP
+   * thẳng vào AutoCAD: không có bước chuẩn bị, không có id để huỷ, và app không
+   * hoàn tác được. Xác nhận là ghi. */
+  standardsApply: (base: string) => `${trim(base)}/api/acad/standards/apply`,
+
   /** Hồ sơ đầy đủ của bản vẽ đang mở: bảng layer/block/layout/style, biến hệ
    * thống, từ điển, xref, khung bao.
    *

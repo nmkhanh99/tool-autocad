@@ -570,6 +570,65 @@ khác nhau — tương thích ngược và một lần đọc hỏng. Gộp chú
 thành giấy phép đi qua. Giao thức raw xuống plugin không tự phân biệt được, nên
 phải kèm cờ hiện diện riêng (`spaceKnown`).
 
+### `/api/acad/standards/*` — hồ sơ quy tắc và lượt quét
+
+Hai màn hình dùng chung một API, và ràng buộc giữa chúng là thứ dễ sai nhất.
+
+| Endpoint | Việc | Ghi vào bản vẽ |
+|---|---|---|
+| `GET/POST /profiles` | Danh sách, tạo | không |
+| `PUT /profiles/:id` | Sửa. Nhận `If-Match` | không |
+| `POST /scan` | Quét, trả `scanId` + `profileRevision` | không |
+| `POST /apply` | Sửa theo phát hiện | **CÓ — một pha** |
+
+> **Khe còn lại, đã biết:** `runJob()` **kích hoạt** bản vẽ đích trước khi chạy
+> job ghi, nên chốt trong chương trình LISP luôn thấy đúng bản vẽ. Đổi tab trong
+> quãng giữa lúc daemon kiểm và lúc job chạy vẫn dẫn tới ghi nhầm. Xem
+> `ROADMAP.md` mục nợ kỹ thuật.
+
+> **`/apply` tự kiểm bản vẽ đích ĐANG HOẠT ĐỘNG** ngay sát lúc dispatch, vì job
+> nó chạy không read-only: đích không active thì AutoCAD tự kích hoạt rồi ghi
+> vào đó. Giao diện có chốt riêng, nhưng nó đọc `/docs` ở một thời điểm trước đó
+> và người dùng đổi tab bất cứ lúc nào — chốt duy nhất không có khe đua là chốt
+> tại daemon.
+
+> **`/apply` ghi MỘT PHA.** Nó dispatch LISP thẳng vào AutoCAD: không có
+> `prepare`, không có id để huỷ, không vào hàng chờ của `/changes`. Thẻ xác nhận
+> phải dùng `mode="immediate"`; dùng `"staged"` là hứa một bước rút lui không
+> tồn tại.
+
+**`profile.revision` là HASH NỘI DUNG, không phải bộ đếm.** Hai hệ quả:
+
+- Đọc nó như số (`Number(...)`) cho ra `NaN` và mọi phép so đều sai.
+- Lưu một hồ sơ mà nội dung không đổi thì hash y nguyên, nên lượt quét đang mở
+  **vẫn dùng được**. Chỉ thay đổi thật mới giết nó.
+
+`/apply` so `profile.revision` với `session.profileRevision` và trả 409 khi
+lệch. `profileDriftNote()` bắt trước ở giao diện — panel legacy không cần nó vì
+nó khoá nút quét khi hồ sơ còn thay đổi chưa lưu.
+
+> **Ghi hồ sơ phải VÁ lên bản ghi gốc.** Bản nháp trong giao diện là hình dạng
+> phẳng do màn hình tự đặt cho dễ dựng form; máy chủ lưu dạng lồng với
+> `dimension` **23 trường** mà form chỉ đụng 3. Gửi thẳng bản nháp là ghi đè 20
+> trường còn lại bằng mặc định — không lỗi nào báo và không test nào đỏ. Xem
+> `applyProfileEdits()`.
+
+### Bộ đếm revision bản vẽ KHÔNG được đếm biến hệ thống của phiên
+
+`headerSysVarChanged` của plugin từng đếm **mọi** `setvar`. Nhưng `loadLib()` —
+đoạn bọc mọi job của daemon — chạy `(setvar "FILEDIA" 0)(setvar "CMDDIA" 0)`
+trước khi làm gì, nên **mỗi job tự làm bản vẽ trông như đã thay đổi**.
+
+Hệ quả đo được: `/standards/scan` đọc revision trước và sau lượt quét rồi so, và
+tự loại bỏ kết quả của chính mình — 16 → 24, **lần nào cũng vậy**.
+
+Nay có danh sách biến **phiên/ứng dụng** được miễn trong `MepDbReactor`:
+`TRUSTEDPATHS`, `FILEDIA`, `CMDDIA`, `ATTDIA`, `CMDECHO`, `ATTREQ`, `EXPERT`.
+
+> Biến thuộc **nội dung bản vẽ** — `CLAYER`, `INSUNITS`, `LUPREC`, `CTAB`,
+> `TILEMODE` — KHÔNG được vào danh sách đó. Miễn chúng là để một thay đổi thật
+> đi qua mà không ai biết.
+
 ### Trạng thái độ tươi của `/drawing-info`
 
 Màn hình này đọc **hai** nguồn ở hai thời điểm khác nhau, và gần như mọi lỗi

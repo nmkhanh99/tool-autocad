@@ -1,5 +1,217 @@
 # CHANGELOG
 
+## 2026-08-12 — Giai đoạn 6: tách `/review` và `/standards`
+
+### Added — hai màn hình thay cho một hộp thoại 2.411 dòng
+
+`DrawingStandardsPanel` gộp hai việc khác hẳn nhau: **soạn hồ sơ quy tắc** và
+**quét bản vẽ rồi sửa theo phát hiện**. Chúng khác nhau ở chỗ quan trọng nhất —
+cái đầu không chạm vào bản vẽ, cái sau ghi thẳng và không hoàn tác được.
+
+- **`/standards`** — danh sách hồ sơ, sửa đơn vị / khổ khung / kích thước, lưu
+  có kiểm tranh chấp (`If-Match`). Layer và ánh xạ mới **đọc** được; phần soạn
+  chúng còn ở màn hình cũ và được ghi rõ bằng nhãn "chưa có ở màn này".
+- **`/review`** — chọn bản vẽ + hồ sơ, quét, lọc theo mức độ, tìm theo từ khoá,
+  xem chi tiết, và sửa các phát hiện đã chọn.
+
+### Ba sự thật việc tách làm lộ ra
+
+**1. Lượt quét gắn với PHIÊN BẢN hồ sơ.** `/standards/apply` trả 409 khi
+`profile.revision` đã đổi. Panel cũ không bao giờ gặp vì nó khoá nút quét khi hồ
+sơ còn thay đổi chưa lưu — hai việc ở chung một hộp thoại nên không thể lệch.
+Tách ra thì người dùng quét ở `/review`, sang `/standards` sửa một dòng, quay
+lại bấm sửa, và ăn lỗi từ máy chủ. `profileDriftNote()` bắt trước ở giao diện.
+
+**2. `revision` là HASH NỘI DUNG, không phải bộ đếm.** Tôi đã giả định là số,
+viết `Number(...)` và gửi `If-Match: "0"` — máy chủ từ chối, và may là nó từ
+chối (xem mục 3). Hệ quả tốt của hash: lưu mà nội dung không đổi thì lượt quét
+đang mở **vẫn dùng được**; chỉ thay đổi thật mới giết nó.
+
+**3. Gửi bản nháp đi là XOÁ những gì form chưa mô hình hoá.** Bản nháp trong
+giao diện là hình dạng **phẳng** do màn hình tự đặt cho dễ dựng form; máy chủ
+lưu dạng **lồng**, với `dimension` **23 trường** mà form chỉ đụng 3. Gửi thẳng
+là ghi đè 20 trường còn lại bằng mặc định — không lỗi nào báo, không test nào
+đỏ, và lượt quét sau đó bắt lỗi hàng loạt theo một quy tắc người dùng chưa từng
+đặt. Nay `applyProfileEdits()` **vá lên bản ghi gốc**; đã đo vòng tròn thật:
+sửa "Cao chữ" 2.5 → 3 rồi trả về 2.5 cho ra **đúng hash ban đầu**
+(`f304e8e7873e`), tức không mất một trường nào.
+
+### Fixed — bốn lỗi của lượt này (Codex review)
+
+- **Ghi nhầm bản vẽ (P1).** Lượt sửa gửi đi **chỉ có `scanId`**, nên máy chủ
+  dùng đích đã lưu trong phiên quét — không phải đích đang hiện trên màn hình.
+  Quét bản vẽ A, đổi ô chọn sang B, bấm sửa: AutoCAD sửa **A** trong khi màn
+  hình nói B. Nay đổi bản vẽ hoặc đổi hồ sơ là **vứt lượt quét**, và còn một
+  chốt nữa ở `applyBlockedReason` phòng khi lọt.
+- **Quét bản vẽ không hoạt động thì daemon tự kích hoạt nó** — đổi tab AutoCAD
+  sau lưng người dùng, và họ chỉ biết khi ngẩng lên thấy bản vẽ khác. Đổi tab là
+  việc của họ, không phải của một nút "Quét". Nay chặn kèm hướng dẫn.
+- **Không gõ được số thập phân.** Ô số đọc lại từ giá trị đã phân tích mỗi lần
+  render, nên `2.` bị chuẩn hoá về `2` ngay khi vừa gõ dấu chấm — không cách nào
+  gõ `2.5`. Lỗi chỉ lộ ra khi gõ thật, không lộ ra khi đọc mã.
+- **Mục căn hàng dimension luôn trả 400.** `dimspace` đòi `dimBaseHandle` (một
+  DIM làm chuẩn) mà màn hình chưa hỏi được. Nay ô tích của những mục đó bị khoá
+  kèm lý do, thay vì để người dùng tích rồi ăn lỗi.
+
+### Fixed — ba lỗi nữa, và một câu tôi viết trên giao diện là SAI
+
+- **"Ô trống = không ràng buộc" là bịa.** Tôi viết câu đó ngay dưới ô "Số lẻ".
+  Thật ra `sanitizeDrawing`/`sanitizeDimension` gọi `numberValue()`, và hàm đó
+  trả 400 cho bất cứ thứ gì không phải số hữu hạn — nên xoá trắng một ô là bảo
+  đảm lưu hỏng, sau khi người dùng đã gõ xong cả form. Nay bảy ô số được kiểm
+  trước khi cho bấm Lưu, và lý do **gọi tên từng ô thiếu**.
+- **Danh sách CẤM đổi thành danh sách CHO PHÉP.** Tôi chỉ chặn `dimspace`. Máy
+  chủ thật ra chỉ chạy đúng **năm** hành động; mọi thứ khác nó **im lặng bỏ
+  qua** và trả `skippedIssueIds` — trộn một mục như vậy vào lô sửa được là để
+  người dùng tưởng đã sửa xong. Nay ngoài danh sách là không tích được, và số
+  mục bị bỏ qua (nếu có) được nói ra sau khi ghi.
+- **Thiếu `readOnly: true` khi quét.** Chốt phía giao diện là chưa đủ: người
+  dùng đổi tab trong AutoCAD giữa lúc bấm và lúc yêu cầu tới nơi thì daemon tự
+  kích hoạt bản vẽ cũ sau lưng họ. Cờ này bắt máy chủ kiểm lại và dispatch job
+  không kích hoạt tab.
+
+### Fixed — bốn lỗi vòng sau
+
+- **Thẻ xác nhận không nhận lý do chặn.** Trạng thái đổi trong lúc thẻ đang mở
+  (bản vẽ vừa bị sửa chẳng hạn) thì nút vẫn sáng, bấm thì hàm lặng lẽ thoát ra
+  và thẻ đứng im — một ngõ cụt không nói lý do.
+- **Câu tóm tắt nói ít hơn sự thật.** `apply-dimstyle` chạy
+  `configureDimensionExpression` trên **toàn bộ** dimstyle chứ không chỉ mấy DIM
+  được liệt kê; `apply-units` đổi đơn vị cả bản vẽ; `sync-layers` sửa bảng
+  layer. Đếm riêng số đối tượng là nói ít hơn sự thật ở đúng chỗ người dùng đọc
+  để quyết định bấm một lệnh không hoàn tác được.
+- **Kiểm hồ sơ mới bắt bảy ô số.** Xoá trắng `Đơn vị`, `Tên khổ` hay
+  `Tên dimstyle`, hoặc nhập số ngoài khoảng / không nguyên, vẫn lọt xuống máy
+  chủ rồi ăn 400. Nay khoảng giá trị lấy **đúng từ daemon**.
+- **`ATTREQ`/`ATTDIA`/`EXPERT` bị gỡ khỏi danh sách miễn trừ revision.** Tôi
+  thêm chúng theo thói quen "biến hộp thoại". Nhưng chúng chỉ được đặt trong
+  đường **chèn block** — mà đường đó ghi thật vào bản vẽ, nên bộ đếm tăng là
+  ĐÚNG. Và nếu một trong số đó hoá ra có lưu trong DWG thì miễn nó là để một
+  thay đổi thật đi qua mà không ai biết. Danh sách nay chỉ còn `TRUSTEDPATHS`,
+  `FILEDIA`, `CMDDIA`, `CMDECHO` — vừa đủ cho đúng vấn đề `loadLib()`.
+
+### Fixed — bốn lỗi vòng cuối
+
+- **Khoảng giá trị tôi tự đoán, không đọc từ daemon.** `sanitizePaper` đòi khổ
+  giấy >= **0.001** (không phải 0.000001 như các trường khác), còn `textHeight`
+  cho phép **0** (dimstyle annotative lấy chiều cao từ style). Đoán sai sinh ra
+  hai loại lỗi cùng lúc: chặn hồ sơ máy chủ chấp nhận, và cho qua hồ sơ máy chủ
+  từ chối.
+- **Báo "đã lưu" trước khi trạng thái được làm mới.** PUT xong mà lượt GET sau
+  đó hỏng thì `loadProfiles` nuốt lỗi, bản nháp giữ `revision` cũ, và lần lưu
+  sau gửi `If-Match` đã chết — người dùng thấy "đã lưu" rồi ăn xung đột không
+  hiểu từ đâu. Nay cập nhật bản nháp từ chính phản hồi PUT trước, và lỗi nạp lại
+  được ném ra.
+- **Lượt quét về xoá mất cảnh báo "bản vẽ đã đổi".** Một thay đổi xảy ra SAU khi
+  máy chủ kiểm lần cuối nhưng TRƯỚC khi phản hồi về tới giao diện là thay đổi
+  thật — xoá trắng cờ là mở lại nút sửa cho một lượt quét đã cũ.
+- **Phản hồi của lượt quét cũ ghi đè bối cảnh mới.** Ô chọn bản vẽ/hồ sơ vẫn bấm
+  được trong lúc quét và chúng vứt lượt quét cũ, nhưng phản hồi cũ vẫn về và bày
+  một danh sách phát hiện của bản vẽ khác. Nay có vé như `loadDocs`.
+
+### Fixed — bốn lỗi trong máy trạng thái quét
+
+Cả bốn nằm trong phần tôi vừa dựng ở vòng trước, và một trong số đó là ngõ cụt
+thật sự:
+
+- **Kẹt vĩnh viễn ở "Đang quét…".** Đổi ô chọn giữa lúc quét làm vé lệch đi, nên
+  `finally` của lượt cũ bỏ qua `setScanBusy(false)` — và không lượt mới nào chạy
+  để dọn. Nút quét khoá cho tới khi tải lại trang. Nay bốn việc của "bỏ lượt
+  quét" gom vào một hàm: tăng vé, xoá kết quả, **xoá cờ bận**, xoá cờ bẩn.
+- **Sửa bản vẽ KHÁC cũng giết lượt quét.** Sự kiện mang `activeDoc` là **tiêu
+  đề**, còn `scan.target` là **đường dẫn tệp** — so thẳng hai thứ đó không bao
+  giờ khớp, nên mọi thay đổi ở mọi bản vẽ đang mở đều chặn nút sửa.
+- **Cờ bẩn sót lại từ một lượt quét hỏng** chặn nút sửa của lượt sạch tiếp theo.
+  Cờ đó thuộc về từng lượt, nên nay đặt lại theo vé.
+- **`profile_stale` chỉ in lỗi rồi thôi.** Tab khác sửa hồ sơ thì bản sao trên
+  màn hình giữ revision cũ mãi, và cảnh báo lệch hồ sơ chặn nút sửa ở MỌI lượt
+  quét sau đó — không có đường nào ngoài tải lại trang. Nay nạp lại hồ sơ.
+
+### Fixed — năm lỗi nữa, một P1 lại là ghi nhầm bản vẽ
+
+- **Ghi nhầm bản vẽ sau khi đổi tab AutoCAD (P1).** Quét bản vẽ A, người dùng
+  chuyển AutoCAD sang B, rồi bấm sửa: lượt sửa chỉ mang `scanId`, và
+  `/standards/apply` dispatch một job **không** read-only — nó tự kích hoạt A
+  rồi ghi vào A trong khi người dùng đang nhìn B. Nay chặn khi bản vẽ đã quét
+  không còn là bản vẽ đang hoạt động.
+- **Regex bắt lỗi theo CHỮ, trượt hoàn toàn.** Tôi viết `/profile_stale|hồ sơ/i`
+  nhưng câu máy chủ trả là "Mẫu quy chuẩn đã đổi; hãy quét lại" — không khớp từ
+  nào. `DaemonError` mang sẵn `code`; nay soi mã.
+- **Quét bị từ chối `drawing_stale` mà kết quả cũ vẫn bấm sửa được.** Nó mô tả
+  một trạng thái đã qua hai lần.
+- **Nút "Quét lại" ở dải lệch hồ sơ không nạp lại hồ sơ**, nên cảnh báo quay lại
+  y nguyên sau mỗi lần quét — mãi mãi, cho tới khi tải lại trang.
+- **"Nhân bản" khi còn thay đổi chưa lưu** chép bản ĐÃ LƯU rồi nhảy sang bản
+  sao: thay đổi đang gõ dở biến mất trong im lặng.
+
+### Fixed — chốt "đúng bản vẽ" chuyển xuống DAEMON
+
+Hai vòng review liền chỉ ra cùng một chuyện theo hai đường khác nhau, và kết
+luận thì giống hệt bài học của chốt không gian hôm qua: **chốt phía giao diện
+vốn dĩ có khe đua.** Nó đọc `/docs` ở một thời điểm trước đó, còn người dùng đổi
+tab bất cứ lúc nào.
+
+- **(P1) `/standards/apply` nay tự kiểm bản vẽ đích có đang hoạt động không**,
+  ngay sát lúc dispatch. Trước đó nó chỉ kiểm đích còn khớp phiên quét — mà job
+  nó chạy KHÔNG read-only, nên AutoCAD sẽ tự kích hoạt bản vẽ đó rồi ghi vào,
+  trong khi người dùng đang nhìn bản vẽ khác.
+- **(P1) Không biết bản vẽ nào đang hoạt động = CHẶN.** Danh sách rỗng làm
+  `activeTarget` rỗng, và phép so bằng chuỗi rỗng thì luôn cho qua — đúng cái
+  cửa chốt này sinh ra để đóng.
+- Bấm "Quét lại" không xoá lô đã tích, nên thẻ xác nhận vẫn gửi được lô **cũ**
+  trong lúc lượt quét mới đang chạy.
+- Lời báo "đã lưu" bị chính effect dựng lại bản nháp xoá mất — lưu thành công
+  làm revision đổi, mà effect đó phụ thuộc revision. Mọi lần lưu thật đều im
+  lặng.
+- Nút "Thử lại" sau xung đột nạp lại thẳng, vứt luôn thứ người dùng đang gõ dở.
+
+### Fixed — chốt "đúng bản vẽ" đi nốt vào chương trình LISP
+
+- **(P1) Chốt cuối cùng nằm trong chính chương trình.** Mọi chốt phía trên —
+  giao diện, rồi daemon lúc nhận yêu cầu — đều đọc trạng thái ở một thời điểm
+  TRƯỚC khi AutoCAD thật sự chạy lệnh; giữa hai mốc đó người dùng đổi tab được,
+  và `dispatchLiveJob` với job ghi sẽ **kích hoạt lại** bản vẽ đích rồi ghi vào
+  đó. Nay chương trình tự so `DWGPREFIX+DWGNAME` với đích đã chuẩn bị và thoát
+  ra nếu lệch.
+
+  **Chốt này KHÔNG bịt hết khe, và nói rõ ở đây để không ai tưởng nó bịt.**
+  `runJob()` **kích hoạt** bản vẽ đích trước khi chạy chương trình, nên tới lúc
+  guard chạy thì AutoCAD đã ở đúng bản vẽ đó — guard luôn đúng. Nó chỉ bắt được
+  trường hợp kích hoạt THẤT BẠI (bản vẽ vừa bị đóng). Khe còn lại: người dùng
+  đổi tab trong quãng giữa lúc daemon kiểm và lúc job chạy thì AutoCAD sẽ nhảy
+  về bản vẽ đã quét rồi sửa nó.
+
+  Bịt hẳn phải sửa bộ chạy job **dùng chung** cho mọi lệnh ghi (chặn kích hoạt
+  khi đích chưa active), và việc đó chạm tới cả chèn block lẫn ghi LISP — không
+  làm ở cuối một lượt sửa dài. Đã ghi vào `ROADMAP.md`.
+- **(P1) "Chưa hoàn tất" bị coi là hỏng.** Daemon hết hạn CHỜ sau 30 giây nhưng
+  job vẫn chạy tiếp trong AutoCAD. Để người dùng bấm lại là xếp thêm một lượt
+  ghi nữa lên cùng tập đối tượng — mà không lượt nào hoàn tác được từ app.
+- **Hai bản vẽ trùng tên.** Sự kiện chỉ mang TIÊU ĐỀ, nên `/a/plan.dwg` và
+  `/b/plan.dwg` không phân biệt được. Nay trùng tên thì coi như có liên quan —
+  chặn thừa thì quét lại, bỏ sót thì sửa lên một bản vẽ đã đổi.
+
+### Fixed — lượt quét tự phá kết quả của chính nó (lỗi backend)
+
+`/standards/scan` đọc revision bản vẽ trước và sau lượt quét rồi so; lệch thì
+loại bỏ kết quả. Nhưng chính lượt quét làm nó lệch: **đo thật 16 → 24**, và
+endpoint hỏng **lần nào cũng vậy** — `/review` không dùng được.
+
+Nguyên nhân: `headerSysVarChanged` của plugin đếm **mọi** `setvar` vào bộ đếm
+revision, kể cả biến lưu trong registry chứ không lưu trong DWG. `loadLib()` —
+đoạn bọc **mọi** job của daemon — chạy `(setvar "FILEDIA" 0)(setvar "CMDDIA" 0)`
+trước khi làm gì.
+
+Đã có sẵn một ngoại lệ cho `TRUSTEDPATHS` với đúng lý do này ("must not make a
+read-only drawing review look stale"), nhưng nó là một trường hợp lẻ. Nay thành
+danh sách biến **phiên/ứng dụng**: `TRUSTEDPATHS`, `FILEDIA`, `CMDDIA`,
+`ATTDIA`, `CMDECHO`, `ATTREQ`, `EXPERT`. Biến thuộc **nội dung bản vẽ** —
+`CLAYER`, `INSUNITS`, `LUPREC`, `CTAB` — cố ý KHÔNG có mặt: bỏ qua chúng là để
+một thay đổi thật đi qua mà không ai biết.
+
+**Chưa xác minh:** cần khởi động lại AutoCAD để nạp plugin mới rồi đo lại. Sau
+khi trừ `FILEDIA`+`CMDDIA` vẫn còn nguồn khác chưa truy ra (+8 mỗi lượt quét).
+
 ## 2026-08-11 — Bắt được việc đổi tab Model/Layout
 
 ### Added — plugin phát không gian hiện hành và sự kiện `layoutSwitched`
