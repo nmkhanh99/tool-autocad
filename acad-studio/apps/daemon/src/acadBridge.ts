@@ -301,10 +301,35 @@ export type OpenAcadDocument = {
   /** Tên không gian đang hiện hành (Model, hoặc tên layout). Tín hiệu nhẹ duy
    * nhất cho việc đổi tab Model/Layout. Thiếu trường = plugin bản cũ. */
   space?: string;
+  /** Plugin đang chạy có nhận `instance` LÀM ĐÍCH không.
+   *
+   * Khác hẳn "payload có `instance`": trường đó có từ lâu, còn `findDocExact`
+   * mới biết nhận nó. Không suy được cái sau từ cái trước, và thiếu đúng sự thật
+   * này là lý do ba vòng review liên tiếp ra cùng một dạng lỗi. Thiếu trường =
+   * plugin bản cũ, và giao diện phải fail-closed như trước. */
+  targetsInstance?: boolean;
 };
 
+/** Chuỗi để GỬI ĐI khi hỏi plugin về một bản vẽ cụ thể.
+ *
+ * Khác với đích để SO SÁNH (`file || title`, thứ `scan.target` dùng): mã phiên
+ * xen vào giữa. Bản vẽ CHƯA LƯU không có đường dẫn, nên gửi tiêu đề thì hai bản
+ * vẽ trùng tiêu đề làm `findDocExact()` của plugin trả về rỗng — chọn đúng bản
+ * vẽ ở tầng trên rồi mà lượt gọi ngay sau đó vẫn hỏng.
+ *
+ * KHÔNG dùng cho `withLegacySelectionCatalog`: guard LISP ở đó so với
+ * `DWGNAME`/`DWGPREFIX+DWGNAME` và không biết mã phiên là gì.
+ */
+export function nativeDocumentTarget(
+  document: { file?: string; title?: string; instance?: string } | null | undefined,
+): string {
+  return document?.file || document?.instance || document?.title || "";
+}
+
 /** Resolve one open document, preferring a full-path match over a title match. */
-export function selectOpenDocument<T extends Pick<OpenAcadDocument, "title" | "file" | "active">>(
+export function selectOpenDocument<
+  T extends Pick<OpenAcadDocument, "title" | "file" | "active"> & { instance?: string },
+>(
   documents: readonly T[],
   target: unknown,
 ): { document: T | null; ambiguous: boolean } {
@@ -312,9 +337,17 @@ export function selectOpenDocument<T extends Pick<OpenAcadDocument, "title" | "f
   const matches = requested
     ? (() => {
         const files = documents.filter((document) => document.file === requested);
-        return files.length
-          ? files
-          : documents.filter((document) => document.title === requested);
+        if (files.length) return files;
+        /* Mã phiên trước tiêu đề. Cần nó cho BẢN VẼ CHƯA LƯU: chúng không có
+           đường dẫn nên tiêu đề là thứ duy nhất còn lại, và hai bản vẽ chưa lưu
+           trùng tiêu đề thì không cách nào chỉ đích danh — mọi lượt đọc đều bị
+           từ chối vì mơ hồ. Token có dạng `%016llX-%016llX` nên không thể trùng
+           một path hay title thật. */
+        const instances = documents.filter(
+          (document) => !!document.instance && document.instance === requested,
+        );
+        if (instances.length) return instances;
+        return documents.filter((document) => document.title === requested);
       })()
     : documents.filter((document) => document.active);
   return {
@@ -1718,7 +1751,21 @@ export function acadBridgeRouter(): Router {
     }
     const document = selected.document;
     const exactTarget = document?.file || document?.title || "";
-    if (!document || !exactTarget) {
+    /* Đích GỬI ĐI khác đích để SO SÁNH — cùng chỗ tách như `requestTargetOf()`
+       và `targetOf()` phía web, vì cùng một lý do.
+       · `nativeTarget` đi tới `findDocExact()` của plugin, thứ đã nhận mã phiên.
+         Bản vẽ CHƯA LƯU không có đường dẫn, nên nếu gửi tiêu đề thì hai bản vẽ
+         trùng tiêu đề làm `findDocExact` trả về rỗng — `selectOpenDocument` ở
+         trên chọn đúng bản vẽ rồi mà lượt gọi ngay sau đó vẫn hỏng.
+       · `exactTarget` KHÔNG đổi, vì nó còn chảy vào `withLegacySelectionCatalog`
+         → guard LISP so `acad:cat-expected` với `DWGNAME`/`DWGPREFIX+DWGNAME`.
+         LISP không biết mã phiên là gì, nên đưa mã phiên vào đó là đổi một lượt
+         chạy được thành `selection_catalog_target_mismatch`.
+       Đường legacy chỉ chạy với bản plugin CŨ (`hasSelectionCatalog` sai), mà
+       bản cũ cũng không có `findDocExact` nhận mã phiên — nên hai đích không bao
+       giờ cần đúng cùng lúc. */
+    const nativeTarget = nativeDocumentTarget(document);
+    if (!document || !nativeTarget) {
       const status = requestedTarget ? "not_found" : "active_document_not_found";
       return res.status(404).json({
         ok: false,
@@ -1731,7 +1778,47 @@ export function acadBridgeRouter(): Router {
       });
     }
 
-    const snapshot = await requestDrawingInfoWithBusyRetry(exactTarget);
+    let snapshot = await requestDrawingInfoWithBusyRetry(nativeTarget);
+    /* Bản plugin CŨ phát `instance` trong danh sách bản vẽ nhưng `findDocExact`
+       của nó chưa nhận mã phiên làm đích — nó trả `not_found`. Bản vẽ chưa lưu
+       trước đây đọc được bằng tiêu đề, nên nếu dừng ở đây là ta LÀM HỎNG một
+       thứ đang chạy, chỉ vì gửi một đích chính xác hơn.
+       Lùi về `exactTarget`, nhưng CHỈ khi nó còn chỉ đúng một bản vẽ: một tiêu
+       đề trùng sẽ khớp bản vẽ KHÁC, và trả về bảng layer của bản vẽ khác thì tệ
+       hơn hẳn báo lỗi. Dùng lại `selectOpenDocument` thay vì tự viết phép đếm —
+       nó là chỗ duy nhất định nghĩa thế nào là mơ hồ. */
+    if (
+      nativeTarget !== exactTarget
+      && exactTarget
+      && snapshot?.ok === false
+      && String(snapshot.code || "").toLowerCase() === "not_found"
+    ) {
+      const legacy = selectOpenDocument(open.docs, exactTarget);
+      if (legacy.document === document && !legacy.ambiguous) {
+        const retried = await requestDrawingInfoWithBusyRetry(exactTarget);
+        /* Phép kiểm "không mơ hồ" ở trên đo trên `open.docs` — một ảnh chụp đã
+           CŨ tính từ lúc này. Bản vẽ đóng đi rồi một bản khác trùng tiêu đề mở
+           lên trong khoảng đó là tiêu đề ấy trỏ sang bản vẽ KHÁC, và ta trả về
+           bảng layer của bản vẽ khác mà không ai biết. Đúng loại lỗi mà cả tính
+           năng này dựng ra để chặn.
+           Chốt bằng thứ không mơ hồ được: mã phiên trong phản hồi phải đúng bản
+           vẽ đã chọn. Không khớp thì bỏ lượt lùi và giữ `not_found` — báo lỗi
+           còn hơn nhập nhầm bản vẽ.
+           Chỉ chốt được khi ta BIẾT mã phiên mình chờ. Không biết thì không có
+           gì để so, và lượt lùi không an toàn hơn lúc chưa chốt.
+
+           Bản plugin nào phát `instance` trong danh sách bản vẽ thì cũng phát nó
+           trong `drawing-info` — cả hai vào cùng một commit — nên phép chốt này
+           luôn có dữ liệu ở đúng những bản cần tới lượt lùi. Bản cũ hơn thế
+           không có `instance` ở đâu cả, `nativeTarget` bằng `exactTarget`, và cả
+           khối này không chạy. */
+        const wanted = String(document?.instance ?? "");
+        const got = retried
+          ? String(snapshotDocument(retried)?.instance ?? "")
+          : "";
+        if (retried && wanted && got === wanted) snapshot = retried;
+      }
+    }
     if (!snapshot) {
       return res.status(504).json({
         ok: false,

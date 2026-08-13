@@ -5,7 +5,7 @@
   "description": "Acad Studio — shell UI/daemon for AutoCAD Toolkit (Offline + ACAD Control + ObjectARX)",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "verify": "pnpm typecheck:daemon && pnpm --filter @acad/daemon test:cad-selection && pnpm --filter @acad/daemon test:standards && pnpm --filter @acad/web verify",
+    "verify": "pnpm typecheck:daemon && pnpm --filter @acad/daemon test:contract && pnpm --filter @acad/daemon test:cad-selection && pnpm --filter @acad/daemon test:standards && pnpm --filter @acad/web verify",
     "typecheck:daemon": "pnpm --filter @acad/daemon exec tsc --noEmit -p tsconfig.json",
     "daemon": "pnpm --filter @acad/daemon dev",
     "web": "pnpm --filter @acad/web dev",

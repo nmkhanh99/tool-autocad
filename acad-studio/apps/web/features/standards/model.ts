@@ -354,6 +354,15 @@ export function layerRowErrors(layers: readonly LayerRule[]): (string | null)[] 
  * `ByLayer`/`ByBlock`/chuỗi số và **ném lỗi** cho `RGB(...)`. Chỉ kiểm tầng lưu
  * là để hồ sơ lưu êm rồi chết ở màn Kiểm tra.
  */
+/** Màu thật `#RRGGBB` — đường áp dụng ghi nó thành DXF group 420.
+ *
+ * Đúng **6** chữ số hex. `#abc` là cú pháp CSS chứ không phải cú pháp DXF, và
+ * đoán nó thành `#aabbcc` là tự chọn thay người dùng một màu họ không gõ.
+ */
+export function isHexColor(value: string): boolean {
+  return /^#[0-9a-f]{6}$/i.test(value.trim());
+}
+
 function colorProblem(color: string | number): string | null {
   if (typeof color === "number") {
     /* `standardColor` gọi `numberValue(..., { integer: true })`, nên số lẻ bị từ
@@ -366,12 +375,13 @@ function colorProblem(color: string | number): string | null {
   const text = color.trim();
   if (!text) return "Màu không được để trống.";
   if (/^(bylayer|byblock)$/i.test(text)) return null;
+  if (isHexColor(text)) return null;
   const parsed = Number(text);
   if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed >= 0 && parsed <= 256) {
     return null;
   }
   return `Màu “${text}” lưu được nhưng lượt áp dụng không hiểu — `
-    + "chỉ nhận số 0–256, ByLayer hoặc ByBlock.";
+    + "chỉ nhận số 0–256, #RRGGBB, ByLayer hoặc ByBlock.";
 }
 
 /** Bề dày nét hỏng ở chỗ nào, hoặc rỗng nếu dùng được.
@@ -988,7 +998,8 @@ export function profileSaveBlockedReason(
 /** Một dòng của bảng layer đọc từ bản vẽ (`/drawing-info` → `tables.layers`). */
 export type DrawingLayer = {
   name: string;
-  color: number | undefined;
+  /** Chỉ số ACI `0…256`, hoặc `#RRGGBB` khi layer dùng màu thật. */
+  color: number | string | undefined;
   linetype: string;
   /** Bề dày **theo mã DXF group 370**, chưa quy đổi. */
   lineweight370: number | undefined;
@@ -1022,6 +1033,39 @@ export function lineweightFromDxf(raw: number | undefined): string | number {
   return Math.round(raw) / 100;
 }
 
+/** `kByColor` của `AcCmEntityColor::ColorMethod` — layer dùng màu thật. */
+const COLOR_METHOD_TRUE = 0xc2;
+
+/**
+ * Layer có dùng màu thật (true color) không?
+ *
+ * Bản plugin có phát `colorMethod` thì câu trả lời là chắc chắn. Bản cũ không
+ * phát thì phải suy từ `rgb`, và chỗ suy đó có một điểm mù không gỡ được: màu
+ * thật ĐEN TUYỀN cũng là `rgb: [0,0,0]`, không phân biệt được với một layer ACI.
+ * Đó chính là lý do `colorMethod` được thêm vào plugin — để không phải đoán.
+ */
+export function isTrueColor(row: JsonRecord): boolean {
+  const method = row.colorMethod;
+  if (typeof method === "number") return method === COLOR_METHOD_TRUE;
+  const rgb = row.rgb;
+  return Array.isArray(rgb) && rgb.length >= 3
+    && rgb.some((channel) => typeof channel === "number" && channel !== 0);
+}
+
+/** `[r, g, b]` → `#RRGGBB`, hoặc `undefined` nếu payload không dùng được. */
+export function hexColor(value: unknown): string | undefined {
+  if (!Array.isArray(value) || value.length < 3) return undefined;
+  const channels = value.slice(0, 3).map((channel) =>
+    typeof channel === "number" && Number.isInteger(channel)
+      && channel >= 0 && channel <= 255
+      ? channel
+      : undefined);
+  if (channels.some((channel) => channel === undefined)) return undefined;
+  return `#${channels
+    .map((channel) => (channel as number).toString(16).padStart(2, "0"))
+    .join("")}`.toUpperCase();
+}
+
 /** Bảng layer đọc từ phản hồi `/drawing-info`, kèm cờ danh sách bị cắt.
  *
  * Hợp đồng có bảng layer ở **ba chỗ** tuỳ phiên bản plugin. Chỉ đọc
@@ -1029,14 +1073,21 @@ export function lineweightFromDxf(raw: number | undefined): string | number {
  * nào" trong khi nó có đủ — panel cũ đã lùi qua cả ba, và bỏ đường lùi đó là
  * một bước lùi tương thích.
  *
- * `layers_truncated` quan trọng hơn nó trông: plugin cắt bảng ở 500 dòng
- * (`maxTableItems`), và một danh sách cụt **không đủ** để kết luận "layer này
- * không còn trong bản vẽ" — nó có thể chỉ nằm ngoài phần được trả về. Kết luận
- * sai ở đó dẫn thẳng tới xoá một layer thật khỏi hồ sơ.
+ * `layers_truncated` quan trọng hơn nó trông: plugin cắt bảng layer ở
+ * `limits.maxLayerItems`, và một danh sách cụt **không đủ** để kết luận "layer
+ * này không còn trong bản vẽ" — nó có thể chỉ nằm ngoài phần được trả về. Kết
+ * luận sai ở đó dẫn thẳng tới xoá một layer thật khỏi hồ sơ.
+ *
+ * `limit` lấy TỪ payload chứ không gõ cứng. Ngưỡng này đã đổi một lần (500 →
+ * 5.000) và câu thông báo gõ cứng con số cũ thành ra nói sai với người dùng đúng
+ * lúc họ cần tin nó nhất. Bản plugin cũ không phát nó thì trả `undefined`, và
+ * câu thông báo bỏ luôn con số thay vì đoán.
  */
 export function readDrawingLayers(body: unknown): {
   layers: DrawingLayer[];
   truncated: boolean;
+  /** Ngưỡng cắt plugin công bố, hoặc `undefined` nếu bản plugin không phát. */
+  limit: number | undefined;
   /** Số dòng bị bỏ vì KHÔNG mang thuộc tính layer nào. */
   skipped: number;
   /** Plugin nói thẳng là nó không đọc được bảng layer. Khác hẳn "bản vẽ không có
@@ -1063,38 +1114,37 @@ export function readDrawingLayers(body: unknown): {
      lineweight: null}` lọt qua phép kiểm `!== undefined` rồi chuẩn hoá thành
      màu `0`, `Continuous`, bề dày `0` — vẫn là bịa dữ liệu, chỉ khó thấy hơn.
      Đây là lần thứ ba tôi siết bộ lọc này; hai lần trước đều siết nửa vời. */
-  const isNumber = (value: unknown) =>
+  const isNumber = (value: unknown): value is number =>
     typeof value === "number" && Number.isFinite(value);
-  /* Layer dùng MÀU THẬT (true color) không biểu diễn được trong hồ sơ: schema
-     chỉ nhận chỉ số ACI `0…256` hoặc ba tên. Plugin gửi `aci` = `colorIndex()`,
-     và với màu thật thì chỉ số đó không mang màu người dùng đặt — nhập vào là
-     lặng lẽ thay màu của layer bằng một ACI sai.
-     Dấu hiệu: `rgb` khác `[0,0,0]`. Đo trên bản vẽ thật 43 layer đều dùng ACI,
-     cả 43 đều `rgb: [0,0,0]`. Bỏ chúng và đếm vào `skipped` — đúng nguyên tắc đã
-     dùng cho dòng thiếu thuộc tính: không biểu diễn được thì không bịa. */
-  const trueColor = (row: JsonRecord) => {
-    const rgb = row.rgb;
-    if (Array.isArray(rgb) && rgb.length >= 3
-      && rgb.some((channel) => typeof channel === "number" && channel !== 0)) return true;
-    /* Màu thật ĐEN TUYỀN có `rgb: [0,0,0]`, không phân biệt được với một layer
-       dùng ACI — payload không mang `colorMethod`. Nhưng nó lộ ra ở chỗ khác:
-       `colorIndex()` của một layer màu thật trả về `0`, và `0` (ByBlock) cùng
-       `256` (ByLayer) đều KHÔNG phải màu hợp lệ cho một layer — một layer không
-       kế thừa màu từ chính nó. `layerColor()` của daemon lặng lẽ đổi cả hai
-       thành `7` lúc áp dụng, tức layer nhập vào đổi màu mà không ai báo.
-       Không biểu diễn được thì không nhập. */
-    const index = typeof row.aci === "number" ? row.aci
-      : (typeof row.color === "number" ? row.color : undefined);
-    return index === 0 || index === 256;
+  /* Màu phải ĐỌC ĐƯỢC, không chỉ "có mặt".
+     - Màu thật mà `rgb` hỏng → `hexColor` trả `undefined`, dòng vẫn lọt, rồi
+       `reconcileLayers` làm `source.color ?? 7` biến nó thành ACI 7. Layer nhập
+       vào đổi màu mà không ai báo.
+     - ACI `0` (ByBlock) và `256` (ByLayer) KHÔNG phải màu hợp lệ của một layer:
+       layer không kế thừa màu từ chính nó. `layerColor()` của daemon lặng lẽ đổi
+       cả hai thành `7` lúc áp dụng — lại là đổi màu không ai báo.
+     Cả hai đều rơi vào `skipped`, đúng nguyên tắc dùng cho dòng thiếu thuộc
+     tính: không biểu diễn được thì không bịa. */
+  const readableColor = (row: JsonRecord) => {
+    if (isTrueColor(row)) return hexColor(row.rgb) !== undefined;
+    const index = isNumber(row.aci) ? row.aci
+      : (isNumber(row.color) ? row.color : undefined);
+    return index !== undefined && index > 0 && index < 256;
   };
   const usable = all.filter((row) =>
-    (isNumber(row.aci) || isNumber(row.color))
+    readableColor(row)
     && typeof row.linetype === "string" && row.linetype.trim() !== ""
-    && isNumber(row.lineweight)
-    && !trueColor(row));
+    && isNumber(row.lineweight));
   return {
     layers: normalizeDrawingLayers(usable),
     truncated: warnings.includes("layers_truncated"),
+    limit: (() => {
+      const limits = record(record(body).limits);
+      const value = limits.maxLayerItems ?? limits.maxTableItems;
+      return typeof value === "number" && Number.isInteger(value) && value > 0
+        ? value
+        : undefined;
+    })(),
     skipped: all.filter((row) => str(row.name)).length
       - usable.filter((row) => str(row.name)).length,
     unavailable: warnings.includes("layers_unavailable")
@@ -1112,11 +1162,15 @@ export function normalizeDrawingLayers(value: unknown): DrawingLayer[] {
        mà `Number(null)` là `0` và `Number(false)` cũng là `0` — nên `aci: null`
        cho ra `0` và đường lùi `color` không bao giờ chạy. Layer nhập vào sẽ mang
        màu 0 thay vì màu thật của nó. */
-    color: typeof row.aci === "number" && Number.isFinite(row.aci)
-      ? row.aci
-      : (typeof row.color === "number" && Number.isFinite(row.color)
-        ? row.color
-        : undefined),
+    /* Màu thật đi trước: với layer đó `aci` là `colorIndex()`, một chỉ số
+       KHÔNG mang màu người dùng đặt. Đọc nó trước là lặng lẽ đổi màu layer. */
+    color: isTrueColor(row)
+      ? hexColor(row.rgb)
+      : (typeof row.aci === "number" && Number.isFinite(row.aci)
+        ? row.aci
+        : (typeof row.color === "number" && Number.isFinite(row.color)
+          ? row.color
+          : undefined)),
     linetype: str(row.linetype, "Continuous"),
     lineweight370: num(row.lineweight),
   })).filter((layer) => layer.name);
@@ -1168,7 +1222,13 @@ export function reconcileLayers(
     if (!current) { add.push(incoming); continue; }
 
     const fields: LayerDiffField[] = [];
-    if (String(current.color) !== String(incoming.color)) {
+    /* So màu KHÔNG phân biệt hoa/thường: `hexColor()` sinh ra `#FF8000`, còn
+       người dùng gõ tay thường ra `#ff8000`. Cùng một màu mà so thô thì dòng đó
+       nằm mãi trong nhóm "khác thuộc tính", và nhận bao nhiêu lần cũng không hết
+       — một khác biệt không bao giờ đóng lại được. `ByLayer`/`byblock` cũng vậy. */
+    const colorKey = (value: string | number) =>
+      String(value).trim().toLocaleUpperCase("en-US");
+    if (colorKey(current.color) !== colorKey(incoming.color)) {
       fields.push({ label: "Màu", from: String(current.color), to: String(incoming.color) });
     }
     if (current.linetype !== incoming.linetype) {
@@ -1238,4 +1298,61 @@ export function countLayerPicks(plan: LayerReconcile, picks: ReadonlySet<string>
  * cùng lúc là chuyện thường trong một bộ hồ sơ. */
 export function targetOf(doc: { file?: string; title?: string }): string {
   return (doc.file || "").trim() || (doc.title || "").trim();
+}
+
+/** Phần của một bản vẽ đang mở mà phép chỉ đích danh cần tới. */
+export type TargetableDoc = {
+  file?: string;
+  title?: string;
+  instance?: string;
+  targetsInstance?: boolean;
+};
+
+/** Đích để GỬI ĐI trong một yêu cầu — không phải để so sánh.
+ *
+ * Khác `targetOf()` ở chỗ ưu tiên `instance` cho bản vẽ chưa lưu. Hai hàm phải
+ * tách nhau vì chúng trả lời hai câu khác nhau:
+ *
+ * · `targetOf()` = "máy chủ gọi bản vẽ này là gì" — dùng để **so** với
+ *   `scan.target`, thứ daemon đặt bằng `document.file || document.title`. Đổi nó
+ *   sang `instance` là làm mọi phép so ở `/review` trượt.
+ * · hàm này = "chỉ đích danh bản vẽ này cách nào chắc chắn nhất" — dùng để
+ *   **gửi**. Bản vẽ chưa lưu không có đường dẫn, nên tiêu đề là thứ duy nhất còn
+ *   lại, và hai bản vẽ chưa lưu trùng tiêu đề thì mọi lượt đọc đều bị từ chối vì
+ *   mơ hồ. Mã phiên gỡ đúng chỗ đó.
+ *
+ * Cả plugin (`findDocExact`) lẫn daemon (`selectOpenDocument`) đều nhận mã phiên
+ * làm đích. Token có dạng `%016llX-%016llX` nên không thể trùng một path hay
+ * title thật.
+ */
+export function requestTargetOf(
+  doc: { file?: string; title?: string; instance?: string },
+): string {
+  const file = (doc.file || "").trim();
+  if (file) return file;
+  const instance = (doc.instance || "").trim();
+  if (instance) return instance;
+  return (doc.title || "").trim();
+}
+
+/** Chuỗi gửi lên máy chủ để chỉ đích danh bản vẽ này.
+ *
+ * `requestTargetOf()` ưu tiên mã phiên, nhưng chỉ được phép làm vậy khi plugin
+ * nhận mã phiên làm đích. Với plugin cũ, gửi mã phiên là nhận `not_found` —
+ * daemon có lùi về tiêu đề, nhưng lùi được thì đằng nào tiêu đề cũng đủ, còn
+ * không lùi được thì đích đó vốn đã mơ hồ. Nên đơn giản là đừng gửi.
+ */
+export function sendTarget(doc: TargetableDoc): string {
+  return doc.targetsInstance === true
+    ? requestTargetOf(doc)
+    : ((doc.file || "").trim() || (doc.title || "").trim());
+}
+
+export function pickable<T extends TargetableDoc>(docs: readonly T[]): T[] {
+  return docs.filter((doc) => {
+    if ((doc.file || "").trim()) return true;
+    if (doc.targetsInstance === true && (doc.instance || "").trim()) return true;
+    return docs.filter((other) =>
+      (other.title || "").trim() === (doc.title || "").trim()).length <= 1;
+  });
 }

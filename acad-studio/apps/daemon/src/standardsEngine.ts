@@ -285,6 +285,49 @@ function snapshotSettings(snapshot: unknown): JsonRecord {
   return asRecord(root?.settings) || asRecord(drawing?.settings) || {};
 }
 
+/** `kByColor` cua `AcCmEntityColor::ColorMethod` — layer dung mau that. */
+const COLOR_METHOD_TRUE = 0xc2;
+
+/**
+ * Mau QUAN SAT DUOC cua mot dong bang layer: `#RRGGBB` neu layer dung mau that,
+ * nguoc lai la chi so ACI.
+ *
+ * Doc `aci` cho moi truong hop la sai voi layer mau that: `colorIndex()` cua no
+ * la mot chi so KHONG mang mau nguoi dung dat. Ho so ghi `#FF8000`, audit doc ra
+ * mot so, va phep so LUC NAO CUNG lech — layer bao "chua dung mau" mai mai, moi
+ * lan bam sua lai ap dung dung cai gia tri da co san. Loi kieu nay khong tu lo
+ * ra: no trong het nhu mot ban ve thuc su sai chuan.
+ */
+function observedLayerColor(row: JsonRecord): unknown {
+  const method = row.colorMethod;
+  const rgb = row.rgb;
+  const trueColor = typeof method === "number"
+    ? method === COLOR_METHOD_TRUE
+    /* Ban plugin cu khong phat `colorMethod`. Suy tu `rgb` thi mau that DEN
+       TUYEN khong phan biet duoc voi layer ACI — diem mu nay khong go duoc o
+       phia doc, va do la ly do `colorMethod` duoc them vao plugin. */
+    : Array.isArray(rgb) && rgb.length >= 3
+      && rgb.some((channel) => typeof channel === "number" && channel !== 0);
+  if (!trueColor) return row.aci ?? row.color;
+  const channels = Array.isArray(rgb) && rgb.length >= 3
+    ? rgb.slice(0, 3).map((channel) =>
+      typeof channel === "number" && Number.isInteger(channel)
+        && channel >= 0 && channel <= 255
+        ? channel
+        : undefined)
+    : [undefined];
+  /* Layer dung mau that ma `rgb` khong doc duoc: mau quan sat duoc la KHONG
+     BIET, va `undefined` la cach noi dieu do.
+     Lui ve `aci` o day tung la mot duong BAO DAT SAI: ho so cho doi ACI 7, layer
+     noi ro no dung mau that nhung `rgb` hong, `aci` tinh co bang 7 — audit bao
+     dat chuan trong khi mau that su cua layer khong ai biet. Khong bieu dien
+     duoc thi khong ket luan, ke ca ket luan "dung". */
+  if (channels.some((channel) => channel === undefined)) return undefined;
+  return `#${channels
+    .map((channel) => (channel as number).toString(16).padStart(2, "0"))
+    .join("")}`.toUpperCase();
+}
+
 function snapshotLayers(snapshot: unknown): JsonRecord[] {
   const root = asRecord(snapshot);
   const tables = asRecord(root?.tables);
@@ -500,7 +543,7 @@ export function auditStandards(
     const wanted: JsonRecord = {};
     const current: JsonRecord = {};
     const checks: [string, unknown, unknown][] = [
-      ["color", firstValue(layer, ["aci", "color"]), actual.aci ?? actual.color],
+      ["color", firstValue(layer, ["aci", "color"]), observedLayerColor(actual)],
       ["linetype", layer.linetype, actual.linetype],
       ["lineweight", layer.lineweight, actual.lineweight],
     ];

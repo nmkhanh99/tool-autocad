@@ -25,9 +25,12 @@ const MAX_OPERATIONS = 200;
 // `OpenAcadDocument` sau này đều tự động thành bắt buộc ở đây, và lỗi chỉ hiện
 // ra ở `completeDocument()` chứ không ở chỗ vừa sửa. Đã sập đúng một lần khi
 // thêm `space`.
+/* `dbmod`, `space`, `targetsInstance` ở lại dạng TUỲ CHỌN: cả ba vắng mặt trên
+   bản plugin cũ, và ép chúng thành bắt buộc là biến "plugin không nói gì" thành
+   một giá trị bịa. */
 type OpenDocument =
-  Required<Omit<OpenAcadDocument, "dbmod" | "space">>
-  & Pick<OpenAcadDocument, "dbmod" | "space">;
+  Required<Omit<OpenAcadDocument, "dbmod" | "space" | "targetsInstance">>
+  & Pick<OpenAcadDocument, "dbmod" | "space" | "targetsInstance">;
 
 type DocumentGuard = {
   instance: string;

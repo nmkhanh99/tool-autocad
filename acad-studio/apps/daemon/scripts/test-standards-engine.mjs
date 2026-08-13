@@ -189,6 +189,95 @@ assert.deepEqual(
   { color: 1 },
   "ObjectARX lineweight 25 matches profile lineweight 0.25 mm",
 );
+/* Layer MAU THAT: audit phai lay mau quan sat duoc tu `colorMethod`/`rgb`, khong
+   phai tu `aci`. Doc `aci` la so voi mot chi so KHONG mang mau nguoi dung dat,
+   nen ho so `#FF8000` se lech MAI MAI — moi lan bam sua lai ap dung dung cai gia
+   tri da co san, va loi nay khong tu lo ra vi no trong het nhu ban ve sai chuan. */
+const trueColorProfile = {
+  ...profile,
+  layers: [{ name: "A-WALL", color: "#FF8000", linetype: "Continuous", lineweight: 0.25 }],
+};
+const trueColorSnapshot = (layer) => ({
+  ...snapshot,
+  tables: { ...snapshot.tables, layers: [layer] },
+});
+const layerIssue = (prof, layer) =>
+  auditStandards(prof, trueColorSnapshot(layer), auditScan)
+    .find((issue) => issue.id === "layer-properties-a-wall");
+
+assert.equal(
+  layerIssue(trueColorProfile, {
+    name: "A-WALL", colorMethod: 0xc2, aci: 0, rgb: [255, 128, 0],
+    linetype: "Continuous", lineweight: 25,
+  }),
+  undefined,
+  "layer mau that khop ho so thi KHONG bao lech",
+);
+/* Hoa/thuong khong duoc thanh mot khac biet: `sameValue` ha thap ca hai ve, va
+   test nay khoa dieu do lai. */
+assert.equal(
+  layerIssue({ ...trueColorProfile, layers: [{ ...trueColorProfile.layers[0], color: "#ff8000" }] }, {
+    name: "A-WALL", colorMethod: 0xc2, aci: 0, rgb: [255, 128, 0],
+    linetype: "Continuous", lineweight: 25,
+  }),
+  undefined,
+  "so mau that khong phan biet hoa/thuong",
+);
+assert.deepEqual(
+  layerIssue(trueColorProfile, {
+    name: "A-WALL", colorMethod: 0xc2, aci: 0, rgb: [0, 0, 255],
+    linetype: "Continuous", lineweight: 25,
+  })?.current,
+  { color: "#0000FF" },
+  "mau that KHAC ho so thi van bao lech, kem ma mau doc duoc",
+);
+/* Ban plugin cu khong phat `colorMethod` — van suy duoc tu `rgb` khac 0. */
+assert.equal(
+  layerIssue(trueColorProfile, {
+    name: "A-WALL", aci: 0, rgb: [255, 128, 0], linetype: "Continuous", lineweight: 25,
+  }),
+  undefined,
+  "khong co colorMethod thi lui ve suy tu rgb",
+);
+/* Layer ACI binh thuong khong duoc di nham nhanh mau that. */
+assert.deepEqual(
+  layerIssue({ ...trueColorProfile, layers: [{ ...trueColorProfile.layers[0], color: 1 }] }, {
+    name: "A-WALL", colorMethod: 0xc3, aci: 3, rgb: [0, 0, 0],
+    linetype: "Continuous", lineweight: 25,
+  })?.current,
+  { color: 3 },
+  "layer ACI van doc theo aci",
+);
+/* Layer noi ro no dung mau that ma `rgb` hong: mau quan sat duoc la KHONG BIET.
+   Lui ve `aci` o day la mot duong BAO DAT SAI — ho so cho doi ACI 7, `aci` tinh
+   co bang 7, va audit bao dat chuan trong khi mau that su khong ai biet. */
+assert.deepEqual(
+  layerIssue(trueColorProfile, {
+    name: "A-WALL", colorMethod: 0xc2, aci: 3, rgb: [300, 0],
+    linetype: "Continuous", lineweight: 25,
+  })?.current,
+  { color: null },
+  "rgb hong thi bao khong biet, khong lui ve aci",
+);
+assert.deepEqual(
+  layerIssue(
+    { ...trueColorProfile, layers: [{ ...trueColorProfile.layers[0], color: 7 }] },
+    { name: "A-WALL", colorMethod: 0xc2, aci: 7, rgb: [300, 0],
+      linetype: "Continuous", lineweight: 25 },
+  )?.current,
+  { color: null },
+  "aci trung voi ho so KHONG duoc thanh mot luot bao dat",
+);
+/* Thieu han `rgb` cung the — noi la mau that thi phai doc duoc mau that. */
+assert.deepEqual(
+  layerIssue(
+    { ...trueColorProfile, layers: [{ ...trueColorProfile.layers[0], color: 7 }] },
+    { name: "A-WALL", colorMethod: 0xc2, aci: 7, linetype: "Continuous", lineweight: 25 },
+  )?.current,
+  { color: null },
+  "thieu rgb ma khai mau that thi cung la khong biet",
+);
+
 assert.equal(
   issues.find((issue) => issue.scope === "dim-row")?.suggestedAction.baseHandle,
   "H0",

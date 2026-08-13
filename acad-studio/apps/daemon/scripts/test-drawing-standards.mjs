@@ -74,6 +74,45 @@ const layers = buildStandardsAction(
 assert.match(layers.lisp, /\(acadstd:sync-layers/);
 assert.ok(layers.lisp.includes('"MAT-CAT"'));
 
+/* Ho so chi dung ACI: truong thu 6 phai la `nil` cho TUNG dong. Con sot lai mot
+   group 420 nao do trong ban ve la mau ACI vua ghi khong co tac dung — AutoCAD
+   cho 420 thang 62 — va nguoi dung thay lenh chay xong ma mau khong doi. */
+const layerRows = (lisp) => {
+  const rows = lisp.match(/\(list "[^"]*" (?:nil|-?\d+) "[^"]*" -?\d+ (?:T|nil) (?:nil|\d+)\)/g);
+  assert.ok(rows && rows.length, `khong doc duoc dong layer nao: ${lisp}`);
+  return rows;
+};
+for (const row of layerRows(layers.lisp)) {
+  assert.ok(row.endsWith(" nil)"), `ACI phai ket thuc bang nil: ${row}`);
+}
+assert.equal(layerRows(layers.lisp).length, DEFAULT_PROFILE.layers.length);
+
+/* Mau that: truong 2 (ACI) phai la `nil` va truong 6 phai la so 24-bit.
+   `nil` o truong 2 la co y — LISP se KHONG dung toi group 62, giu nguyen gia tri
+   san co lan DAU cua no (62 am nghia la layer dang TAT). */
+const trueColorLayers = buildStandardsAction(
+  "sync-layers",
+  [],
+  {
+    layers: [
+      { name: "MAU-THAT", color: "#FF8000", linetype: "Continuous", lineweight: 0.35, required: true },
+      { name: "DEN-TUYEN", color: "#000000", linetype: "Continuous", lineweight: 0.35, required: false },
+    ],
+  },
+  "Drawing1.dwg",
+);
+assert.ok(
+  trueColorLayers.lisp.includes('(list "MAU-THAT" nil "Continuous" 35 T 16744448)'),
+  trueColorLayers.lisp,
+);
+/* `#000000` la `0`, va `0` phai di duoc qua `?? nil` — `0 ?? x` la `0`, nhung
+   mot phep kiem `|| nil` hay `? :` theo do that se bien mau den thanh khong co
+   mau that, tuc layer den tuyen quay ve ACI. */
+assert.ok(
+  trueColorLayers.lisp.includes('(list "DEN-TUYEN" nil "Continuous" 35 nil 0)'),
+  trueColorLayers.lisp,
+);
+
 const area = buildStandardsAction(
   "area",
   ["CAFE"],

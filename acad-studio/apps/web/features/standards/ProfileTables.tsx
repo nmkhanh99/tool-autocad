@@ -27,6 +27,7 @@ import {
   LINEWEIGHTS,
   LINEWEIGHT_NAMES,
   ROOM_KIND,
+  isHexColor,
   layerRowErrors,
   mappingRowErrors,
   type LayerRule,
@@ -126,7 +127,10 @@ function TagInput({ values, onChange, label, disabled, placeholder }: {
 
 function AciPicker({ value, onChange, disabled }: {
   value: string | number;
-  onChange: (next: number) => void;
+  /* `string` là mã màu thật `#RRGGBB`. Khai cứng `number` ở đây từng là thứ chặn
+     màu thật đi hết đường: `LayerRule.color` vốn đã nhận chuỗi, chỉ riêng ô chọn
+     là không. */
+  onChange: (next: string | number) => void;
   disabled: boolean;
 }) {
   /* Neo theo toạ độ MÀN HÌNH, không theo ô cha.
@@ -137,7 +141,10 @@ function AciPicker({ value, onChange, disabled }: {
   const wrap = useRef<HTMLSpanElement>(null);
   const pop = useRef<HTMLDivElement>(null);
   const numeric = typeof value === "number" ? value : Number(value);
-  const swatch = Number.isFinite(numeric) ? aciColor(numeric) : null;
+  /* Màu thật đã là mã màu — tô thẳng, không đi qua bảng ACI. `Number("#FF8000")`
+     là `NaN`, nên không chặn ở đây là ô màu bỏ trống đúng lúc đã biết chắc màu. */
+  const hex = typeof value === "string" && isHexColor(value) ? value.trim() : null;
+  const swatch = hex ?? (Number.isFinite(numeric) ? aciColor(numeric) : null);
 
   const open = () => {
     const box = wrap.current?.getBoundingClientRect();
@@ -212,13 +219,19 @@ function AciPicker({ value, onChange, disabled }: {
               </Button>
             ))}
           </div>
-          <div className="pophead" style={{ marginTop: "var(--s3)" }}>Chỉ số khác</div>
-          <input className="input" inputMode="numeric" defaultValue={String(value)}
-            aria-label="Chỉ số ACI"
+          <div className="pophead" style={{ marginTop: "var(--s3)" }}>
+            Chỉ số khác, hoặc màu thật
+          </div>
+          <input className="input" defaultValue={String(value)}
+            aria-label="Chỉ số ACI hoặc mã màu #RRGGBB"
             onKeyDown={(event) => {
               if (event.key !== "Enter") return;
               event.preventDefault();
-              const parsed = Number((event.target as HTMLInputElement).value.trim());
+              const text = (event.target as HTMLInputElement).value.trim();
+              /* Màu thật đi trước: `Number("#FF8000")` là `NaN`, nên nếu để phép
+                 kiểm ACI chạy trước thì mọi mã màu đều rơi vào nhánh từ chối. */
+              if (isHexColor(text)) { onChange(text.toUpperCase()); setAt(null); return; }
+              const parsed = Number(text);
               /* Chặn ngay tại ô: ACI phải là số NGUYÊN 0–256. Nhận giá trị lẻ
                  rồi để máy chủ từ chối là bắt người dùng đi một vòng mới biết. */
               if (!Number.isInteger(parsed) || parsed < 0 || parsed > 256) return;
@@ -226,8 +239,10 @@ function AciPicker({ value, onChange, disabled }: {
               setAt(null);
             }} />
           <p className="hint" style={{ margin: "var(--s2) 0 0" }}>
-            Số nguyên 0–256, Enter để nhận. Chỉ 1–9 có màu hiển thị được — chỉ số
-            khác app không đoán màu, vì đoán sai còn tệ hơn để trống.
+            Số nguyên 0–256, hoặc mã màu thật <b>#RRGGBB</b> (đủ 6 chữ số). Enter
+            để nhận. Mã màu thật hiện đúng màu; trong dải ACI thì chỉ 1–9 hiện
+            được — chỉ số khác app không đoán màu, vì đoán sai còn tệ hơn để
+            trống.
             {/* Không CHẶN 0 và 256 — máy chủ nhận chúng. Nhưng `layerColor()` ép
                 cả hai về 7 lúc áp dụng (một layer không thể kế thừa màu từ chính
                 nó), nên im lặng ở đây là để người dùng đặt 256 rồi thấy layer

@@ -23,6 +23,13 @@ export type AcadDocument = {
    * nguồn chỉ có nghĩa khi CÙNG một `instance`: bộ đếm revision là của một
    * database cụ thể, hai bản vẽ khác nhau có thể cùng đứng ở số 7. */
   instance?: string;
+  /** Plugin đang chạy có nhận `instance` **làm đích** không.
+   *
+   * Khác hẳn "payload có `instance`": trường đó có từ lâu, còn `findDocExact`
+   * mới biết nhận nó — không suy được cái sau từ cái trước. Thiếu trường = plugin
+   * bản cũ; lúc đó bản vẽ chưa lưu trùng tiêu đề phải bị loại khỏi ô chọn như
+   * trước, vì gửi mã phiên sẽ nhận `not_found` mà lùi về tiêu đề thì mơ hồ. */
+  targetsInstance?: boolean;
   /** Tên không gian AutoCAD đang mở cho bản vẽ này (Model, hoặc tên layout).
    *
    * Cần nó vì danh mục đối tượng chỉ quét **một** không gian. Đo trên máy thật:

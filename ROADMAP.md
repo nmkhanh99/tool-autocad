@@ -401,17 +401,32 @@ route, như `blocks.module.css` vừa làm.
   Tiêu chí nghiệm thu `grep -c "scopeMatches" = 0` hiện là **4** — tự đạt khi xoá
   panel.
 
-  **Nợ kỹ thuật của 1.1 — các ca biên đã biết, chưa xử lý.** Mục này qua **12 vòng
-  Codex review, ~50 phát hiện**, và mọi đường **mất hoặc bịa dữ liệu** đã bịt.
-  Phần còn lại là các ca hiếm, ghi ra để không mất dấu:
+  **Nợ kỹ thuật của 1.1 — ba ca biên, đã xử lý 2026-08-13.** Mục này qua **12 vòng
+  Codex review, ~50 phát hiện**, và mọi đường **mất hoặc bịa dữ liệu** đã bịt. Ba
+  ca biên còn lại đều đã sửa; cả ba đụng plugin nên **phải khởi động lại AutoCAD**:
 
-  - Bản vẽ **chưa lưu** chỉ định danh được bằng tiêu đề. Hiện fail-closed: trùng
-    tiêu đề thì bị loại khỏi ô chọn, thiếu `instance` thì từ chối áp. Muốn dùng
-    được thật thì `/drawing-info` phải nhận đích theo `instance`.
-  - Layer **màu thật** không nhập được, kể cả khi người dùng chấp nhận quy về ACI
-    gần nhất — schema hồ sơ không có chỗ cho nó.
-  - Bảng layer quá **500 dòng** thì nhóm xoá bị ẩn vĩnh viễn. Muốn gỡ thì plugin
-    phải phát bảng layer theo trang.
+  - ~~Bản vẽ **chưa lưu** chỉ định danh được bằng tiêu đề.~~ **Xong.** `findDocExact`
+    nhận thêm mã phiên làm đích, `selectOpenDocument` khớp `instance` xen giữa
+    đường khớp theo file và theo tiêu đề. `requestTargetOf()` tách khỏi
+    `targetOf()` — hai hàm trả lời hai câu khác nhau và gộp lại sẽ hỏng `/review`,
+    nơi so đích với `scan.target` mà daemon đặt bằng `file || title`.
+    Codex review bắt được một tầng nữa: `GET /drawing-info` dựng lại đích bằng
+    `file || title` sau khi đã chọn đúng bản vẽ, nên cả đường vẫn hỏng ở bước kế.
+    Nay có `nativeDocumentTarget()`. **Các route khác** (`blockLibraryRouter`,
+    `cadSelection`, đường quét/áp của `drawingStandards`) vẫn chưa nhận mã phiên —
+    giới hạn có sẵn, ghi ra để không mất dấu.
+  - ~~Layer **màu thật** không nhập được.~~ **Xong.** Hồ sơ nhận `#RRGGBB`, đường áp
+    dụng ghi DXF **group 420**. Ba điểm phải đúng cùng lúc: (a) plugin phát thêm
+    `colorMethod` vì màu thật ĐEN TUYỀN cũng là `rgb: [0,0,0]` nên không đoán được
+    từ `rgb`; (b) đặt màu ACI phải **xoá** 420, vì 420 thắng 62 và sót lại là lệnh
+    chạy xong mà màu không đổi; (c) đặt màu thật thì **không đụng** 62 — giữ nguyên
+    được cả dấu ÂM của nó, mà dấu âm nghĩa là layer đang TẮT.
+  - ~~Bảng layer quá **500 dòng** thì nhóm xoá bị ẩn vĩnh viễn.~~ **Nới, chưa hết.**
+    Riêng bảng layer lên **5.000** dòng (`kInfoMaxLayerItems`, tách khỏi
+    `kInfoMaxTableItems` dùng chung cho linetype/textstyle/dimstyle) và plugin công
+    bố ngưỡng đó trong `limits`. Bản vẽ **quá 5.000 layer vẫn ẩn nhóm xoá** —
+    ngưỡng lớn hơn không phải là phân trang. Muốn hết thì plugin phải phát theo
+    trang.
 
   Bài học đắt nhất, ghi lại nguyên văn: tôi dựng một cơ chế **giữ ảnh chụp cho
   tươi** (`instance` + `revision` + sự kiện + dấu thời gian) và tám vòng liên tiếp
@@ -526,6 +541,15 @@ rồi khởi động lại AutoCAD.
 - **`copyfloor` và `tagmeta`** trong `functions.ts` khai `liveRecipe` nhưng không
   có trong 15 recipe headless — chưa đối chiếu với `/api/acad/live`. Nếu không
   có handler thì đó là 2 nút luôn báo lỗi.
+- **Bảy script test mang đường dẫn tuyệt đối của một máy cụ thể.**
+  `ACAD_SCRATCH`/`MEP_SCRATCH` không đặt thì chúng lùi về một thư mục trong
+  `/var/folders` của máy tác giả — chạy được ở đúng máy ấy, hỏng ở mọi máy khác,
+  và trên Linux thì `mkdirSync` ném EACCES. `test-bridge-contract.mjs` đã sửa
+  (2026-08-13) vì nó vào `pnpm verify`; bảy file còn lại
+  (`test-acad-stability`, `test-acad-control`, `test-headless-layer`,
+  `test-preview-apply`, `test-objectarx-live`, `test-live-preview`,
+  `test-product-identity`) chưa. Sửa cùng lúc với việc dựng CI, vì trước đó không
+  có gì phát hiện được chúng hỏng.
 - **Không có lint/format.** Ba ranh giới thư mục kiểm bằng script riêng.
 - **Chat vẫn thiếu test cho luồng gửi/nhận.** Đã có 7 test cho việc sửa message
   theo ID và 8 test cho bus sự kiện, nhưng `send()` và luồng stream SSE của

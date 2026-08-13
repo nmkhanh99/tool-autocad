@@ -1,5 +1,150 @@
 # CHANGELOG
 
+## 2026-08-13 — Ba ca biên của đường nhập layer
+
+Ba mục nợ kỹ thuật ghi lại sau mục 1.1. Cả ba đụng plugin ObjectARX nên
+**phải khởi động lại AutoCAD** thì mới có tác dụng.
+
+### Added — layer màu thật (true color) nhập và áp được
+
+- Hồ sơ nhận màu dạng `#RRGGBB` bên cạnh chỉ số ACI `0…256` và ba tên
+  `Default`/`ByLayer`/`ByBlock`. Đường áp dụng ghi nó thành **DXF group 420**.
+- Plugin phát thêm `colorMethod` cho mỗi layer. Không có nó thì phía web phải suy
+  màu thật từ `rgb`, và chỗ suy đó có một điểm mù không gỡ được: màu thật **đen
+  tuyền** cũng là `rgb: [0, 0, 0]`, không phân biệt được với một layer ACI.
+- `acadstd:ensure-layer-rgb` thay `acadstd:ensure-layer` làm đường ghi chính; hàm
+  cũ giữ nguyên chữ ký và gọi vào hàm mới, nên mọi hồ sơ hiện có sinh ra đúng các
+  group code như trước. Đây là đường ghi **một pha, không hoàn tác được**, nên
+  một thay đổi arity là thứ không được phép làm ẩu.
+- Ô màu trong bảng layer tô thẳng mã màu thật thay vì bỏ trống. `Number("#FF8000")`
+  là `NaN`, nên nếu không tách nhánh thì ô sẽ trống đúng lúc đã biết chắc màu.
+
+### Fixed — bản vẽ chưa lưu chỉ định danh được bằng tiêu đề
+
+- `findDocExact` (plugin) nhận thêm mã phiên (`acadDocumentInstanceToken`) làm
+  đích, và `selectOpenDocument` (daemon) khớp `instance` xen giữa đường khớp theo
+  đường dẫn file và đường khớp theo tiêu đề.
+- `requestTargetOf()` tách riêng khỏi `targetOf()`. Hai hàm trả lời hai câu khác
+  nhau — "chỉ đích danh cách nào chắc nhất" để GỬI, và "máy chủ gọi bản vẽ này là
+  gì" để SO với `scan.target` — và gộp chúng làm một sẽ hỏng `/review`, nơi daemon
+  đặt `scan.target` bằng `file || title`.
+- Hai bản vẽ chưa lưu trùng tiêu đề nay chọn được, thay vì bị loại khỏi ô chọn.
+- **Codex review bắt được: sửa một tầng chưa đủ.** `selectOpenDocument` chọn đúng
+  bản vẽ rồi, nhưng route `GET /drawing-info` dựng lại đích bằng `file || title`
+  trước khi gọi plugin — tiêu đề mơ hồ làm `findDocExact` trả về rỗng, và cả
+  đường bản-vẽ-chưa-lưu vẫn hỏng ở đúng một bước sau chỗ đã sửa.
+  `nativeDocumentTarget()` tách riêng đích GỬI ĐI. `exactTarget` **không đổi**, vì
+  nó còn chảy vào `withLegacySelectionCatalog` → guard LISP so `acad:cat-expected`
+  với `DWGNAME`; LISP không biết mã phiên là gì.
+- Ô chọn màu nay gõ được `#RRGGBB`. Trước đó `onChange` khai cứng `number`, nên
+  màu thật xem được mà không sửa được bằng tay — một nửa tính năng.
+
+### Fixed — Codex review vòng hai: hai lỗ hổng của chính hai sửa trên
+
+- **[P1] Layer màu thật báo lệch MÃI MÃI trong lượt kiểm.** `auditStandards` so
+  màu hồ sơ với `actual.aci ?? actual.color`, mà với layer màu thật thì `aci` là
+  một chỉ số **không mang màu người dùng đặt**. Hồ sơ ghi `#FF8000`, audit đọc ra
+  một số, và phép so không bao giờ khớp — mỗi lần bấm sửa lại áp dụng đúng cái
+  giá trị đã có sẵn. Lỗi kiểu này không tự lộ ra: nó trông hệt như một bản vẽ
+  thật sự sai chuẩn. Nay `observedLayerColor()` lấy màu quan sát được từ
+  `colorMethod`/`rgb`; `rgb` hỏng thì lùi về ACI chứ không bịa mã màu.
+- **[P2] Gửi một đích chính xác hơn lại làm hỏng thứ đang chạy.** Plugin phát
+  `instance` trong danh sách bản vẽ từ trước khi `findDocExact` biết nhận nó, nên
+  có những bản plugin trả `not_found` cho mã phiên. Bản vẽ chưa lưu trước đây đọc
+  được bằng tiêu đề. Nay lùi về `exactTarget` khi gặp `not_found` — nhưng **chỉ
+  khi** đích cũ còn chỉ đúng một bản vẽ, vì một tiêu đề trùng sẽ khớp bản vẽ KHÁC
+  và trả về bảng layer của bản vẽ khác thì tệ hơn hẳn báo lỗi.
+
+### Fixed — Codex review vòng ba: sửa ở GỐC thay vì vá tầng thứ tư
+
+Vòng ba ra **cùng một dạng lỗi lần thứ ba**: với plugin cũ, hai bản vẽ chưa lưu
+trùng tiêu đề lọt vào ô chọn rồi bấm cái nào cũng hỏng. Ba vòng cùng dạng nghĩa
+là thiết kế sai, không phải cần thêm một bản vá — đúng bài học đã ghi ở mục 1.1.
+
+Nguyên nhân chung của cả ba: **app không biết plugin đang chạy có nhận mã phiên
+làm đích hay không**, nên mỗi tầng tự đoán lấy. `instance` nằm trong payload danh
+sách bản vẽ từ lâu, còn `findDocExact` mới biết nhận nó — hai sự thật khác nhau,
+và không suy được cái sau từ cái trước.
+
+- Plugin công bố `targetsInstance: true` trong danh sách bản vẽ. Thiếu trường =
+  bản cũ, và giao diện fail-closed y như trước.
+- `sendTarget()` chỉ gửi mã phiên khi cờ đó bật; `pickable()` chỉ cho chọn bản vẽ
+  chưa lưu trùng tiêu đề khi cờ đó bật.
+- Cả hai chuyển từ `ImportLayers.tsx` sang `model.ts` — nằm trong component thì
+  không có cách nào khoá bằng test, và đó chính là lý do ba vòng đều trượt.
+- `OpenDocument` của `cadSelection` giữ `targetsInstance` ở dạng tuỳ chọn, cùng
+  nhóm `dbmod`/`space`: ép thành bắt buộc là biến "plugin không nói gì" thành một
+  giá trị bịa.
+
+### Fixed — Codex review vòng bốn: lượt lùi có thể đọc nhầm bản vẽ
+
+Phép kiểm "tiêu đề không mơ hồ" trước lượt lùi đo trên `open.docs`, một ảnh chụp
+đã cũ. Bản vẽ đóng đi rồi một bản khác trùng tiêu đề mở lên trong khoảng đó là
+tiêu đề ấy trỏ sang bản vẽ **khác** — và ta trả về bảng layer của bản vẽ khác mà
+không ai biết. Đúng loại lỗi mà cả tính năng này dựng ra để chặn.
+
+Nay chốt bằng thứ không mơ hồ được: mã phiên trong phản hồi phải đúng bản vẽ đã
+chọn, không khớp thì bỏ lượt lùi và giữ `not_found`. Chốt này luôn có dữ liệu ở
+đúng những bản plugin cần tới lượt lùi — `instance` vào cả danh sách bản vẽ lẫn
+`drawing-info` trong cùng một commit (`104bb32`).
+
+### Fixed — Codex review vòng sáu: "không biết" không được thành "đạt"
+
+`observedLayerColor()` lùi về `aci` khi `rgb` không đọc được. Đó là một đường
+**báo đạt sai**: hồ sơ chờ đợi ACI 7, layer nói rõ nó dùng màu thật nhưng `rgb`
+hỏng, `aci` tình cờ bằng 7 — audit báo đạt chuẩn trong khi màu thật sự của layer
+không ai biết. Đúng nguyên tắc đã dùng ở mọi chỗ khác trong mục này, chỉ chỗ này
+bỏ sót: không biểu diễn được thì không kết luận, **kể cả kết luận "đúng"**. Nay
+trả `undefined` và audit báo `color: null`.
+
+Phía web đã đúng sẵn — `readDrawingLayers` loại hẳn dòng đó vào `skipped`.
+
+### Technical — `test-bridge-contract.mjs` nay chạy trong `pnpm verify`
+
+File test này tồn tại và xanh, nhưng không nằm trong chuỗi `verify` và dự án
+không có CI, nên trên thực tế nó không chạy bao giờ. Đã thêm vào.
+
+**Codex review vòng năm bắt được hệ quả:** đường lùi của `ACAD_SCRATCH` trong file
+đó là một đường dẫn tuyệt đối trong `/var/folders` của **một máy cụ thể**. Nó
+chạy được ở đúng máy ấy nên không ai thấy; đưa test vào `verify` là biến nó thành
+chốt chặn trên mọi máy khác, và trên Linux thì `/var/folders` còn không tồn tại
+nên `mkdirSync` ném EACCES. Nay dùng `mkdtempSync(tmpdir())` — `mkdtemp` chứ
+không phải một tên cố định, vì hai lượt chạy song song sẽ giẫm lên nhau.
+
+Sáu script khác (`test-acad-stability`, `test-acad-control`, `test-headless-layer`,
+`test-preview-apply`, `test-objectarx-live`, `test-live-preview`,
+`test-product-identity`) có cùng đường dẫn cứng nhưng **không** nằm trong
+`verify`. Chưa sửa — xem `Technical Debt`.
+
+### Changed — ngưỡng bảng layer lên 5.000 dòng
+
+- `kInfoMaxLayerItems` = 5.000, tách khỏi `kInfoMaxTableItems` = 500 vẫn dùng
+  chung cho linetype/textstyle/dimstyle, và plugin công bố nó trong `limits`.
+- **Chưa hết**: bản vẽ quá 5.000 layer vẫn ẩn nhóm xoá, vì một ngưỡng lớn hơn
+  không phải là phân trang. Bảng bị cắt không chứng minh được layer nào vắng mặt,
+  mà tích một dòng ở nhóm xoá là XOÁ nó khỏi hồ sơ.
+
+### Fixed — hai đường bịa màu lộ ra khi mở cho màu thật
+
+- Dòng màu thật mà `rgb` hỏng (thiếu kênh, kênh ngoài `0…255`) trước đây vẫn lọt,
+  rồi `reconcileLayers` làm `source.color ?? 7` biến nó thành ACI 7 — layer nhập
+  vào đổi màu mà không ai báo. Nay tính vào `skipped`.
+- ACI `0` (ByBlock) và `256` (ByLayer) không phải màu hợp lệ của một layer: layer
+  không kế thừa màu từ chính nó, và `layerColor()` lặng lẽ đổi cả hai thành `7`
+  lúc áp dụng. Nay cũng tính vào `skipped`.
+
+### Technical
+
+- `trueColor()` (daemon) và `isTrueColor()`/`hexColor()` (web) đều chỉ nhận đúng 6
+  chữ số hex. `#abc` là cú pháp CSS chứ không phải cú pháp DXF, và đoán nó thành
+  `#aabbcc` là tự chọn thay người dùng một màu họ không gõ.
+- `acadstd:sync-layers` nhận `rgb` làm trường **thứ sáu, tuỳ chọn**: hồ sơ không
+  dùng màu thật thì daemon không phát nó, `nth 5` trả `nil`, và hành vi y hệt cũ.
+- Test khoá đường ghi: mọi dòng của hồ sơ chỉ-ACI phải kết thúc bằng `nil`, và
+  `#000000` phải ra `0` — một phép kiểm `|| nil` theo độ-thật sẽ biến màu đen
+  thành "không có màu thật", tức layer đen tuyền lặng lẽ quay về ACI.
+- `pnpm verify`: **174 test** (trước 169), 10 guardrail, exit 0.
+
 ## 2026-08-12 — Nhập layer từ bản vẽ (mục 1.1)
 
 ### Added — `/standards` lấy được bảng layer từ một bản vẽ đang mở

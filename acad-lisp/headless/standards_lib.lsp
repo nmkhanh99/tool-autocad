@@ -340,15 +340,41 @@
       (setq index (1+ index))))
   (reverse handles))
 
-(defun acadstd:ensure-layer (name color linetype lineweight / record data)
+(defun acadstd:ensure-layer (name color linetype lineweight)
+  (acadstd:ensure-layer-rgb name color linetype lineweight nil))
+
+;; `rgb` = mau that dong goi 24-bit (group 420), hoac nil.
+;;
+;; Doi so THEM chu khong doi chu ky ham cu: moi ho so hien co van di qua
+;; `acadstd:ensure-layer` va sinh ra dung cac group code nhu truoc. Duong ap dung
+;; nay ghi MOT PHA vao ban ve that va khong hoan tac duoc, nen mot thay doi arity
+;; la thu khong duoc phep lam om.
+;;
+;; Quy tac cua AutoCAD: group 420 co mat thi no thang group 62. Hai chieu:
+;;
+;;   - Dat mau ACI phai XOA 420. Con sot lai thi mau ACI vua ghi khong co tac
+;;     dung nao ca, va nguoi dung thay lenh "chay thanh cong" ma mau khong doi.
+;;   - Dat mau that thi CHI ghi 420 va KHONG dung toi 62. 62 luc nay chi la mau
+;;     du phong cho phan mem doc DWG khong hieu true color, nen ghi de len no
+;;     khong duoc gi — trong khi giu nguyen thi giu duoc ca gia tri san co lan
+;;     DAU cua no: 62 AM nghia la layer dang TAT. `subst` mot so duong vao do se
+;;     BAT layer len, tuc doi mau lai lam hien ra thu nguoi dung da tat.
+(defun acadstd:ensure-layer-rgb (name color linetype lineweight rgb / record data)
   (if (setq record (tblobjname "LAYER" name))
     (progn
       (setq data (entget record))
-      (if (numberp color)
+      (if (and (numberp color) (not (numberp rgb)))
         (setq data
           (if (assoc 62 data)
             (subst (cons 62 color) (assoc 62 data) data)
             (append data (list (cons 62 color))))))
+      (if (numberp rgb)
+        (setq data
+          (if (assoc 420 data)
+            (subst (cons 420 rgb) (assoc 420 data) data)
+            (append data (list (cons 420 rgb)))))
+        (if (assoc 420 data)
+          (setq data (acadstd:remove-code data 420))))
       (if (and (= (type linetype) 'STR)
                (/= linetype "")
                (tblsearch "LTYPE" linetype))
@@ -371,6 +397,8 @@
           (cons 2 name)
           '(70 . 0)
           (cons 62 (if (numberp color) color 7)))
+        ;; Layer chua ton tai thi khong co 62 san de giu, nen 7 la mau du phong.
+        (if (numberp rgb) (list (cons 420 rgb)) '())
         (if (and (= (type linetype) 'STR) (tblsearch "LTYPE" linetype))
           (list (cons 6 linetype))
           '())
@@ -378,10 +406,14 @@
   name)
 
 (defun acadstd:sync-layers (layers / layer)
-  ;; layer = name color linetype lineweight required
+  ;; layer = name color linetype lineweight required [rgb]
+  ;;
+  ;; `rgb` la doi so THU SAU va tuy chon: ho so khong dung mau that thi daemon
+  ;; khong phat no, `nth 5` tra nil, va `ensure-layer-rgb` xoa group 420 — dung
+  ;; hanh vi cu.
   (foreach layer layers
-    (acadstd:ensure-layer
-      (nth 0 layer) (nth 1 layer) (nth 2 layer) (nth 3 layer)))
+    (acadstd:ensure-layer-rgb
+      (nth 0 layer) (nth 1 layer) (nth 2 layer) (nth 3 layer) (nth 5 layer)))
   (length layers))
 
 (defun acadstd:scale (handles all factor base / selection)

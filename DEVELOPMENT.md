@@ -748,15 +748,21 @@ Ba thứ dữ liệu phải đúng, và cả ba đều từng sai:
    `0…2.11`. `lineweightFromDxf()` chia thẳng cho 100 — không dùng ngưỡng đoán —
    và làm tròn hai chữ số, vì `13/100` trong dấu phẩy động là
    `0.13000000000000003`, một giá trị không khớp mục nào trong ô chọn.
-2. **`layers_truncated` phải chặn kết luận "không còn".** Plugin cắt bảng ở
-   `maxTableItems` = 500. Một danh sách cụt không đủ để nói layer nào *không còn*
-   trong bản vẽ — nên nhóm xoá bị ẩn khi cờ này bật, còn hai nhóm kia vẫn dùng
-   được vì chúng chỉ chạm tới layer thật sự đọc được.
-3. **Dòng thiếu thuộc tính phải bị bỏ, không được điền mặc định.** Plugin luôn
-   phát đủ `aci` · `linetype` · `lineweight`; một dòng thiếu bất kỳ cái nào không
-   phải dòng bảng layer. Điền `7`/`Continuous`/`Default` vào rồi trình bày như
-   thể đọc từ bản vẽ là bịa dữ liệu, ngay trong tính năng mà cả điểm của nó là
-   "lấy đúng giá trị bản vẽ đang dùng".
+2. **`layers_truncated` phải chặn kết luận "không còn".** Riêng bảng layer cắt ở
+   `kInfoMaxLayerItems` = **5.000**, tách khỏi `kInfoMaxTableItems` = 500 vẫn dùng
+   chung cho linetype/textstyle/dimstyle; plugin công bố cả hai trong `limits`.
+   Một danh sách cụt không đủ để nói layer nào *không còn* trong bản vẽ — nên
+   nhóm xoá bị ẩn khi cờ này bật, còn hai nhóm kia vẫn dùng được vì chúng chỉ
+   chạm tới layer thật sự đọc được. **Ngưỡng lớn hơn không phải là phân trang**:
+   bản vẽ quá 5.000 layer vẫn ẩn nhóm xoá.
+3. **Dòng có thuộc tính không ĐỌC ĐƯỢC phải bị bỏ, không được điền mặc định.**
+   Plugin luôn phát đủ `aci` · `linetype` · `lineweight`; một dòng thiếu bất kỳ
+   cái nào không phải dòng bảng layer. Ba ca nữa cũng rơi vào `skipped`, vì cả ba
+   đều kết thúc ở một màu bịa: `rgb` hỏng (`reconcileLayers` làm
+   `source.color ?? 7`), ACI `0` (ByBlock) và ACI `256` (ByLayer) — layer không kế
+   thừa màu từ chính nó, và `layerColor()` đổi cả hai thành `7` lúc áp dụng. Điền
+   mặc định rồi trình bày như thể đọc từ bản vẽ là bịa dữ liệu, ngay trong tính
+   năng mà cả điểm của nó là "lấy đúng giá trị bản vẽ đang dùng".
 
 `layers_unavailable` / `layers_iterator_unavailable` **khác** "bản vẽ không có
 layer nào" — điều sau không tồn tại, mọi bản vẽ đều có ít nhất layer `0`. Hai
@@ -766,6 +772,88 @@ build lại plugin.
 **Định danh ảnh chụp là `instance`, không phải đường dẫn.** Đóng rồi mở lại cùng
 một tệp cho ra `instance` khác — cùng đường dẫn nhưng là một database khác, và
 ảnh chụp cũ khi đó nói về thứ không còn tồn tại.
+
+**Bản vẽ chưa lưu chỉ đích danh được bằng `instance`.** `findDocExact` (plugin)
+nhận mã phiên làm đích, và `selectOpenDocument` (daemon) khớp `instance` **xen
+giữa** đường khớp theo đường dẫn file và đường khớp theo tiêu đề. Nhưng
+`requestTargetOf()` phải TÁCH khỏi `targetOf()`: hai hàm trả lời hai câu khác
+nhau — "chỉ đích danh cách nào chắc nhất" để GỬI, và "máy chủ gọi bản vẽ này là
+gì" để SO với `scan.target`, thứ daemon đặt bằng `file || title`. Gộp lại là hỏng
+`/review`.
+
+**Phía daemon phải tách y hệt**, và bỏ sót chỗ này là sửa một tầng rồi hỏng ở
+tầng kế: route `GET /drawing-info` giữ `exactTarget` = `file || title`, nhưng gọi
+plugin bằng `nativeDocumentTarget()` = `file || instance || title`. Lý do
+`exactTarget` không được đổi theo: nó còn chảy vào `withLegacySelectionCatalog`,
+nơi guard LISP so `acad:cat-expected` với `DWGNAME`/`DWGPREFIX+DWGNAME` — LISP
+không biết mã phiên là gì, nên đưa mã phiên vào đó biến một lượt chạy được thành
+`selection_catalog_target_mismatch`. Hai đích không bao giờ cần đúng cùng lúc:
+đường legacy chỉ chạy với bản plugin cũ, mà bản cũ cũng không có `findDocExact`
+nhận mã phiên.
+
+**Plugin phải CÔNG BỐ là nó nhận mã phiên** — `targetsInstance: true` trong danh
+sách bản vẽ. Đây là chỗ ba vòng Codex review liên tiếp đều trượt: `instance` có
+trong payload từ lâu, còn `findDocExact` mới biết nhận nó làm đích, và mỗi tầng
+tự suy cái sau từ cái trước lại hỏng một kiểu. Thiếu cờ = plugin bản cũ →
+`sendTarget()` gửi tiêu đề, `pickable()` loại bản vẽ chưa lưu trùng tiêu đề. Cả
+hai hàm sống ở `model.ts` chứ không ở component, vì nằm trong component thì không
+khoá được bằng test.
+
+**Lượt lùi về tiêu đề phải chốt lại bằng mã phiên.** Plugin cũ trả `not_found`
+cho mã phiên, nên route lùi về `exactTarget` — nhưng phép kiểm "tiêu đề không mơ
+hồ" đo trên `open.docs`, một ảnh chụp đã cũ. Đóng một bản vẽ rồi mở một bản khác
+trùng tiêu đề trong khoảng đó là lượt lùi đọc bản vẽ khác. Vì vậy phản hồi phải
+mang đúng `instance` đã chọn, không thì bỏ lượt lùi.
+
+**Các route KHÁC vẫn chưa nhận mã phiên**: `blockLibraryRouter`, `cadSelection` và
+đường quét/áp của `drawingStandards` đều dựng `exactTarget` theo lối cũ. Bản vẽ
+chưa lưu trùng tiêu đề vẫn không dùng được ở đó. Giới hạn có sẵn, không mở rộng
+trong mục này.
+
+#### Màu layer: ACI, hay `#RRGGBB` ghi vào DXF group 420
+
+`LayerRule.color` nhận chỉ số ACI `0…256`, ba tên `Default`/`ByLayer`/`ByBlock`,
+hoặc mã màu thật `#RRGGBB` (đúng **6** chữ số hex — `#abc` là cú pháp CSS chứ
+không phải cú pháp DXF, và đoán nó thành `#aabbcc` là tự chọn thay người dùng một
+màu họ không gõ).
+
+Quy tắc của AutoCAD chi phối cả đường ghi: **group 420 có mặt thì nó thắng group
+62.** Hai chiều, và bỏ sót chiều nào cũng là một lượt áp dụng báo thành công mà
+màu không đổi:
+
+- Đặt màu **ACI** phải **xoá** 420. Còn sót lại thì màu ACI vừa ghi vô tác dụng.
+- Đặt màu **thật** thì **không đụng** 62. 62 lúc đó chỉ là màu dự phòng cho phần
+  mềm đọc DWG không hiểu true color, nên ghi đè lên nó không được gì — trong khi
+  giữ nguyên thì giữ được cả dấu **ÂM** của nó, mà 62 âm nghĩa là layer đang TẮT.
+  `subst` một số dương vào đó sẽ BẬT layer lên, tức đổi màu lại làm hiện ra thứ
+  người dùng đã tắt.
+
+Đường ghi là `acadstd:ensure-layer-rgb`; `acadstd:ensure-layer` giữ nguyên chữ ký
+cũ và gọi vào nó, còn `acadstd:sync-layers` nhận `rgb` làm trường **thứ sáu, tuỳ
+chọn**. Hồ sơ không dùng màu thật thì daemon không phát nó và hành vi y hệt cũ.
+Đây là đường ghi một pha, không hoàn tác được — một thay đổi arity ở đây không
+được phép làm ẩu.
+
+Phía đọc, plugin phát `colorMethod` (`kByColor` = `0xC2`) cho mỗi layer. Không có
+nó thì phải suy màu thật từ `rgb`, và chỗ suy đó có một điểm mù không gỡ được:
+màu thật **đen tuyền** cũng là `rgb: [0, 0, 0]`, không phân biệt được với một
+layer ACI. `isTrueColor()` vẫn giữ đường lùi theo `rgb` cho bản plugin cũ.
+
+**Lượt kiểm phải đọc màu quan sát được, không đọc `aci`.** `observedLayerColor()`
+trong `standardsEngine.ts` suy màu từ `colorMethod`/`rgb` trước khi so với hồ sơ.
+Đọc thẳng `aci` là so với một chỉ số không mang màu người dùng đặt, nên layer màu
+thật báo lệch mãi mãi và mỗi lượt sửa lại ghi đúng giá trị đã có. Loại lỗi này
+không tự lộ ra — nó trông hệt một bản vẽ thật sự sai chuẩn.
+
+Layer khai là màu thật mà `rgb` không đọc được thì màu quan sát được là **không
+biết**, và `observedLayerColor()` trả `undefined`. Lùi về `aci` ở đó là một đường
+báo ĐẠT sai: hồ sơ chờ ACI 7, `aci` tình cờ bằng 7, audit báo đạt chuẩn trong khi
+màu thật sự không ai biết. Không biểu diễn được thì không kết luận, kể cả kết
+luận "đúng".
+
+Ba trường màu của `dimension` (`textColor`, `dimensionLineColor`,
+`extensionLineColor`) và `acadstd:set-color` của `/review` **vẫn chỉ nhận ACI** —
+DIMCLR\* là biến hệ thống theo chỉ số, và mở rộng chúng không nằm trong mục này.
 
 #### Không có đường xem trước ánh xạ
 

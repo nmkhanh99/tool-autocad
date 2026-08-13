@@ -384,6 +384,16 @@ static void writeDocs() {
                     "\",\"active\":" + (d == pActive ? "true" : "false") +
                     ",\"instance\":\"" +
                         jsonEsc(acadDocumentInstanceToken(d)) + "\"" +
+                    // `instance` da co trong payload nay TU LAU, nhung
+                    // `findDocExact` moi biet nhan no lam dich. Hai su that khac
+                    // nhau, va app khong the suy cai sau tu cai truoc.
+                    //
+                    // Khong co co nay thi giao dien phai DOAN: cho chon bao vet
+                    // ban ve chua luu trung tieu de, roi moi lua chon deu that
+                    // bai voi mot ban plugin cu. Cong bo su that con hon de moi
+                    // tang tu doan lay — ba vong review lien tiep deu ra cung
+                    // mot dang loi vi thieu dung cai nay.
+                    ",\"targetsInstance\":true" +
                     ",\"revision\":" +
                         std::to_string(acadDatabaseRevision(d->database())) +
                     // Khong gian HIEN HANH — CHI cho tai lieu vua active vua
@@ -482,6 +492,19 @@ static AcApDocument* resolveTarget() {
 // The collector deliberately opens database objects kForRead only. Output is bounded so
 // a very large DWG cannot monopolize AutoCAD's main thread indefinitely.
 static const size_t kInfoMaxTableItems       = 500;
+// Bang layer co tran RIENG, cao hon nhieu.
+//
+// Ly do: cat bang layer khong chi lam mat dong — no lam MAT KET LUAN. Man Ho so
+// tieu chuan doi chieu bang layer cua ban ve voi ho so, va mot danh sach cut thi
+// khong du de noi "layer nay khong con trong ban ve"; giao dien buoc phai an han
+// nhom xoa. Voi tran 500, mot bo quy chuan cong ty co 600 layer la mat han chuc
+// nang do — dung nhom nguoi dung can no nhat.
+//
+// An toan: liet ke layer re hon nhieu so voi quet entity (tran 200.000 o tren).
+// Moi layer chi doc vai thuoc tinh cua mot ban ghi symbol table, khong duyet
+// hinh hoc. 5.000 layer la con so khong ban ve thuc te nao cham toi — ban ve do
+// duoc 43.
+static const size_t kInfoMaxLayerItems       = 5000;
 static const size_t kInfoMaxMapKeys          = 500;
 static const size_t kInfoMaxDictionaryItems  = 200;
 static const size_t kInfoMaxSelectionObjects = 200;
@@ -559,7 +582,14 @@ static AcApDocument* findDocExact(const std::string& target) {
         for (; !it->done(); it->step()) {
             AcApDocument* doc = it->document();
             if (!doc) continue;
-            if (toUtf8(doc->docTitle()) == target || toUtf8(doc->fileName()) == target) {
+            // Mã phiên cũng là một đích hợp lệ. Cần nó cho BẢN VẼ CHƯA LƯU:
+            // chúng không có đường dẫn, nên tiêu đề là thứ duy nhất còn lại — và
+            // hai bản vẽ chưa lưu trùng tiêu đề thì không cách nào chỉ đích danh.
+            // Token có dạng %016llX-%016llX nên không thể trùng một path hay
+            // title thật, vì vậy thêm vào đây không cần đổi giao thức.
+            if (toUtf8(doc->docTitle()) == target
+                || toUtf8(doc->fileName()) == target
+                || acadDocumentInstanceToken(doc) == target) {
                 if (found) {
                     found = nullptr;
                     break;
@@ -951,7 +981,7 @@ static std::string layerTableJson(AcDbDatabase* db,
         for (; !it->done(); it->step()) {
             AcDbLayerTableRecord* layer = nullptr;
             if (it->getRecord(layer, AcDb::kForRead) != Acad::eOk || !layer) continue;
-            if (count < kInfoMaxTableItems) {
+            if (count < kInfoMaxLayerItems) {
                 AcString name, description;
                 layer->getName(name);
                 layer->description(description);
@@ -965,6 +995,11 @@ static std::string layerTableJson(AcDbDatabase* db,
                        ",\"selectableCount\":" +
                            std::to_string(selectableCount(
                                selectionScope.layerHandles, objectHandle(layer))) +
+                       // `colorMethod` phan biet layer dung chi so ACI voi layer
+                       // dung mau that. Khong co no thi phia web phai doan tu
+                       // `rgb`, ma mau that DEN TUYEN co rgb [0,0,0] — khong the
+                       // phan biet voi mot layer ACI. kByColor (0xC2) = mau that.
+                       ",\"colorMethod\":" + std::to_string((unsigned)color.colorMethod()) +
                        ",\"aci\":" + std::to_string((unsigned)color.colorIndex()) +
                        ",\"color\":" + std::to_string((unsigned)color.colorIndex()) +
                        ",\"rgb\":[" + std::to_string((unsigned)color.red()) + "," +
@@ -990,7 +1025,7 @@ static std::string layerTableJson(AcDbDatabase* db,
         addWarning(warnings, "layers_iterator_unavailable");
     }
     table->close();
-    if (count > kInfoMaxTableItems) addWarning(warnings, "layers_truncated");
+    if (count > kInfoMaxLayerItems) addWarning(warnings, "layers_truncated");
     return out + "]";
 }
 
@@ -1741,6 +1776,7 @@ static void writeDrawingInfo() {
         ",\"maxSelectionScopeEntities\":" +
             std::to_string(kInfoMaxSelectionScopeEntities) +
         ",\"maxTableItems\":" + std::to_string(kInfoMaxTableItems) +
+        ",\"maxLayerItems\":" + std::to_string(kInfoMaxLayerItems) +
         ",\"maxMapKeys\":" + std::to_string(kInfoMaxMapKeys) +
         ",\"maxDictionaryItems\":" + std::to_string(kInfoMaxDictionaryItems) +
         ",\"maxSelectionObjects\":" + std::to_string(kInfoMaxSelectionObjects) +

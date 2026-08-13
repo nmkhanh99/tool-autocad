@@ -159,17 +159,43 @@ function numericColor(value: unknown): number {
     const normalized = value.trim().toLowerCase();
     if (normalized === "bylayer") return 256;
     if (normalized === "byblock") return 0;
-    // RGB is intentionally not guessed into an ACI value.
+    /* `rgb(...)` không được quy về một ACI gần nhất — đó là tự chọn thay người
+       dùng một màu họ không gõ. Màu thật viết dạng `#RRGGBB`, và nó không đi qua
+       đây: `layerColor()` bắt nó trước rồi cho ra `nil`. */
     if (normalized.startsWith("rgb")) {
-      throw new Error("MVP hiện nhận màu ACI 0..256, ByLayer hoặc ByBlock");
+      throw new Error(
+        "Màu nhận chỉ số ACI 0..256, #RRGGBB (chỉ layer), ByLayer hoặc ByBlock",
+      );
     }
   }
   return Math.trunc(finiteNumber(value, "color", { min: 0, max: 256 }));
 }
 
-function layerColor(value: unknown): number {
+const TRUE_COLOR = /^#([0-9a-f]{6})$/i;
+
+/**
+ * `#RRGGBB` -> so nguyen 24-bit cua DXF group 420, hoac null neu khong phai mau
+ * that. Chi nhan dung 6 chu so hex: `#abc` la cu phap CSS chu khong phai cu
+ * phap DXF, va doan no thanh `#aabbcc` la tu quyet dinh thay nguoi dung mot mau
+ * ho khong go.
+ */
+export function trueColor(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const match = TRUE_COLOR.exec(value.trim());
+  return match ? Number.parseInt(match[1], 16) : null;
+}
+
+/**
+ * Mau ACI cua layer, hoac `nil` khi ho so dung mau that.
+ *
+ * `nil` la co y: LISP se KHONG dung toi group 62 va chi ghi 420. Xem
+ * `acadstd:ensure-layer-rgb` — 62 la mau du phong, va giu nguyen no giu duoc ca
+ * dau am (layer dang tat).
+ */
+function layerColor(value: unknown): string {
+  if (trueColor(value) !== null) return "nil";
   const color = numericColor(value);
-  return color === 256 || color === 0 ? 7 : color;
+  return String(color === 256 || color === 0 ? 7 : color);
 }
 
 function lineweight(value: unknown): number {
@@ -291,7 +317,8 @@ function syncLayersExpression(layers: LayerStandard[]): string {
   const rows = layers.map((layer) =>
     `(list ${lispString(cleanName(layer.name, "layer.name"))} ` +
     `${layerColor(layer.color)} ${lispString(layer.linetype || "Continuous")} ` +
-    `${lineweight(layer.lineweight)} ${layer.required ? "T" : "nil"})`);
+    `${lineweight(layer.lineweight)} ${layer.required ? "T" : "nil"} ` +
+    `${trueColor(layer.color) ?? "nil"})`);
   return `(acadstd:sync-layers (list ${rows.join(" ")}))`;
 }
 

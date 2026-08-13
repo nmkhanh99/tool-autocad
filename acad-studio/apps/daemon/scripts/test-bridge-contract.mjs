@@ -6,6 +6,7 @@
  */
 import {
   mkdirSync,
+  mkdtempSync,
   writeFileSync,
   readFileSync,
   existsSync,
@@ -17,13 +18,19 @@ import {
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+/* Thư mục nháp phải theo MÁY đang chạy. Trước đây đường lùi là một đường dẫn
+   tuyệt đối trong `/var/folders` của một máy cụ thể; nó chạy được ở đúng máy đó
+   và hỏng ở mọi máy khác — trên Linux thì `/var/folders` còn không tồn tại và
+   `mkdirSync` ném EACCES. Chỉ lộ ra khi test này được đưa vào `pnpm verify`.
+   `mkdtemp` chứ không phải một tên cố định dưới `tmpdir()`: hai lượt chạy song
+   song sẽ giẫm lên nhau. */
 const SCRATCH =
   process.env.ACAD_SCRATCH ||
   process.env.MEP_SCRATCH ||
-  "/var/folders/d6/t6kbyns970j6_5vd0qnwnm7r0000gn/T/grok-goal-21b5ddab8d46/implementer";
+  mkdtempSync(join(tmpdir(), "acad-bridge-contract-"));
 const LOG = join(SCRATCH, "contract-audit.log");
 mkdirSync(SCRATCH, { recursive: true });
 
@@ -363,6 +370,36 @@ assert(
   bridge.selectOpenDocument(duplicateTitleDocs, "").document?.file === "/tmp/a/Plan.dwg",
   "open-document selection resolves one active document",
 );
+
+const unsavedDocs = [
+  { title: "Drawing1.dwg", file: "", instance: "AAA-001", active: true },
+  { title: "Drawing1.dwg", file: "", instance: "BBB-002", active: false },
+];
+assert(
+  bridge.selectOpenDocument(unsavedDocs, "BBB-002").document?.instance === "BBB-002",
+  "open-document selection resolves an unsaved drawing by instance token",
+);
+assert(
+  bridge.selectOpenDocument(unsavedDocs, "Drawing1.dwg").ambiguous === true,
+  "open-document selection still rejects duplicate titles",
+);
+/* Doi GUI DI khac doi de SO SANH. `selectOpenDocument` chon dung ban ve roi ma
+   luot goi native ngay sau do van dung tieu de thi `findDocExact` tra ve rong —
+   ca duong ban-ve-chua-luu hong o dung mot buoc sau cho da sua. */
+assert(
+  bridge.nativeDocumentTarget(unsavedDocs[1]) === "BBB-002",
+  "native target prefers the instance token when there is no file path",
+);
+assert(
+  bridge.nativeDocumentTarget({ title: "Plan.dwg", file: "/tmp/a/Plan.dwg", instance: "X" }) ===
+    "/tmp/a/Plan.dwg",
+  "native target still prefers a full path over the instance token",
+);
+assert(
+  bridge.nativeDocumentTarget({ title: "Plan.dwg", file: "", instance: "" }) === "Plan.dwg",
+  "native target falls back to the title when nothing else identifies the drawing",
+);
+assert(bridge.nativeDocumentTarget(null) === "", "native target tolerates a missing document");
 
 // writeLiveJob with env override
 process.env.ACAD_BRIDGE_DIR = bridgeDir;

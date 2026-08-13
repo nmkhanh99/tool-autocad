@@ -32,7 +32,8 @@ import {
   countLayerPicks,
   readDrawingLayers,
   reconcileLayers,
-  targetOf,
+  pickable,
+  sendTarget,
   type DrawingLayer,
   type LayerReconcile,
   type LayerRule,
@@ -40,18 +41,15 @@ import {
 
 /** Bản vẽ chọn được làm nguồn.
  *
- * Loại những bản vẽ **chưa lưu** mà tiêu đề trùng với BẤT KỲ bản vẽ nào khác:
- * chúng không có đường dẫn nên `targetOf()` lùi về tiêu đề, và máy chủ sẽ trả
- * `target_ambiguous`. `/drawing-info` nhận đích theo đường dẫn hoặc tiêu đề,
- * không nhận `instance`, nên không định danh nào cứu được.
+ * Có đường dẫn thì luôn chọn được. Bản vẽ **chưa lưu** không có đường dẫn, nên
+ * chỉ chọn được khi mã phiên dùng làm đích được — và điều đó phải HỎI plugin chứ
+ * không suy ra: `instance` nằm trong payload từ lâu, còn `findDocExact()` mới
+ * biết nhận nó làm đích. `targetsInstance` là chỗ plugin nói thẳng.
+ *
+ * Thiếu cờ đó (plugin bản cũ) thì fail-closed y như trước: bản vẽ chưa lưu trùng
+ * tiêu đề bị loại. Đoán bừa ở đây là bày ra hai lựa chọn mà bấm cái nào cũng
+ * hỏng — tệ hơn hẳn một dòng nói rõ vì sao không làm được.
  */
-function pickable(docs: readonly AcadDocument[]): AcadDocument[] {
-  return docs.filter((doc) => {
-    if ((doc.file || "").trim()) return true;
-    return docs.filter((other) =>
-      (other.title || "").trim() === (doc.title || "").trim()).length <= 1;
-  });
-}
 
 function Tick({ id, on, onChange, disabled }: {
   id: string;
@@ -83,6 +81,7 @@ type Snapshot = {
   instance: string;
   layers: DrawingLayer[];
   truncated: boolean;
+  limit: number | undefined;
   skipped: number;
 };
 
@@ -122,7 +121,7 @@ export function ImportLayers({ layers, docs, docsAlive, onCancel, onApply }: {
      có thể là một bản chưa lưu trùng tiêu đề, tức thứ đã bị loại khỏi ô chọn —
      lấy nó làm đích ban đầu là mở hộp thoại ra đã hỏng sẵn. `pickable()` lặp lại
      phép lọc vì nó chạy trước khi `selectable` được tính. */
-  const [target, setTarget] = useState(() => targetOf(pickable(docs)[0] ?? {}));
+  const [target, setTarget] = useState(() => sendTarget(pickable(docs)[0] ?? {}));
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -169,6 +168,7 @@ export function ImportLayers({ layers, docs, docsAlive, onCancel, onApply }: {
       instance: String(document.instance ?? ""),
       layers: parsed.layers,
       truncated: parsed.truncated,
+      limit: parsed.limit,
       skipped: parsed.skipped,
     };
   }, []);
@@ -202,7 +202,7 @@ export function ImportLayers({ layers, docs, docsAlive, onCancel, onApply }: {
     () => docs.filter((doc) => !selectable.includes(doc)),
     [docs, selectable],
   );
-  const targetDoc = docs.find((doc) => targetOf(doc) === target);
+  const targetDoc = docs.find((doc) => sendTarget(doc) === target);
   useEffect(() => {
     if (!docsAlive) return;
     /* KHÔNG còn bản vẽ nào: vứt ảnh chụp và lựa chọn. Bản trước thoát sớm ở đúng
@@ -221,13 +221,8 @@ export function ImportLayers({ layers, docs, docsAlive, onCancel, onApply }: {
       return;
     }
     if (targetDoc && selectable.includes(targetDoc)) return;
-    setTarget(targetOf(selectable.find((doc) => doc.active) ?? selectable[0]));
+    setTarget(sendTarget(selectable.find((doc) => doc.active) ?? selectable[0]));
   }, [docsAlive, targetDoc, selectable]);
-
-  /* Bản vẽ CHƯA LƯU không có đường dẫn nên `targetOf()` lùi về tiêu đề; hai bản
-     vẽ như vậy trùng tiêu đề cho ra CÙNG một đích, máy chủ từ chối vì mơ hồ.
-     `/drawing-info` nhận đích theo đường dẫn hoặc tiêu đề, không nhận `instance`,
-     nên không định danh nào cứu được — bỏ ra khỏi danh sách và nói lý do. */
 
   const plan: LayerReconcile = useMemo(
     () => reconcileLayers(layers, snapshot?.layers ?? []),
@@ -235,8 +230,8 @@ export function ImportLayers({ layers, docs, docsAlive, onCancel, onApply }: {
   );
   const picked = countLayerPicks(plan, picks);
 
-  /* Dữ liệu KHÔNG ĐẦY ĐỦ — bị cắt ở 500 dòng, hoặc có dòng đọc không nổi. Cùng
-     một hệ quả: ta **không biết** bản vẽ còn những layer nào, mà "không biết" thì
+  /* Dữ liệu KHÔNG ĐẦY ĐỦ — bị cắt ở ngưỡng plugin, hoặc có dòng đọc không nổi.
+     Cùng một hệ quả: ta **không biết** bản vẽ còn những layer nào, mà "không biết" thì
      không được kết luận "layer này không còn" — và tích một dòng ở nhóm đó là xoá
      khỏi hồ sơ. */
   const incomplete = !!snapshot && (snapshot.truncated || snapshot.skipped > 0);
@@ -384,7 +379,7 @@ export function ImportLayers({ layers, docs, docsAlive, onCancel, onApply }: {
             /* Hai bản vẽ cùng TÊN TỆP ở hai thư mục khác nhau phát cùng một
                `title`; chọn nhầm ở đây là nhập bảng layer của bản vẽ khác. Trùng
                thì hiện luôn đường dẫn — đường dẫn thì không trùng. */
-            const path = targetOf(doc);
+            const path = sendTarget(doc);
             const ambiguous = docs.filter(
               (other) => (other.title || "") === (doc.title || ""),
             ).length > 1;
@@ -423,10 +418,11 @@ export function ImportLayers({ layers, docs, docsAlive, onCancel, onApply }: {
         <div className="banner">
           <span className="bm" />
           <span className="bt">
-            <b>{ambiguousUnsaved.length} bản vẽ chưa lưu bị bỏ khỏi danh sách.</b>{" "}
-            Chúng trùng tiêu đề và chưa có đường dẫn, nên không có cách nào chỉ đích
-            danh một cái — lượt đọc sẽ bị máy chủ từ chối vì mơ hồ. Lưu bản vẽ rồi
-            thử lại.
+            <b>{ambiguousUnsaved.length} bản vẽ bị bỏ khỏi danh sách.</b>{" "}
+            Chúng trùng tiêu đề và chưa có đường dẫn, nên tiêu đề là thứ duy nhất
+            còn lại để chỉ đích danh — mà tiêu đề trùng thì máy chủ không biết
+            chọn cái nào. Bản plugin AcadBridge đang chạy chưa nhận mã phiên làm
+            đích; build lại plugin rồi khởi động lại AutoCAD, hoặc lưu bản vẽ.
           </span>
         </div>
       ) : null}
@@ -446,9 +442,11 @@ export function ImportLayers({ layers, docs, docsAlive, onCancel, onApply }: {
         <div className="banner" data-tone="hard">
           <span className="bm" />
           <span className="bt">
-            <b>Bảng layer của bản vẽ đã bị cắt.</b> Plugin chỉ trả về tối đa 500
-            dòng, nên danh sách dưới đây <b>chưa đủ</b>. Thêm và ghi đè vẫn đúng vì
-            chúng chỉ chạm tới layer đọc được; riêng nhóm <b>xoá khỏi hồ sơ</b> bị
+            <b>Bảng layer của bản vẽ đã bị cắt.</b> Plugin chỉ trả về
+            {snapshot.limit
+              ? ` tối đa ${snapshot.limit.toLocaleString("vi-VN")} dòng`
+              : " một phần"}, nên danh sách dưới đây <b>chưa đủ</b>. Thêm và ghi đè
+            vẫn đúng vì chúng chỉ chạm tới layer đọc được; riêng nhóm <b>xoá khỏi hồ sơ</b> bị
             ẩn, vì một danh sách cụt không đủ để kết luận layer nào không còn.
           </span>
         </div>

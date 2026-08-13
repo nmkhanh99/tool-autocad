@@ -422,6 +422,11 @@ Mỗi dòng: tên, màu, kiểu nét, bề dày, có bắt buộc hay không. Th
 - **Màu** bấm vào ô màu để mở bảng chọn. Chín màu đầu của AutoCAD có tên và hiện
   đúng màu; các chỉ số khác nhập bằng số (0–256) và app **không** vẽ ô màu cho
   chúng — nó không đoán, vì một ô màu sai cạnh tên layer còn tệ hơn không có.
+  Ô nhập trong bảng chọn nhận cả **màu thật** dạng `#RRGGBB` — đủ 6 chữ số,
+  `#f80` không được nhận vì app không tự chọn thay bạn một màu bạn chưa gõ — và
+  tô đúng màu đó. Hai điều cần biết khi áp dụng: đặt màu thật **giữ nguyên trạng
+  thái bật/tắt** của layer, còn đặt màu ACI cho một layer đang dùng màu thật sẽ
+  **gỡ màu thật đi**.
 - **Bề dày** chọn từ danh sách: `Default`, `ByLayer`, `ByBlock`, hoặc một trị số
   milimét từ `0.00` đến `2.11`.
 - **Kiểu nét** gõ tự do. Màn này không mở bản vẽ nên **không biết bản vẽ đã nạp
@@ -451,14 +456,21 @@ Vài điều cần biết:
   đọc được từ bản vẽ.
 - **Nhận xong vẫn chưa lưu.** Kết quả vào bản nháp; bạn còn phải bấm **Lưu hồ
   sơ**, và lúc đó mọi ràng buộc lưu vẫn áp dụng như thường.
-- **Bản vẽ quá nhiều layer thì nhóm "chỉ có trong hồ sơ" bị ẩn.** Plugin chỉ trả
-  tối đa 500 dòng, và một danh sách cụt không đủ để nói layer nào *không còn*
+- **Bản vẽ quá nhiều layer thì nhóm "chỉ có trong hồ sơ" bị ẩn.** Plugin trả tối
+  đa **5.000** layer, và một danh sách cụt không đủ để nói layer nào *không còn*
   trong bản vẽ — đoán sai ở đó là xoá nhầm. Hai nhóm kia vẫn dùng được.
+- **Layer app không đọc chắc được thì bị bỏ qua**, và hộp thoại đếm số dòng đã
+  bỏ. Gồm layer thiếu thuộc tính và layer có màu app không diễn giải được. App
+  thà bỏ còn hơn điền một màu mặc định rồi trình bày như thể đọc từ bản vẽ.
 - **Hồ sơ tối đa 500 layer.** Vượt thì nút Lưu khoá lại và nói rõ, thay vì để lượt
   lưu thất bại.
 - **Bản vẽ nguồn bị đóng, mất kết nối, hoặc mở lại thành phiên khác** trong lúc
   hộp thoại còn mở thì kết quả đọc bị bỏ và hộp thoại nói rõ — nhập từ một ảnh
   chụp đã cũ nguy hiểm hơn là phải làm lại.
+- **Bản vẽ chưa lưu vẫn chọn được**, kể cả khi có hai bản vẽ chưa lưu trùng tiêu
+  đề: app chỉ đích danh chúng bằng mã phiên của AutoCAD chứ không bằng tiêu đề.
+  Cần plugin AcadBridge bản mới — bản cũ thì chúng vẫn bị bỏ khỏi danh sách kèm
+  lý do, thay vì cho chọn rồi báo lỗi.
 
 #### Bảng ánh xạ đối tượng
 

@@ -34,6 +34,9 @@ import {
   normalizeDrawingLayers,
   readDrawingLayers,
   reconcileLayers,
+  requestTargetOf,
+  pickable,
+  sendTarget,
   layerRowErrors,
   mappingRowErrors,
   type Issue,
@@ -532,6 +535,21 @@ test("dòng bảng hỏng thì CHẶN LƯU, kèm số dòng", () => {
   });
   assert.match(badLayer, /[Ll]ayer/);
   assert.match(badLayer, /1/);
+
+  /* Mắt xích giữa ĐỌC và GHI: layer nhập từ bản vẽ mang màu `#RRGGBB`, và nếu
+     cổng lưu từ chối nó thì tính năng nhập màu thật vô dụng — người dùng nhận
+     xong rồi không lưu được, mà lý do lại nằm ở một dòng họ không tự gõ. */
+  const layer = (color: string) =>
+    ({ ...base, layers: [{
+      name: "L", color, linetype: "Continuous", lineweight: "Default", required: true,
+    }] });
+  assert.equal(profileSaveBlockedReason(layer("#FF8000")), "");
+  assert.equal(profileSaveBlockedReason(layer("#ff8000")), "");
+  assert.equal(profileSaveBlockedReason(layer("#000000")), "");
+  /* Đúng 6 chữ số. `#f80` là cú pháp CSS chứ không phải cú pháp DXF, và đoán nó
+     thành `#ff8800` là tự chọn thay người dùng một màu họ không gõ. */
+  assert.match(profileSaveBlockedReason(layer("#f80")), /#RRGGBB/);
+  assert.match(profileSaveBlockedReason(layer("#GGGGGG")), /#RRGGBB/);
 
   const badMapping = profileSaveBlockedReason({
     ...base,
@@ -1115,9 +1133,9 @@ test("đọc bảng layer từ cả ba dạng payload, và bắt cờ danh sách
 
   // Rác thì trả rỗng chứ không ném.
   assert.deepEqual(readDrawingLayers(null),
-    { layers: [], truncated: false, skipped: 0, unavailable: false });
+    { layers: [], truncated: false, limit: undefined, skipped: 0, unavailable: false });
   assert.deepEqual(readDrawingLayers({ tables: "x" }),
-    { layers: [], truncated: false, skipped: 0, unavailable: false });
+    { layers: [], truncated: false, limit: undefined, skipped: 0, unavailable: false });
 });
 
 test("hồ sơ quá 500 layer hoặc 500 ánh xạ thì CHẶN LƯU", () => {
@@ -1162,35 +1180,142 @@ test("màu lấy theo KIỂU, không theo `??` — `aci: null` không được t
   ]);
 });
 
-test("layer dùng MÀU THẬT bị bỏ, không bịa ra một ACI", () => {
-  /* Hồ sơ chỉ biểu diễn được chỉ số ACI `0…256` hoặc ba tên — không có chỗ cho
-     true color. Plugin gửi `aci` = `colorIndex()`, và với màu thật thì chỉ số đó
-     KHÔNG mang màu người dùng đặt: nhập vào là lặng lẽ thay màu layer bằng một
-     ACI sai.
-     Dấu hiệu là `rgb` khác `[0,0,0]`. Đo trên bản vẽ thật: 43 layer đều dùng ACI
-     và cả 43 đều `rgb: [0,0,0]`. */
+test("ngưỡng cắt lấy TỪ payload, không gõ cứng", () => {
+  /* Ngưỡng đã đổi một lần (500 → 5.000). Câu thông báo gõ cứng con số cũ nói sai
+     với người dùng đúng lúc họ cần tin nó nhất. Bản plugin cũ không phát
+     `maxLayerItems` thì lùi về `maxTableItems`; không có cả hai thì bỏ con số
+     thay vì đoán. */
+  const of = (limits: unknown) =>
+    readDrawingLayers({ layers: [], limits }).limit;
+  assert.equal(of({ maxLayerItems: 5000, maxTableItems: 500 }), 5000);
+  assert.equal(of({ maxTableItems: 500 }), 500);
+  assert.equal(of({}), undefined);
+  assert.equal(of(undefined), undefined);
+  /* Giá trị vô lý không được thành một con số trưng ra cho người dùng. */
+  assert.equal(of({ maxLayerItems: 0 }), undefined);
+  assert.equal(of({ maxLayerItems: -5 }), undefined);
+  assert.equal(of({ maxLayerItems: "5000" }), undefined);
+});
+
+test("layer màu thật nhập được — `colorMethod` gỡ điểm mù màu đen tuyền", () => {
+  /* Trước đây mọi layer màu thật đều bị bỏ, vì hồ sơ chỉ biểu diễn được ACI. Nay
+     hồ sơ nhận `#RRGGBB` và đường áp dụng ghi DXF group 420, nên nhập được.
+     `aci` với layer màu thật là `colorIndex()` — một chỉ số KHÔNG mang màu người
+     dùng đặt, nên phải đọc `rgb` trước, không được lùi về `aci`. */
   const read = readDrawingLayers({
     layers: [
-      { name: "ACI", aci: 3, linetype: "Continuous", lineweight: 35, rgb: [0, 0, 0] },
+      { name: "ACI", colorMethod: 0xc3, aci: 3, linetype: "Continuous", lineweight: 35, rgb: [0, 0, 0] },
       { name: "KHONG-CO-RGB", aci: 3, linetype: "Continuous", lineweight: 35 },
-      { name: "MAU-THAT", aci: 0, linetype: "Continuous", lineweight: 35, rgb: [255, 128, 0] },
+      { name: "MAU-THAT", colorMethod: 0xc2, aci: 0, linetype: "Continuous", lineweight: 35, rgb: [255, 128, 0] },
     ],
   });
-  assert.deepEqual(read.layers.map((l) => l.name), ["ACI", "KHONG-CO-RGB"]);
-  assert.equal(read.skipped, 1);
+  assert.deepEqual(read.layers.map((l) => [l.name, l.color]), [
+    ["ACI", 3],
+    ["KHONG-CO-RGB", 3],
+    ["MAU-THAT", "#FF8000"],
+  ]);
+  assert.equal(read.skipped, 0);
 
-  /* Màu thật ĐEN TUYỀN có `rgb: [0,0,0]` — không phân biệt được với layer dùng
-     ACI, vì payload không mang `colorMethod`. Nhưng nó lộ ở chỗ khác:
-     `colorIndex()` của layer màu thật trả `0`, mà `0` (ByBlock) và `256`
-     (ByLayer) đều không phải màu hợp lệ cho một layer — `layerColor()` của
-     daemon lặng lẽ đổi cả hai thành `7` lúc áp dụng. */
+  /* Điểm mù của bản plugin cũ: màu thật ĐEN TUYỀN cũng là `rgb: [0,0,0]`, không
+     phân biệt được với layer ACI. `colorMethod` trả lời dứt khoát — đó là lý do
+     nó được thêm vào plugin thay vì đoán tiếp ở phía web. */
   const black = readDrawingLayers({
     layers: [
-      { name: "DEN-TUYEN", aci: 0, linetype: "Continuous", lineweight: 35, rgb: [0, 0, 0] },
-      { name: "BYLAYER", aci: 256, linetype: "Continuous", lineweight: 35 },
-      { name: "BINH-THUONG", aci: 7, linetype: "Continuous", lineweight: 35 },
+      { name: "DEN-TUYEN", colorMethod: 0xc2, aci: 0, linetype: "Continuous", lineweight: 35, rgb: [0, 0, 0] },
+      { name: "ACI-DEN", colorMethod: 0xc3, aci: 7, linetype: "Continuous", lineweight: 35, rgb: [0, 0, 0] },
     ],
   });
-  assert.deepEqual(black.layers.map((l) => l.name), ["BINH-THUONG"]);
-  assert.equal(black.skipped, 2);
+  assert.deepEqual(black.layers.map((l) => [l.name, l.color]), [
+    ["DEN-TUYEN", "#000000"],
+    ["ACI-DEN", 7],
+  ]);
+});
+
+test("so màu không phân biệt hoa/thường — khác biệt phải đóng lại được", () => {
+  /* `hexColor()` sinh `#FF8000`; người dùng gõ tay thường ra `#ff8000`. So thô
+     thì dòng đó nằm mãi trong nhóm "khác thuộc tính" — nhận bao nhiêu lần cũng
+     không hết, vì lượt nhận ghi vào đúng cái giá trị vẫn bị coi là khác. */
+  const layer = (color: string | number) => ({
+    name: "L", color, linetype: "Continuous", lineweight: 0.35, required: true,
+  });
+  const drawing = [{ name: "L", color: "#FF8000", linetype: "Continuous", lineweight370: 35 }];
+  assert.equal(reconcileLayers([layer("#ff8000")], drawing).differ.length, 0);
+  assert.equal(reconcileLayers([layer("#00FF00")], drawing).differ.length, 1);
+  /* Ba tên cũng đi qua cùng đường so đó. */
+  assert.equal(
+    reconcileLayers(
+      [layer("byLayer")],
+      [{ name: "L", color: "ByLayer", linetype: "Continuous", lineweight370: 35 }],
+    ).differ.length,
+    0,
+  );
+});
+
+test("màu phải ĐỌC ĐƯỢC, không chỉ có mặt — `?? 7` là đường bịa màu", () => {
+  /* Ba ca đều kết thúc ở màu ACI 7 nếu để lọt: `reconcileLayers` làm
+     `source.color ?? 7`, còn `layerColor()` của daemon đổi cả `0` (ByBlock) lẫn
+     `256` (ByLayer) thành `7`. Layer nhập vào đổi màu mà không ai báo. */
+  const read = readDrawingLayers({
+    layers: [
+      { name: "RGB-HONG", colorMethod: 0xc2, aci: 0, linetype: "Continuous", lineweight: 35, rgb: [255, 0] },
+      { name: "RGB-QUA-DAI", colorMethod: 0xc2, aci: 0, linetype: "Continuous", lineweight: 35, rgb: [300, 0, 0] },
+      { name: "BYBLOCK", aci: 0, linetype: "Continuous", lineweight: 35 },
+      { name: "BYLAYER", aci: 256, linetype: "Continuous", lineweight: 35 },
+      { name: "GIU-LAI", aci: 7, linetype: "Continuous", lineweight: 35 },
+    ],
+  });
+  assert.deepEqual(read.layers.map((l) => l.name), ["GIU-LAI"]);
+  assert.equal(read.skipped, 4);
+});
+
+test("mã phiên chỉ dùng khi PLUGIN nói nó nhận — ba vòng review trượt đúng chỗ này", () => {
+  /* `instance` nằm trong payload danh sách bản vẽ TỪ LÂU, còn `findDocExact()`
+     mới biết nhận nó làm đích. Hai sự thật khác nhau, và suy cái sau từ cái
+     trước là lỗi đã lặp lại ba vòng review liên tiếp — mỗi vòng vá một tầng
+     khác. `targetsInstance` là chỗ plugin nói thẳng. */
+  const unsaved = (instance: string, targetsInstance?: boolean) =>
+    ({ title: "Drawing1.dwg", file: "", instance, targetsInstance });
+
+  /* Plugin MỚI: hai bản vẽ chưa lưu trùng tiêu đề đều chọn được, mỗi cái một mã. */
+  const modern = [unsaved("AAA", true), unsaved("BBB", true)];
+  assert.equal(pickable(modern).length, 2);
+  assert.deepEqual(modern.map(sendTarget), ["AAA", "BBB"]);
+
+  /* Plugin CŨ: fail-closed y như trước. Bày ra hai lựa chọn mà bấm cái nào cũng
+     hỏng thì tệ hơn hẳn một dòng nói rõ vì sao không làm được. */
+  const legacy = [unsaved("AAA"), unsaved("BBB")];
+  assert.equal(pickable(legacy).length, 0);
+  assert.deepEqual(legacy.map(sendTarget), ["Drawing1.dwg", "Drawing1.dwg"]);
+
+  /* Plugin cũ + tiêu đề DUY NHẤT vẫn chọn được, và gửi tiêu đề chứ không gửi mã
+     phiên — gửi mã phiên là nhận `not_found` từ một bản plugin không hiểu nó. */
+  const lone = [{ title: "Drawing1.dwg", file: "", instance: "AAA" }];
+  assert.equal(pickable(lone).length, 1);
+  assert.equal(sendTarget(lone[0]), "Drawing1.dwg");
+
+  /* Có đường dẫn thì đường dẫn luôn thắng, bất kể cờ. */
+  const saved = { title: "Plan.dwg", file: "/a/Plan.dwg", instance: "AAA", targetsInstance: true };
+  assert.equal(sendTarget(saved), "/a/Plan.dwg");
+  assert.equal(pickable([saved, { ...saved, file: "/b/Plan.dwg" }]).length, 2);
+});
+
+test("đích GỬI ĐI khác đích để SO SÁNH — bản vẽ chưa lưu dùng mã phiên", () => {
+  /* Hai hàm trả lời hai câu khác nhau, và gộp chúng làm một sẽ hỏng `/review`:
+     · `targetOf()` = "máy chủ gọi bản vẽ này là gì" — dùng để SO với
+       `scan.target`, thứ daemon đặt bằng `document.file || document.title`.
+     · `requestTargetOf()` = "chỉ đích danh cách nào chắc nhất" — dùng để GỬI. */
+  const saved = { file: "/a/plan.dwg", title: "plan.dwg", instance: "AAA-001" };
+  assert.equal(targetOf(saved), "/a/plan.dwg");
+  assert.equal(requestTargetOf(saved), "/a/plan.dwg");
+
+  /* Bản vẽ chưa lưu: `targetOf` lùi về tiêu đề (đúng, vì daemon cũng vậy), còn
+     `requestTargetOf` dùng mã phiên — thứ duy nhất phân biệt được hai bản vẽ
+     chưa lưu trùng tiêu đề. */
+  const unsaved = { file: "", title: "Drawing1.dwg", instance: "AAA-007" };
+  assert.equal(targetOf(unsaved), "Drawing1.dwg");
+  assert.equal(requestTargetOf(unsaved), "AAA-007");
+
+  // Không có mã phiên (plugin bản cũ) thì cả hai cùng lùi về tiêu đề.
+  assert.equal(requestTargetOf({ file: "", title: "Drawing1.dwg" }), "Drawing1.dwg");
+  assert.equal(requestTargetOf({}), "");
 });
