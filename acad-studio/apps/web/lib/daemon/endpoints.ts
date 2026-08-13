@@ -33,6 +33,8 @@ export const endpoints = {
 
   /** Bản vẽ AutoCAD ĐANG MỞ. Không phải danh sách tệp mở gần đây. */
   docs: (base: string) => `${trim(base)}/api/acad/docs`,
+  /** Bảng màu ACI 256 mã, lấy từ chính AutoCAD. Tĩnh trong cả phiên. */
+  aciPalette: (base: string) => `${trim(base)}/api/acad/aci-palette`,
 
   /** SSE sự kiện reactor từ plugin. Chỉ `features/acad-connection/events.ts`
    * được mở kết nối này — xem lý do ở đó. */

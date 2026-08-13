@@ -180,8 +180,14 @@ static AcApDocument* findExactRawDocument(const std::string& target,
     for (; !iterator->done(); iterator->step()) {
         AcApDocument* document = iterator->document();
         if (!document) continue;
+        // Ma phien cung la mot dich hop le — GIONG `findDocExact` ben
+        // mepbridge.cpp. Day la BAN THU BA cua cung mot phep tim, va no o lai
+        // phia sau dung mot vong: `findDocExact` hoc them nhanh nay, con
+        // `selection_control.cpp` cung da nhan ma phien, nhung moi yeu cau
+        // selection van chet o day TRUOC khi toi duoc hai cho kia.
         if (toUtf8(document->docTitle()) != target &&
-            toUtf8(document->fileName()) != target) {
+            toUtf8(document->fileName()) != target &&
+            acadDocumentInstanceToken(document) != target) {
             continue;
         }
         if (found && found != document) {

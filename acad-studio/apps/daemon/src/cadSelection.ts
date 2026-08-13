@@ -2,7 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import express, { type Router } from "express";
 import {
   listOpenDocs,
+  nativeDocumentTarget,
   requestDrawingInfo,
+  selectOpenDocument,
   type OpenAcadDocument,
   type DrawingInfoPluginSnapshot,
 } from "./acadBridge.js";
@@ -451,6 +453,14 @@ function completeDocument(value: OpenAcadDocument, label: string): OpenDocument 
                                đâu → giữ nguyên `""` để chốt phía dưới TỪ CHỐI
        Gộp hai cái làm một là biến một lần đọc hỏng thành giấy phép đi qua. */
     space: typeof value.space === "string" ? value.space.trim().slice(0, 256) : undefined,
+    /* GIỮ `targetsInstance` lại — cùng lý do với `space`, và tôi vừa sập đúng
+       vào cái bẫy mà đoạn trên cảnh báo.
+       Bỏ nó ở đây làm `nativeDocumentTarget()` phía dưới thấy `undefined`, tức
+       "plugin không nhận mã phiên", nên nó lùi về TIÊU ĐỀ. Hai bản vẽ chưa lưu
+       trùng tiêu đề vừa được `selectOpenDocument` chọn đúng bằng mã phiên sẽ lại
+       chết ở `target_ambiguous` ngay bước sau — chốt viết xong, verify xanh, mà
+       cả đường vẫn hỏng. */
+    targetsInstance: value.targetsInstance === true ? true : undefined,
   };
 }
 
@@ -941,23 +951,21 @@ export function cadSelectionRouter(
       );
     }
     const requested = String(target ?? "").trim();
-    const matches = requested
-      ? (() => {
-          const fileMatches = open.docs.filter((item) =>
-            item.file === requested);
-          return fileMatches.length
-            ? fileMatches
-            : open.docs.filter((item) => item.title === requested);
-        })()
-      : open.docs.filter((item) => item.active);
-    if (matches.length > 1) {
+    /* Dùng CHÍNH `selectOpenDocument` chứ không chép lại phép khớp.
+       Bản chép tay ở đây chỉ khớp `file` rồi `title`, nên khi
+       `selectOpenDocument` học thêm nhánh mã phiên thì bản chép này ở lại phía
+       sau — khách gửi mã phiên là nhận `target_not_found`, và cả đường bản vẽ
+       chưa lưu chết ở đây dù mọi tầng khác đã sửa. Một phép khớp, một chỗ định
+       nghĩa. */
+    const selected = selectOpenDocument(open.docs, requested);
+    if (selected.ambiguous) {
       throw new SelectionApiError(
         "target_ambiguous",
         "Có nhiều bản vẽ khớp target; hãy chọn bằng full file path",
         409,
       );
     }
-    const [rawDocument] = matches;
+    const rawDocument = selected.document;
     if (!rawDocument) {
       throw new SelectionApiError(
         "target_not_found",
@@ -980,7 +988,13 @@ export function cadSelectionRouter(
       activeMatches[0],
       "activeDocument",
     );
-    const exactTarget = document.file || document.title;
+    /* `file || instance || title`. Bản vẽ CHƯA LƯU không có đường dẫn, nên mã
+       phiên là thứ duy nhất chỉ đích danh được khi hai bản vẽ trùng tiêu đề.
+       Chuỗi này đi tới `selection_control.cpp`, nơi plugin tự so lại nó với
+       title/file/mã phiên của bản vẽ đang hoạt động — và plugin CÒN chốt riêng
+       bằng `documentInstance`, một phép kiểm chặt hơn hẳn so tiêu đề. Nó cũng
+       được phản hồi nguyên văn về (`result.target`) nên phép so ở dưới vẫn đúng. */
+    const exactTarget = nativeDocumentTarget(document);
     if (!exactTarget) {
       throw new SelectionApiError(
         "invalid_target",

@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  aciHex,
   applyBlockedReason,
   applyProfileEdits,
   applySummary,
@@ -23,6 +24,7 @@ import {
   severityLabel,
   severityOf,
   profileSaveBlockedReason,
+  readAciPalette,
   targetOf,
   unsupportedFixReason,
   LINEAR_FORMATS,
@@ -54,6 +56,7 @@ const profile = (over: Partial<StandardsProfile> = {}): StandardsProfile => ({
 const scan = (over: Partial<Scan> = {}): Scan => ({
   scanId: "scan_1",
   target: "/x.dwg",
+  documentInstance: "",
   profileId: "p1",
   profileRevision: "hash-a",
   profileVersion: 0,
@@ -139,7 +142,7 @@ test("nói trước vì sao chưa quét hoặc chưa sửa được", () => {
 
   const apply = {
     scan: scan({ scanId: "s" }), target: "/x.dwg", activeTarget: "/x.dwg",
-    selected: 2, driftNote: "", drawingChanged: false, busy: false,
+    activeInstance: "", selected: 2, driftNote: "", drawingChanged: false, busy: false,
   };
   assert.equal(applyBlockedReason(apply), "");
   assert.match(applyBlockedReason({ ...apply, scan: null }), /Chưa có lượt quét/);
@@ -1266,6 +1269,129 @@ test("màu phải ĐỌC ĐƯỢC, không chỉ có mặt — `?? 7` là đườ
   });
   assert.deepEqual(read.layers.map((l) => l.name), ["GIU-LAI"]);
   assert.equal(read.skipped, 4);
+});
+
+test("chốt Sửa so bằng ĐỊNH DANH khi có — tên không phân biệt được bản vẽ chưa lưu", () => {
+  /* Hai bản vẽ chưa lưu trùng tiêu đề cho ra cùng một `scan.target`. So bằng tên
+     thì quét bản vẽ A rồi chuyển AutoCAD sang B vẫn thấy nút Sửa BẬT, và người
+     dùng chỉ biết mình sai khi máy chủ từ chối bằng `drawing_not_active`. Một
+     chốt phía client chỉ có nghĩa khi nó so được đúng thứ máy chủ sẽ so. */
+  const base = {
+    target: "Drawing1.dwg", activeTarget: "Drawing1.dwg",
+    selected: 1, driftNote: "", drawingChanged: false, busy: false,
+  };
+  const scanned = { scanId: "s1", target: "Drawing1.dwg", documentInstance: "DOC-A" } as never;
+
+  assert.equal(
+    applyBlockedReason({ ...base, scan: scanned, activeInstance: "DOC-A" }),
+    "",
+    "đúng bản vẽ thì không chặn",
+  );
+  assert.match(
+    applyBlockedReason({ ...base, scan: scanned, activeInstance: "DOC-B" }),
+    /bản vẽ khác/i,
+    "khác bản vẽ thì chặn, dù tiêu đề trùng",
+  );
+
+  /* Thiếu định danh ở BẤT KỲ vế nào (máy chủ bản cũ, hoặc plugin không cấp) thì
+     lùi về so tên — kém hơn, nhưng vẫn là chốt đang có, và không được vì thiếu
+     một trường mới mà bỏ luôn chốt cũ. */
+  const noInstance = { scanId: "s1", target: "/a/Plan.dwg", documentInstance: "" } as never;
+  assert.match(
+    applyBlockedReason({
+      ...base, scan: noInstance, target: "/a/Plan.dwg",
+      activeTarget: "/b/Plan.dwg", activeInstance: "",
+    }),
+    /bản vẽ khác/i,
+  );
+  assert.equal(
+    applyBlockedReason({
+      ...base, scan: noInstance, target: "/a/Plan.dwg",
+      activeTarget: "/a/Plan.dwg", activeInstance: "DOC-A",
+    }),
+    "",
+  );
+});
+
+test("bảng màu ACI: kiểm TỪNG mục, một mục hỏng là một ô màu sai", () => {
+  /* Cả tính năng này tồn tại vì đoán màu ACI bằng công thức cho ra màu SAI, mà
+     một ô màu sai cạnh tên layer tệ hơn không có ô nào — người dùng dựa vào đúng
+     nó để tìm nhầm lẫn. Nhận một bảng hỏng rồi vẽ ra là quay lại đúng chỗ đó. */
+  const good = Array.from({ length: 256 }, (_, i) => (i === 0 ? "" : "#0A0B0C"));
+  assert.equal(readAciPalette({ colors: good })?.length, 256);
+
+  assert.equal(readAciPalette({ colors: good.slice(0, 255) }), null, "thiếu một mục");
+  assert.equal(readAciPalette({ colors: [...good, "#000000"] }), null, "thừa một mục");
+  assert.equal(readAciPalette({}), null);
+  assert.equal(readAciPalette(null), null);
+  /* Mục 0 phải RỖNG: ByBlock không phải một màu. Một mã màu ở đó nghĩa là bảng
+     lệch chỉ số, và mọi ô màu sau đó đều sai một bậc. */
+  assert.equal(readAciPalette({ colors: good.map((c, i) => (i === 0 ? "#FF0000" : c)) }), null);
+  for (const bad of ["#FFF", "FF0000", "#GGGGGG", "#ff00", "", 16711680, null]) {
+    assert.equal(
+      readAciPalette({ colors: good.map((c, i) => (i === 5 ? bad : c)) }),
+      null,
+      `mục hỏng phải bị từ chối: ${JSON.stringify(bad)}`,
+    );
+  }
+});
+
+test("tra màu ACI: bảng thật thắng, thiếu bảng thì lùi về 9 màu có quy ước", () => {
+  const palette = Array.from({ length: 256 }, (_, i) => (i === 0 ? "" : "#123456"));
+  /* Bảng THẬT từ AutoCAD thắng cả 9 màu mặc định — nó mới là thứ người dùng nhìn
+     thấy trong AutoCAD, kể cả khi AutoCAD đổi nền sáng/tối. */
+  assert.equal(aciHex(1, palette), "#123456");
+  assert.equal(aciHex(200, palette), "#123456");
+
+  /* Không có bảng: 1–9 vẫn ra màu, ngoài dải đó trả `null` để giao diện hiện SỐ
+     thay vì bịa. */
+  assert.equal(aciHex(1), "#FF0000");
+  assert.equal(aciHex(9), "#C0C0C0");
+  assert.equal(aciHex(200), null);
+  assert.equal(aciHex(10, null), null);
+
+  /* `0` (ByBlock) và `256` (ByLayer) KHÔNG có màu — chúng là chỉ dẫn kế thừa, và
+     một layer không kế thừa màu từ chính nó. */
+  assert.equal(aciHex(0, palette), null);
+  assert.equal(aciHex(256, palette), null);
+  assert.equal(aciHex(-1, palette), null);
+  assert.equal(aciHex(1.5, palette), null);
+});
+
+test("bản vẽ chưa lưu: gửi mã phiên, nhưng SO bằng tiêu đề", () => {
+  /* Daemon đặt `scan.target` bằng `file || title` của bản vẽ nó giải quyết
+     được, BẤT KỂ ta gửi đích nào. Nên đích để gửi và đích để so là hai dạng khác
+     nhau, và trộn chúng là chặn VĨNH VIỄN mọi bản vẽ chưa lưu — phép so không
+     bao giờ khớp, nút sửa không bao giờ bật. Đây đúng là dạng lỗi đã lặp lại bốn
+     vòng review ở phía daemon; phía web trượt y hệt. */
+  const doc = {
+    title: "Drawing1.dwg", file: "", instance: "AAA-001", targetsInstance: true,
+    active: true,
+  };
+  assert.equal(sendTarget(doc), "AAA-001");
+  assert.equal(targetOf(doc), "Drawing1.dwg");
+
+  const scan = { scanId: "s1", target: "Drawing1.dwg", documentInstance: "" } as never;
+  const base = {
+    scan, activeInstance: "", selected: 1, driftNote: "", drawingChanged: false, busy: false,
+  };
+  /* Dạng ĐÚNG: cả hai đích ở dạng `targetOf`. */
+  assert.equal(
+    applyBlockedReason({
+      ...base, target: targetOf(doc), activeTarget: targetOf(doc),
+    }),
+    "",
+  );
+  /* Dạng SAI: đưa mã phiên vào — chính là lỗi phải chặn. */
+  assert.match(
+    applyBlockedReason({
+      ...base, target: sendTarget(doc), activeTarget: sendTarget(doc),
+    }),
+    /bản vẽ khác/i,
+  );
+  /* Bản vẽ ĐÃ LƯU không đổi gì: hai dạng trùng nhau. */
+  const saved = { title: "Plan.dwg", file: "/a/Plan.dwg", instance: "B", targetsInstance: true };
+  assert.equal(sendTarget(saved), targetOf(saved));
 });
 
 test("mã phiên chỉ dùng khi PLUGIN nói nó nhận — ba vòng review trượt đúng chỗ này", () => {

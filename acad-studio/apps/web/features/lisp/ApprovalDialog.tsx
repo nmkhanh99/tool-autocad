@@ -110,7 +110,7 @@ export function ApprovalDialog({
                 lineHeight: 1.5,
                 padding: "var(--s3)",
                 border: "1px solid var(--border)",
-                borderRadius: "var(--r-2)",
+                borderRadius: "var(--r-sm)",
                 background: "var(--bg)",
                 whiteSpace: "pre",
               }}

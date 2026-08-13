@@ -8,6 +8,7 @@ import {
   drawingChangedSince,
   eventLogMark,
   listOpenDocs,
+  nativeDocumentTarget,
   requestDrawingInfo,
   selectOpenDocument,
 } from "./acadBridge.js";
@@ -43,6 +44,13 @@ type OpenDocument = {
   title: string;
   file: string;
   active: boolean;
+  /* Hai trường này CÓ trong payload và code ở đây thật sự dùng tới chúng —
+     `nativeDocumentTarget()` đọc cả hai. Khai thiếu chúng thì kiểu hẹp hơn dữ
+     liệu thật, và hệ kiểu không còn nói cho ai biết chỗ nào phụ thuộc vào cái
+     gì; `nativeDocumentTarget()` nhận mọi trường ở dạng tuỳ chọn nên nó vẫn qua
+     được typecheck trong im lặng. */
+  instance?: string;
+  targetsInstance?: boolean;
 };
 
 type DrawingStandardsDependencies = {
@@ -62,7 +70,14 @@ const DEFAULT_DEPENDENCIES: DrawingStandardsDependencies = {
 type ScanSession = {
   scanId: string;
   target: string;
+  /** `file || title` — để SO và để tra cứu. Vào `documentGuardLisp()`. */
   exactTarget: string;
+  /** `file || instance || title` — để GỬI lại lúc áp.
+   *
+   * Lưu riêng vì `exactTarget` KHÔNG đủ để tìm lại bản vẽ: hai bản vẽ chưa lưu
+   * trùng tiêu đề cho ra cùng một `exactTarget`, và lượt áp sẽ chết ở
+   * `target_ambiguous` — quét được mà không sửa được. */
+  nativeTarget: string;
   profileId: string;
   profileRevision: string;
   profileVersion: number;
@@ -391,7 +406,10 @@ async function resolveDocument(
   dependencies: DrawingStandardsDependencies,
 ): Promise<{
   document: OpenDocument;
+  /** Đích để SO và để LƯU — `file || title`. Vào `documentGuardLisp()`. */
   exactTarget: string;
+  /** Đích để GỬI — `file || instance || title`. Vào `findDocExact()`. */
+  nativeTarget: string;
 }> {
   if (!(await dependencies.acadRunning())) throw new Error("AutoCAD chưa chạy");
   const open = await dependencies.listOpenDocs(4_000);
@@ -408,8 +426,17 @@ async function resolveDocument(
       : "Không thấy bản vẽ active");
   }
   const exactTarget = document.file || document.title;
-  if (!exactTarget) throw new Error("Bản vẽ đích chưa có title/path");
-  return { document, exactTarget };
+  const nativeTarget = nativeDocumentTarget(document);
+  if (!nativeTarget) throw new Error("Bản vẽ đích chưa có title/path");
+  /* HAI đích, và gộp lại là hỏng.
+     · `nativeTarget` = `file || instance || title`, dùng để GỬI. Mọi đường gửi
+       kết thúc ở `findDocExact()` của plugin, thứ đã nhận mã phiên — nên bản vẽ
+       chưa lưu trùng tiêu đề chỉ đích danh được qua đây.
+     · `exactTarget` = `file || title`, dùng để SO và để LƯU. Nó đi vào
+       `documentGuardLisp()` — chốt cuối cùng chạy bên trong AutoCAD, so với
+       `DWGNAME`/`DWGPREFIX`, mà LISP không biết mã phiên là gì — và vào
+       `session.exactTarget` để so giữa lượt quét với lượt áp. */
+  return { document, exactTarget, nativeTarget };
 }
 
 export function drawingRevision(snapshot: unknown): string | null {
@@ -541,7 +568,14 @@ function displayObjects(
 
 function latestFrame(target: string): StandardsObject | undefined {
   return [...scans.values()]
-    .filter((scan) => scan.target === target || scan.exactTarget === target)
+    /* Ba cách gọi tên cùng một bản vẽ. Khách gửi đích nào cũng phải tra ra được:
+       `/review` gửi `sendTarget()`, tức MÃ PHIÊN cho bản vẽ chưa lưu, còn hai
+       trường kia là `file || title`. Thiếu `nativeTarget` ở đây là lượt quét
+       trước đó tồn tại mà không ai tìm thấy. */
+    .filter((scan) =>
+      scan.target === target
+      || scan.exactTarget === target
+      || scan.nativeTarget === target)
     .sort((left, right) => Date.parse(right.scannedAt) - Date.parse(left.scannedAt))
     .flatMap((scan) => scan.objects)
     .find((object) =>
@@ -751,7 +785,7 @@ export function drawingStandardsRouter(
        * chụp trước khi sửa, còn phiên quét lại lưu revision sau khi sửa, nên
        * `/apply` nhận một kết quả không nhất quán. */
       const eventMark = eventLogMark();
-      const { document, exactTarget } = await resolveDocument(
+      const { document, exactTarget, nativeTarget } = await resolveDocument(
         req.body?.target,
         dependencies,
       );
@@ -762,7 +796,7 @@ export function drawingStandardsRouter(
           error: "Review read-only chỉ quét bản vẽ đang active; hãy kích hoạt đúng tab rồi thử lại",
         });
       }
-      const snapshot = await dependencies.requestDrawingInfo(exactTarget, 10_000);
+      const snapshot = await dependencies.requestDrawingInfo(nativeTarget, 10_000);
       if (!snapshot?.ok) throw new Error(snapshot?.error || "Không đọc được hồ sơ bản vẽ");
       const snapshotDocument = asRecord(snapshot.document);
       if (reviewOnly && snapshotDocument.active !== true) {
@@ -790,7 +824,7 @@ export function drawingStandardsRouter(
 
       output = scanOutputPath("standards_scan");
       const lisp = buildStandardsScanLisp(profile, output, MAX_SCAN_ITEMS);
-      const job = await dependencies.dispatchLiveJob(lisp, exactTarget, 25_000, {
+      const job = await dependencies.dispatchLiveJob(lisp, nativeTarget, 25_000, {
         readOnly: reviewOnly,
       });
       if (job.state !== "done" || job.result?.status !== "ok") {
@@ -798,7 +832,7 @@ export function drawingStandardsRouter(
       }
       if (!existsSync(output)) throw new Error("AutoCAD không ghi file kết quả quét");
       const verifiedSnapshot = await dependencies.requestDrawingInfo(
-        exactTarget,
+        nativeTarget,
         10_000,
       );
       if (!verifiedSnapshot?.ok) {
@@ -880,6 +914,7 @@ export function drawingStandardsRouter(
         scanId,
         target: document.file || document.title,
         exactTarget,
+        nativeTarget,
         profileId: profile.id,
         profileRevision: profile.revision,
         /* Số phiên bản LÚC QUÉT, chỉ để hiển thị. Chốt tranh chấp vẫn là
@@ -901,6 +936,12 @@ export function drawingStandardsRouter(
         ok: true,
         scanId,
         target: session.target,
+        /* Định danh BẢN VẼ của lượt quét, không phải tên nó.
+           `target` là `file || title`, mà hai bản vẽ chưa lưu trùng tiêu đề cho
+           ra cùng một giá trị — giao diện so bằng nó sẽ bật nút Sửa cho bản vẽ
+           SAI, rồi máy chủ từ chối bằng `drawing_not_active`. Chốt phía client
+           chỉ có nghĩa khi nó so được đúng thứ máy chủ sẽ so. */
+        documentInstance: document.instance || "",
         profileId: profile.id,
         profileRevision: profile.revision,
         profileVersion: profile.version,
@@ -977,8 +1018,13 @@ export function drawingStandardsRouter(
           error: "Mẫu quy chuẩn đã đổi; hãy quét lại",
         });
       }
-      const { document, exactTarget } = await resolveDocument(
-        session.exactTarget,
+      /* Tìm lại bản vẽ bằng đích GỬI đã lưu, không bằng `exactTarget`: hai bản
+         vẽ chưa lưu trùng tiêu đề cho ra cùng một `exactTarget`, nên tra bằng nó
+         chết ở `target_ambiguous` — quét được mà không sửa được. Phép SO ngay
+         bên dưới vẫn dùng `exactTarget`, vì đó là câu hỏi khác: "vẫn đúng bản vẽ
+         của lượt quét chứ?" */
+      const { document, exactTarget, nativeTarget } = await resolveDocument(
+        session.nativeTarget || session.exactTarget,
         dependencies,
       );
       if (exactTarget !== session.exactTarget) {
@@ -1001,7 +1047,7 @@ export function drawingStandardsRouter(
         });
       }
       const currentSnapshot = await dependencies.requestDrawingInfo(
-        exactTarget,
+        nativeTarget,
         10_000,
       );
       if (!currentSnapshot?.ok) throw new Error("Không đọc được trạng thái bản vẽ trước khi sửa");
@@ -1077,7 +1123,7 @@ export function drawingStandardsRouter(
         `(progn ${programs.join("\n")} ${programs.length})`,
         { mutates: true, guardTarget: exactTarget },
       );
-      const job = await dependencies.dispatchLiveJob(lisp, exactTarget, 30_000);
+      const job = await dependencies.dispatchLiveJob(lisp, nativeTarget, 30_000);
       if (job.state !== "done" || job.result?.status !== "ok") {
         throw new Error(job.result?.message || `Áp dụng chưa hoàn tất (${job.state})`);
       }
@@ -1098,7 +1144,7 @@ export function drawingStandardsRouter(
     let areaPath = "";
     try {
       const target = String(req.body?.target ?? "");
-      const { exactTarget } = await resolveDocument(target, dependencies);
+      const { exactTarget, nativeTarget } = await resolveDocument(target, dependencies);
       const action = String(req.body?.action ?? "").trim();
       if (action === "select" || action === "layer") {
         return res.status(409).json({
@@ -1117,7 +1163,7 @@ export function drawingStandardsRouter(
       const program = buildStandardsAction(action, handles, params, target, areaPath || undefined);
       const job = await dependencies.dispatchLiveJob(
         program.lisp,
-        exactTarget,
+        nativeTarget,
         action === "area" ? 25_000 : 30_000,
       );
       if (job.state !== "done" || job.result?.status !== "ok") {
@@ -1130,7 +1176,7 @@ export function drawingStandardsRouter(
       if (action === "area") {
         if (!existsSync(areaPath)) throw new Error("AutoCAD không ghi kết quả diện tích");
         const area = parseAreaTsv(readFileSync(areaPath, "utf8"));
-        const snapshot = await dependencies.requestDrawingInfo(exactTarget, 8_000);
+        const snapshot = await dependencies.requestDrawingInfo(nativeTarget, 8_000);
         const settings = asRecord(asRecord(snapshot?.drawing).settings);
         const factor = metersPerUnit(settings.INSUNITS);
         return res.json({

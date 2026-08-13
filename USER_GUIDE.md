@@ -419,9 +419,12 @@ Hai ô dễ bỏ qua:
 Mỗi dòng: tên, màu, kiểu nét, bề dày, có bắt buộc hay không. Thêm dòng bằng
 **Thêm layer**, bỏ dòng bằng **Xoá**.
 
-- **Màu** bấm vào ô màu để mở bảng chọn. Chín màu đầu của AutoCAD có tên và hiện
-  đúng màu; các chỉ số khác nhập bằng số (0–256) và app **không** vẽ ô màu cho
-  chúng — nó không đoán, vì một ô màu sai cạnh tên layer còn tệ hơn không có.
+- **Màu** bấm vào ô màu để mở bảng chọn. Có ba cách chọn: chín màu có tên, **toàn
+  bảng ACI** (lưới bấm chọn, mỗi hàng là một họ màu), và **ô chọn màu thật**.
+  Bảng ACI lấy từ chính AutoCAD nên màu hiện đúng như bạn thấy trong AutoCAD; nếu
+  plugin AcadBridge là bản cũ thì chỉ 9 chỉ số đầu có màu, các chỉ số khác hiện
+  bằng số — app không đoán màu, vì một ô màu sai cạnh tên layer còn tệ hơn không
+  có.
   Ô nhập trong bảng chọn nhận cả **màu thật** dạng `#RRGGBB` — đủ 6 chữ số,
   `#f80` không được nhận vì app không tự chọn thay bạn một màu bạn chưa gõ — và
   tô đúng màu đó. Hai điều cần biết khi áp dụng: đặt màu thật **giữ nguyên trạng

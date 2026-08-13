@@ -321,9 +321,22 @@ export type OpenAcadDocument = {
  * `DWGNAME`/`DWGPREFIX+DWGNAME` và không biết mã phiên là gì.
  */
 export function nativeDocumentTarget(
-  document: { file?: string; title?: string; instance?: string } | null | undefined,
+  document: {
+    file?: string;
+    title?: string;
+    instance?: string;
+    targetsInstance?: boolean;
+  } | null | undefined,
 ): string {
-  return document?.file || document?.instance || document?.title || "";
+  /* Cờ năng lực nằm NGAY TRONG hàm này, không ở từng chỗ gọi.
+     `instance` có trong payload từ lâu, còn `findDocExact` mới biết nhận nó làm
+     đích — bản plugin cũ trả `not_found`. Gửi mã phiên cho nó là LÀM HỎNG một
+     thứ đang chạy: bản vẽ chưa lưu tiêu đề duy nhất trước đây đọc được.
+     Đặt phép kiểm ở từng chỗ gọi là mời mỗi chỗ quên một kiểu — đúng dạng lỗi đã
+     lặp lại nhiều vòng review. Ở đây thì không chỗ nào quên được. */
+  if (document?.file) return document.file;
+  if (document?.targetsInstance === true && document.instance) return document.instance;
+  return document?.title || "";
 }
 
 /** Resolve one open document, preferring a full-path match over a title match. */
@@ -358,7 +371,7 @@ export function selectOpenDocument<
 
 /** Hỏi plugin danh sách bản vẽ đang mở (ghi docs.req → chờ docs.json mới). Heartbeat plugin. */
 export async function listOpenDocs(timeoutMs = 3000):
-  Promise<{ alive: boolean; docs: OpenAcadDocument[] }> {
+  Promise<{ alive: boolean; docs: OpenAcadDocument[]; session?: string }> {
   ensureBridgeDirs();
   const reqAt = Date.now();
   writeFileSync(join(getBridgeDir(), "docs.req"), String(reqAt), "utf8");
@@ -368,7 +381,13 @@ export async function listOpenDocs(timeoutMs = 3000):
       const st = statSync(docsPath);
       if (st.mtimeMs >= reqAt - 50) {
         const d = JSON.parse(readFileSync(docsPath, "utf8"));
-        return { alive: true, docs: d.docs ?? [] };
+        return {
+          alive: true,
+          docs: d.docs ?? [],
+          /* Mã phiên của lần nạp plugin hiện tại. Bản cũ không phát nó, và lúc
+             đó `undefined` là câu trả lời thật: không có gì để đối chiếu. */
+          session: typeof d.session === "string" ? d.session : undefined,
+        };
       }
     } catch { /* chưa có */ }
     await new Promise((r) => setTimeout(r, 150));
@@ -1688,6 +1707,102 @@ export function acadBridgeRouter(): Router {
       await new Promise((r2) => setTimeout(r2, 150));
     }
     res.json({ alive: false, error: "Plugin không phản hồi — khởi động lại AutoCAD để nạp plugin v3." });
+  });
+
+  /* Bảng màu ACI — 256 mã màu lấy từ CHÍNH AutoCAD (`acedGetRGB`).
+   *
+   * Có đường riêng chứ không đi ghép vào `/docs` hay `/drawing-info` vì hai lý
+   * do: màn Hồ sơ quy chuẩn KHÔNG gắn với bản vẽ nào nên nó không gọi
+   * `/drawing-info` bao giờ, còn `/docs` thì bị hỏi liên tục và nhét 256 mã màu
+   * tĩnh vào mỗi lượt là lãng phí.
+   *
+   * Plugin ghi file này ở lần `writeDocs()` ĐẦU TIÊN của phiên, không phải lúc
+   * nạp — `acedGetRGB()` đọc bảng màu của trình soạn thảo, và lúc plugin được
+   * nạp thì trình soạn thảo chưa dựng xong.
+   *
+   * Vì vậy phải HỎI danh sách bản vẽ TRƯỚC rồi mới đọc file: chính lượt hỏi đó
+   * làm plugin ghi ra bảng màu. Đọc trước là lượt đầu tiên sau mỗi lần khởi động
+   * AutoCAD luôn trả 404, và giao diện chỉ có bảng màu sau một sự kiện tình cờ
+   * nào đó.
+   *
+   * Thiếu file = plugin bản cũ, và giao diện lùi về 9 màu có quy ước cố định
+   * thay vì đoán — đoán sai một ô màu cạnh tên layer tệ hơn để trống. */
+  r.get("/aci-palette", async (_req, res) => {
+    /* Hỏi plugin, rồi thử LẠI một lần nếu bảng màu chưa khớp phiên.
+       Thứ tự ghi trong plugin (bảng màu trước `docs.json`) đóng được khe chính,
+       nhưng `listOpenDocs()` có 50ms ân hạn: một `docs.json` viết ngay TRƯỚC lượt
+       hỏi vẫn được nhận, và nó có thể là của lượt trước — lúc đó bảng màu của
+       phiên mới chưa ra đời. Một lần thử lại đủ vì lượt hỏi đầu đã kích plugin
+       ghi; đây là ân hạn hẹp, không phải một cuộc đua mở. */
+    const readPalette = () => {
+      const file = join(getBridgeDir(), "aci-palette.json");
+      if (!existsSync(file)) return null;
+      try {
+        return JSON.parse(readFileSync(file, "utf8")) as unknown;
+      } catch {
+        return "invalid" as const;
+      }
+    };
+    const sessionOf = (value: unknown) =>
+      typeof (value as { session?: unknown })?.session === "string"
+        ? String((value as { session?: string }).session)
+        : "";
+
+    let live = await listOpenDocs();
+    let parsedFirst = readPalette();
+    if (
+      live.session
+      && (parsedFirst === null
+        || (parsedFirst !== "invalid" && sessionOf(parsedFirst) !== live.session))
+    ) {
+      live = await listOpenDocs();
+      parsedFirst = readPalette();
+    }
+    if (parsedFirst === null) {
+      return res.status(404).json({
+        ok: false,
+        code: "palette_unavailable",
+        error: "Plugin chưa ghi bảng màu ACI. Build lại plugin rồi khởi động lại AutoCAD.",
+      });
+    }
+    if (parsedFirst === "invalid") {
+      return res.status(502).json({
+        ok: false,
+        code: "palette_invalid",
+        error: "Không đọc được bảng màu ACI",
+      });
+    }
+    const colors = (parsedFirst as { colors?: unknown }).colors;
+    /* Kiểm TỪNG mục chứ không chỉ kiểm mảng: một mục hỏng lọt qua sẽ thành một ô
+       màu sai, đúng thứ cả tính năng này dựng ra để tránh. Mục rỗng là hợp lệ —
+       chỉ số 0 (ByBlock) không phải một màu. */
+    if (!Array.isArray(colors)
+      || colors.length !== 256
+      || colors.some((value, index) =>
+        typeof value !== "string"
+        || (index === 0 ? value !== "" : !/^#[0-9A-F]{6}$/.test(value)))) {
+      return res.status(502).json({
+        ok: false,
+        code: "palette_invalid",
+        error: "Bảng màu ACI plugin ghi ra không đúng định dạng",
+      });
+    }
+    /* File này NẰM LẠI sau khi AutoCAD thoát. Không đối chiếu là phục vụ một bảng
+       màu CŨ như thể nó của phiên hiện tại — đúng lúc người dùng hạ cấp plugin,
+       hoặc lượt ghi sau thất bại. Sai rõ nhất là ACI 7: nó theo màu nền bản vẽ,
+       nên đổi nền giữa hai phiên là bảng cũ nói ngược.
+       Mã phiên phải KHỚP, không phải "có mặt": thiếu ở một trong hai bên nghĩa là
+       không đối chiếu được, mà không đối chiếu được thì không được nhận. */
+    const session = sessionOf(parsedFirst);
+    if (!session || !live.session || live.session !== session) {
+      return res.status(409).json({
+        ok: false,
+        code: "palette_stale",
+        error: "Bảng màu ACI không thuộc phiên AutoCAD đang chạy. "
+          + "Build lại plugin rồi khởi động lại AutoCAD.",
+      });
+    }
+    return res.json({ ok: true, colors });
   });
 
   // Danh sách bản vẽ ĐANG MỞ trong AutoCAD (plugin trả lời — kiêm heartbeat).

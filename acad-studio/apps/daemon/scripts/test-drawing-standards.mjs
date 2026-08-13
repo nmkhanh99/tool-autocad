@@ -87,6 +87,31 @@ for (const row of layerRows(layers.lisp)) {
 }
 assert.equal(layerRows(layers.lisp).length, DEFAULT_PROFILE.layers.length);
 
+/* Dat mau ACI phai GIU DAU cua group 62 — dau am nghia la layer dang TAT, mot
+   trang thai NGUOI DUNG dat ma ho so tieu chuan khong mang cot nao de ghi de.
+   `subst` thang mot so duong vao do se BAT layer len: ap ho so mau sac lai lam
+   hien ra thu ho da co y tat, tren duong ghi mot pha khong hoan tac duoc.
+
+   Day la BAT BIEN VAN BAN, khong phai phep kiem hanh vi: du an khong co harness
+   chay AutoLISP, nen cho nay chi chan duoc viec ai do "don gian hoa" no tro lai.
+   Kiem that phai lam tren AutoCAD that. */
+const ensureLayerBody = (() => {
+  const start = layers.lisp.indexOf("(defun acadstd:ensure-layer-rgb");
+  assert.ok(start >= 0, "khong thay acadstd:ensure-layer-rgb trong chuong trinh");
+  const next = layers.lisp.indexOf("\n(defun ", start + 1);
+  return layers.lisp.slice(start, next > 0 ? next : undefined);
+})();
+assert.ok(
+  /\(minusp \(cdr \(assoc 62 data\)\)\)/.test(ensureLayerBody),
+  "ensure-layer-rgb phai giu dau cua group 62",
+);
+/* Chi soi trong than ham LAYER. `acadstd:set-color` cung ghi group 62 nhung no
+   lam viec tren DOI TUONG, ma voi doi tuong thi 62 am khong mang nghia tat. */
+assert.ok(
+  !/\(subst \(cons 62 color\)/.test(ensureLayerBody),
+  "khong duoc ghi thang mot so duong vao group 62 cua layer",
+);
+
 /* Mau that: truong 2 (ACI) phai la `nil` va truong 6 phai la so 24-bit.
    `nil` o truong 2 la co y — LISP se KHONG dung toi group 62, giu nguyen gia tri
    san co lan DAU cua no (62 am nghia la layer dang TAT). */

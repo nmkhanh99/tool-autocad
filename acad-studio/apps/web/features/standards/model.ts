@@ -96,6 +96,49 @@ export const LINEWEIGHTS: readonly { value: string | number; label: string }[] =
 
 /** Bảng màu ACI có TÊN — bảy màu đầu là quy ước chung của AutoCAD, và người
  * dùng gọi chúng bằng tên chứ không bằng số. */
+/** Bảng màu ACI đọc từ máy chủ: 256 mục, chỉ số = chỉ số ACI.
+ *
+ * Mục `0` luôn rỗng — ByBlock không phải một màu. `256` (ByLayer) không có trong
+ * bảng vì cùng lý do.
+ */
+export type AciPalette = readonly string[];
+
+/** Bảng màu hợp lệ, hoặc `null` nếu payload không dùng được.
+ *
+ * Kiểm TỪNG mục chứ không chỉ kiểm mảng. Một mục hỏng lọt qua sẽ thành một ô màu
+ * SAI cạnh tên layer — mà người dùng dựa vào đúng ô đó để tìm nhầm lẫn, nên sai
+ * còn tệ hơn để trống. Đây cũng là lý do cả tính năng này tồn tại: lấy bảng thật
+ * từ AutoCAD thay vì đoán bằng công thức.
+ */
+export function readAciPalette(body: unknown): AciPalette | null {
+  const colors = record(body).colors;
+  if (!Array.isArray(colors) || colors.length !== 256) return null;
+  const ok = colors.every((value, index) =>
+    typeof value === "string"
+    && (index === 0 ? value === "" : /^#[0-9a-f]{6}$/i.test(value)));
+  return ok ? (colors as string[]) : null;
+}
+
+/** Chín màu ACI có quy ước cố định — đường lùi khi chưa có bảng từ AutoCAD. */
+const ACI_FALLBACK: Record<number, string> = {
+  1: "#FF0000", 2: "#FFFF00", 3: "#00FF00", 4: "#00FFFF",
+  5: "#0000FF", 6: "#FF00FF", 7: "#FFFFFF", 8: "#808080", 9: "#C0C0C0",
+};
+
+/** Mã màu của một chỉ số ACI, hoặc `null` nếu không biết chắc.
+ *
+ * `null` là câu trả lời thật khi chưa có bảng từ AutoCAD và chỉ số nằm ngoài
+ * 1–9: giao diện hiện số thay vì bịa màu.
+ *
+ * `0` (ByBlock) và `256` (ByLayer) không có màu — chúng là chỉ dẫn kế thừa, và
+ * một layer thì không kế thừa màu từ chính nó.
+ */
+export function aciHex(value: number, palette?: AciPalette | null): string | null {
+  if (!Number.isInteger(value) || value < 1 || value > 255) return null;
+  const fromPalette = palette?.[value];
+  return fromPalette || ACI_FALLBACK[value] || null;
+}
+
 export const ACI_NAMED: readonly { value: number; label: string }[] = [
   { value: 1, label: "Đỏ" }, { value: 2, label: "Vàng" }, { value: 3, label: "Lục" },
   { value: 4, label: "Lơ" }, { value: 5, label: "Lam" }, { value: 6, label: "Tím" },
@@ -516,6 +559,9 @@ export type Issue = {
 export type Scan = {
   scanId: string;
   target: string;
+  /** Mã phiên của bản vẽ đã quét. Rỗng = máy chủ/plugin không cấp, và phép so
+   * lùi về `target` — thứ không phân biệt được hai bản vẽ chưa lưu trùng tiêu đề. */
+  documentInstance: string;
   profileId: string;
   /** Phiên bản hồ sơ LÚC QUÉT — hash, không phải số. Đây là thứ máy chủ so khi
    * áp dụng, và lệch là 409. */
@@ -630,6 +676,10 @@ export function normalizeScan(value: unknown, fallbackTarget: string): Scan {
   return {
     scanId: str(body.scanId),
     target: str(body.target, fallbackTarget),
+    /* Định danh bản vẽ của lượt quét. Rỗng = máy chủ không phát (bản cũ) hoặc
+       plugin không cấp — lúc đó phép so lùi về tên, và tên thì không phân biệt
+       được hai bản vẽ chưa lưu trùng tiêu đề. */
+    documentInstance: str(body.documentInstance),
     profileId: str(body.profileId),
     profileRevision: str(body.profileRevision),
     profileVersion: num(body.profileVersion) ?? 0,
@@ -813,12 +863,21 @@ export function profileDriftNote(
 /** Vì sao chưa áp dụng được tập đã chọn — hoặc rỗng nếu áp dụng được. */
 export function applyBlockedReason(input: {
   scan: Scan | null;
-  /** Bản vẽ AutoCAD ĐANG hoạt động. */
+  /** Bản vẽ AutoCAD ĐANG hoạt động, **dạng `targetOf()`**. */
   activeTarget: string;
-  /** Bản vẽ đang chọn trên màn hình. Lượt sửa gửi đi CHỈ có `scanId`, nên máy
-   * chủ dùng đích đã lưu trong phiên quét — không phải đích đang hiện. Quét bản
-   * vẽ A rồi đổi ô chọn sang B mà vẫn bấm sửa là ghi vào A trong khi màn hình
-   * nói B. */
+  /** Mã phiên của bản vẽ đang hoạt động. Rỗng = không biết, và phép so lùi về
+   * tên — thứ không phân biệt được hai bản vẽ chưa lưu trùng tiêu đề. */
+  activeInstance: string;
+  /** Bản vẽ đang chọn trên màn hình, **dạng `targetOf()`**. Lượt sửa gửi đi CHỈ
+   * có `scanId`, nên máy chủ dùng đích đã lưu trong phiên quét — không phải đích
+   * đang hiện. Quét bản vẽ A rồi đổi ô chọn sang B mà vẫn bấm sửa là ghi vào A
+   * trong khi màn hình nói B.
+   *
+   * CẢ HAI trường phải ở dạng `targetOf()` (`file || title`) chứ không phải dạng
+   * `sendTarget()`, vì cả hai chỉ dùng để SO với `scan.target` — thứ daemon đặt
+   * bằng `file || title` của bản vẽ nó giải quyết được, bất kể ta gửi đích nào.
+   * Trộn hai dạng là chặn VĨNH VIỄN mọi bản vẽ chưa lưu: phép so không bao giờ
+   * khớp, và nút sửa không bao giờ bật. */
   target: string;
   selected: number;
   driftNote: string;
@@ -839,7 +898,14 @@ export function applyBlockedReason(input: {
        này sinh ra để chặn. */
     return "Chưa biết AutoCAD đang mở bản vẽ nào. Đọc lại danh sách bản vẽ rồi thử lại.";
   }
-  if (input.scan.target && input.activeTarget !== input.scan.target) {
+  /* So bằng ĐỊNH DANH khi có: hai bản vẽ chưa lưu trùng tiêu đề cho ra cùng một
+     `scan.target`, nên so bằng tên sẽ bật nút Sửa cho bản vẽ SAI và người dùng
+     chỉ biết khi máy chủ từ chối. Không có định danh (máy chủ bản cũ, hoặc plugin
+     không cấp) thì lùi về tên — kém hơn, nhưng vẫn là chốt đang có. */
+  const mismatch = input.scan.documentInstance && input.activeInstance
+    ? input.activeInstance !== input.scan.documentInstance
+    : !!input.scan.target && input.activeTarget !== input.scan.target;
+  if (mismatch) {
     return "AutoCAD đang mở một bản vẽ khác. Chuyển về đúng bản vẽ đã quét, "
       + "hoặc quét lại bản vẽ đang mở.";
   }

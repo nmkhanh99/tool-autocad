@@ -42,6 +42,7 @@ import {
   profileDriftNote,
   scanBlockedReason,
   severityCounts,
+  sendTarget,
   severityLabel,
   targetOf,
   unsupportedFixReason,
@@ -165,22 +166,51 @@ export default function ReviewPage() {
     setScanBusy(false);
   }, []);
 
+  /* Đích để GỬI, không phải để so. `sendTarget()` ưu tiên mã phiên cho bản vẽ
+     chưa lưu — thứ duy nhất chỉ đích danh được khi hai bản vẽ trùng tiêu đề — và
+     chỉ làm vậy khi plugin công bố là nó nhận mã phiên. */
   const activeFile = useMemo(
-    () => targetOf(docs.find((doc) => doc.active) ?? {}),
+    () => sendTarget(docs.find((doc) => doc.active) ?? {}),
     [docs],
   );
 
   /* Tiêu đề của bản vẽ ĐÃ QUÉT. Sự kiện reactor mang `activeDoc` là TIÊU ĐỀ,
      còn `scan.target` là đường dẫn tệp — so thẳng hai thứ đó là không bao giờ
-     khớp, và mọi thay đổi ở mọi bản vẽ đều giết lượt quét. */
+     khớp, và mọi thay đổi ở mọi bản vẽ đều giết lượt quét.
+     Ở đây dùng `targetOf` chứ KHÔNG phải `sendTarget`: daemon đặt `scan.target`
+     bằng `file || title` của bản vẽ nó giải quyết được, bất kể ta gửi đích nào.
+     Đổi sang `sendTarget` là phép so này không bao giờ khớp với bản vẽ chưa lưu. */
+  /* Đích dạng SO SÁNH — `targetOf()`, không phải `sendTarget()`.
+     `applyBlockedReason` so cả hai với `scan.target`, mà daemon đặt `scan.target`
+     bằng `file || title` của bản vẽ nó giải quyết được. Đưa mã phiên vào đó là
+     phép so không bao giờ khớp, và nút sửa không bao giờ bật cho bản vẽ chưa lưu. */
+  const compareTarget = useMemo(() => {
+    const doc = docs.find((item) => sendTarget(item) === target);
+    return doc ? targetOf(doc) : target;
+  }, [docs, target]);
+  const activeCompare = useMemo(
+    () => targetOf(docs.find((doc) => doc.active) ?? {}),
+    [docs],
+  );
+
   const scannedTitle = useMemo(() => {
     if (!scan) return "";
     const doc = docs.find((item) => targetOf(item) === scan.target);
     return (doc?.title || "").trim();
   }, [scan, docs]);
   useEffect(() => {
-    setTarget((current) => current || activeFile);
-  }, [activeFile]);
+    /* Đích phải TRỎ TỚI một bản vẽ còn trong danh sách, không chỉ "khác rỗng".
+       Nạp lại plugin AcadBridge trong lúc trang còn mở là mọi bản vẽ chưa lưu
+       nhận mã phiên MỚI: đích đang giữ là mã cũ, không khớp mục nào trong ô
+       chọn, và `scanBlockedReason` chặn quét cho tới khi người dùng tự chọn lại —
+       không có gì trên màn hình nói cho họ biết vì sao.
+       Chỉ đổi khi đích hiện tại thật sự đã chết. Đổi mỗi lần `docs` nạp lại sẽ
+       cướp lựa chọn của người đang xem một bản vẽ không active. */
+    setTarget((current) => {
+      if (current && docs.some((doc) => sendTarget(doc) === current)) return current;
+      return activeFile;
+    });
+  }, [activeFile, docs]);
 
   const profile = profiles.find((item) => item.id === profileId) ?? null;
   const driftNote = profileDriftNote(scan, profile);
@@ -197,7 +227,9 @@ export default function ReviewPage() {
     target, activeTarget: activeFile, profileId, docsAlive, busy: scanBusy,
   });
   const applyBlocked = applyBlockedReason({
-    scan, target, activeTarget: activeFile, selected: picked.size,
+    scan, target: compareTarget, activeTarget: activeCompare,
+    activeInstance: (docs.find((doc) => doc.active)?.instance || "").trim(),
+    selected: picked.size,
     driftNote, drawingChanged,
     /* `scanBusy` cũng là "bận": bấm Quét lại không xoá lô đã tích, nên nếu
        không tính nó thì thẻ xác nhận vẫn gửi được lô CŨ trong lúc lượt quét mới
@@ -440,7 +472,7 @@ export default function ReviewPage() {
                 }}>
                 <option value="">— chọn bản vẽ —</option>
                 {docs.map((doc) => (
-                  <option key={targetOf(doc)} value={targetOf(doc)}>
+                  <option key={sendTarget(doc)} value={sendTarget(doc)}>
                     {doc.title || targetOf(doc)}{doc.active ? " · đang mở" : ""}
                   </option>
                 ))}

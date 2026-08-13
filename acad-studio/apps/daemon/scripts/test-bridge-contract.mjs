@@ -387,11 +387,24 @@ assert(
    luot goi native ngay sau do van dung tieu de thi `findDocExact` tra ve rong —
    ca duong ban-ve-chua-luu hong o dung mot buoc sau cho da sua. */
 assert(
-  bridge.nativeDocumentTarget(unsavedDocs[1]) === "BBB-002",
-  "native target prefers the instance token when there is no file path",
+  bridge.nativeDocumentTarget({ ...unsavedDocs[1], targetsInstance: true }) === "BBB-002",
+  "native target prefers the instance token when the plugin accepts it",
+);
+/* Khong co co nang luc = plugin ban CU. Gui ma phien cho no la nhan `not_found`,
+   tuc lam hong mot thu dang chay: ban ve chua luu tieu de duy nhat truoc day doc
+   duoc bang tieu de. */
+assert(
+  bridge.nativeDocumentTarget(unsavedDocs[1]) === "Drawing1.dwg",
+  "native target falls back to the title when the plugin does not accept instances",
 );
 assert(
-  bridge.nativeDocumentTarget({ title: "Plan.dwg", file: "/tmp/a/Plan.dwg", instance: "X" }) ===
+  bridge.nativeDocumentTarget({ ...unsavedDocs[1], targetsInstance: false }) === "Drawing1.dwg",
+  "an explicit false is treated as a legacy plugin",
+);
+assert(
+  bridge.nativeDocumentTarget({
+    title: "Plan.dwg", file: "/tmp/a/Plan.dwg", instance: "X", targetsInstance: true,
+  }) ===
     "/tmp/a/Plan.dwg",
   "native target still prefers a full path over the instance token",
 );

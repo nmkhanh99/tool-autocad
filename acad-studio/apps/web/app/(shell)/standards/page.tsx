@@ -37,6 +37,8 @@ import {
   applyProfileEdits,
   normalizeProfile,
   profileSaveBlockedReason,
+  readAciPalette,
+  type AciPalette,
   type StandardsProfile,
 } from "../../../features/standards/model";
 import {
@@ -131,6 +133,13 @@ export default function StandardsPage() {
      nhập thì giao diện sẽ mời một đường dẫn có thể đã chết, và người dùng chỉ
      biết sau khi mở hộp thoại rồi ăn lỗi. */
   const [docsAlive, setDocsAlive] = useState(false);
+  /* Bảng màu ACI thật, lấy từ chính AutoCAD. Đọc MỘT LẦN: nó tĩnh trong cả phiên
+     AutoCAD, và plugin ghi nó ra một lần lúc nạp.
+     `null` cho tới khi đọc được, và giữ `null` nếu plugin là bản cũ — lúc đó
+     `aciHex()` lùi về 9 màu có quy ước cố định, còn chỉ số ngoài dải đó hiện
+     bằng SỐ. Bịa màu cho chúng tệ hơn: người dùng dựa vào đúng ô màu ấy để tìm
+     nhầm lẫn. */
+  const [palette, setPalette] = useState<AciPalette | null>(null);
   const [importOpen, setImportOpen] = useState(false);
 
   /** `throwOnFailure` cho đường LƯU: ở đó một lượt nạp lại hỏng KHÔNG được im
@@ -186,6 +195,46 @@ export default function StandardsPage() {
   }, []);
   useEffect(loadDocs, [loadDocs]);
 
+  /* Bảng màu ACI: tĩnh trong MỘT phiên AutoCAD, nên đọc lại khi phiên đổi.
+     Một lượt đọc duy nhất lúc gắn là sai ở hai đầu: mở trang TRƯỚC khi AutoCAD
+     sẵn sàng thì không bao giờ có bảng màu cho tới lúc tải lại trang; nạp lại
+     plugin trong lúc trang còn mở thì bảng màu ở lại từ phiên trước — và daemon
+     nay từ chối bảng lệch phiên, nên nó sẽ thành `null` chứ không âm thầm sai.
+     `no-store`: đây là một tài nguyên gắn với phiên, để trình duyệt đệm là quay
+     lại đúng vấn đề vừa sửa.
+     Đọc hỏng thì im lặng giữ `null` — không có bảng màu không chặn việc gì cả,
+     giao diện hiện chỉ số bằng số. */
+  const paletteSequence = useRef(0);
+  const loadPalette = useCallback((refresh = false) => {
+    const ticket = ++paletteSequence.current;
+    /* Đọc LẠI thì xoá bảng cũ NGAY, đừng đợi phản hồi. Lượt đọc này hỏi plugin
+       nên có thể mất vài giây, và trong quãng đó bảng của phiên AutoCAD TRƯỚC
+       vẫn hiện — người dùng kịp chọn một ô màu cũ rồi lưu hồ sơ. Mất bảng màu
+       vài giây chỉ làm chỉ số hiện bằng số; chọn nhầm màu thì đi vào hồ sơ.
+       Lượt đọc ĐẦU không cần xoá (đang là `null` sẵn), và xoá ở đó cũng vô hại —
+       tách ra chỉ để chỗ gọi nói rõ ý định. */
+    if (refresh) setPalette(null);
+    fetch(endpoints.aciPalette(DAEMON_BASE), { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body) => {
+        if (ticket !== paletteSequence.current) return;
+        /* `readAciPalette(null)` là `null`, nên phản hồi lỗi (409 lệch phiên,
+           404 chưa có) cũng đi qua đây và xoá bảng cũ. */
+        setPalette(readAciPalette(body));
+      })
+      /* Đọc hỏng thì XOÁ, không giữ bảng cũ. Giữ lại là hiện màu của phiên
+         AutoCAD TRƯỚC như thể của phiên này — đúng thứ mã phiên phía máy chủ vừa
+         dựng ra để chặn, và chặn ở máy chủ rồi lại tự bịa lại ở client thì vô
+         nghĩa. Mất bảng màu không mất dữ liệu gì: chỉ số hiện bằng số. */
+      .catch(() => {
+        if (ticket === paletteSequence.current) setPalette(null);
+      });
+  }, []);
+  /* Bọc lại: `useEffect(loadPalette, …)` sẽ truyền thẳng đối số React gọi vào,
+     và `loadPalette` nay nhận một cờ — để nguyên là lượt đọc đầu tự coi mình là
+     lượt đọc lại. */
+  useEffect(() => { loadPalette(); }, [loadPalette]);
+
   useAcadEvents(DAEMON_BASE, (event) => {
     /* `drawingSaved` cũng phải nghe. Plugin gọi `writeDocs()` rồi phát sự kiện đó
        ngay trong `saveComplete` — và một lượt "Save As" đổi ĐƯỜNG DẪN tệp, tức
@@ -197,6 +246,9 @@ export default function StandardsPage() {
        lúc bấm Nhận, nên không có khoảng thời gian nào để canh. */
     if (event.type.startsWith("doc") || event.type === "drawingSaved"
       || event.type === "drawingModified" || event.type === "pluginLoaded") loadDocs();
+    /* Nạp lại plugin = phiên AutoCAD mới = bảng màu mới. Chỉ nghe đúng sự kiện
+       đó; mở/đóng bản vẽ không đổi bảng màu nên đọc lại là phí. */
+    if (event.type === "pluginLoaded") loadPalette(true);
   });
 
   const selected = profiles.find((item) => item.id === selectedId) ?? null;
@@ -472,7 +524,7 @@ export default function StandardsPage() {
               </div>
             </section>
 
-            <LayerTable layers={draft.layers} disabled={busy}
+            <LayerTable layers={draft.layers} disabled={busy} palette={palette}
               onChange={(layers) => patch({ layers })}
               /* Không có bản vẽ nào đang mở thì KHÔNG truyền hàm — nút sẽ mờ và
                  nói lý do, thay vì mở một hộp thoại rỗng rồi báo lỗi. */

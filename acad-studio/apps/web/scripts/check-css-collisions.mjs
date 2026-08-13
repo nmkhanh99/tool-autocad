@@ -17,7 +17,7 @@
  * mọi `.chip`).
  */
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -187,3 +187,78 @@ console.log(
   `✓ css collisions: 0 class + 0 rò rỉ sang legacy + 0 token va chạm ` +
     `(legacy ${legacyClasses.size} class đơn / ${legacyAll.size} tổng, design ${designClasses.size})`,
 );
+
+/* ------------------------------------------------------------------ *
+ * Token CSS dùng mà KHÔNG được định nghĩa
+ * ------------------------------------------------------------------ *
+ *
+ * `color: var(--danger)` với `--danger` không tồn tại là một khai báo KHÔNG HỢP
+ * LỆ — trình duyệt bỏ nó lặng lẽ, không cảnh báo, không lỗi. Hậu quả trông y hệt
+ * "quên viết CSS", nên nó sống sót qua review: dòng sai không có viền đỏ, ô màu
+ * đang chọn không có viền đậm, và người đọc code thấy một khai báo trông đúng.
+ *
+ * Đã mắc HAI lần trong cùng một mục: `--danger` (không có, vì hệ thiết kế cố ý
+ * đơn sắc) rồi `--ink`/`--line` (tên đúng là `--fg`/`--border`). Cả hai lần đều
+ * chỉ lộ ra khi có người soi lại bằng mắt. Vì vậy chặn bằng script.
+ */
+const sourceFiles = [];
+const walk = (dir) => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === "out" || entry.name === ".next") continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) walk(full);
+    else if (/\.(tsx?|css)$/.test(entry.name)) sourceFiles.push(full);
+  }
+};
+walk(resolve(appDir, ".."));
+
+/* Gom định nghĩa từ MỌI nguồn, không chỉ hai file CSS gốc. Token hợp lệ được đặt
+   ở ba chỗ:
+     · bất kỳ file `.css` nào, gồm cả `*.module.css` tự khai token riêng;
+     · inline trong TSX — `style={{ "--review-zoom": ... }}` là cách hợp lệ để
+       truyền một giá trị chạy được vào CSS;
+     · fallback `var(--x, ...)` thì không cần định nghĩa (xử lý ở dưới).
+   Bỏ sót một nguồn là script báo sai, và một script hay báo sai sẽ bị nới lỏng
+   cho tới lúc vô dụng — đúng điều file này đã tự cảnh báo ở phần trên. */
+/* Bỏ chú thích trước khi tìm — ở CẢ HAI lượt quét.
+   Bỏ nó chỉ ở lượt tìm CHỖ DÙNG là guardrail tự chọc thủng chính mình: một
+   `--foo:` nằm trong chú thích (ví dụ minh hoạ, hay đoạn giải thích một lỗi cũ)
+   sẽ được tính là ĐỊNH NGHĨA, và `var(--foo)` thật ở chỗ khác đi qua trong im
+   lặng. Chính `design-system.css` có một chú thích như vậy.
+   `//` chỉ bỏ khi nó chiếm trọn dòng: `//` giữa dòng có thể là `https://`, và
+   bỏ nhầm ở đó lại giấu mất một định nghĩa thật. */
+const withoutComments = (text) =>
+  text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^[ \t]*\/\/.*$/gm, " ");
+
+const definedTokens = new Set();
+for (const file of sourceFiles) {
+  const text = withoutComments(readFileSync(file, "utf8"));
+  for (const match of text.matchAll(/(--[a-z0-9-]+)\s*:/gi)) definedTokens.add(match[1]);
+  for (const match of text.matchAll(/["'](--[a-z0-9-]+)["']\s*:/gi)) definedTokens.add(match[1]);
+}
+
+const missing = new Map();
+for (const file of sourceFiles) {
+  const text = withoutComments(readFileSync(file, "utf8"));
+  for (const match of text.matchAll(/var\(\s*(--[a-z0-9-]+)/gi)) {
+    const token = match[1];
+    /* `var(--x, fallback)` vẫn vẽ ra thứ gì đó nên không phải lỗi câm — bỏ qua.
+       Chỉ bắt lời gọi TRẦN, thứ biến cả khai báo thành vô hiệu. */
+    const after = text.slice(match.index + match[0].length);
+    if (/^\s*,/.test(after)) continue;
+    if (definedTokens.has(token)) continue;
+    const rel = file.slice(resolve(appDir, "..").length + 1);
+    if (!missing.has(token)) missing.set(token, new Set());
+    missing.get(token).add(rel);
+  }
+}
+
+assert.equal(
+  missing.size,
+  0,
+  `token CSS dùng mà không được định nghĩa (trình duyệt bỏ lặng lẽ):\n` +
+    [...missing.entries()]
+      .map(([token, files]) => `  ${token}  (${[...files].join(", ")})`)
+      .join("\n"),
+);
+console.log(`\u2713 css tokens: ${definedTokens.size} token khai báo · 0 lời gọi treo`);

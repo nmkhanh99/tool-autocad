@@ -9,6 +9,7 @@ import {
   listOpenDocs as defaultListOpenDocs,
   requestDrawingInfo as defaultRequestDrawingInfo,
   runHeadless as defaultRunHeadless,
+  nativeDocumentTarget,
   selectOpenDocument,
 } from "./acadBridge.js";
 import {
@@ -331,7 +332,15 @@ async function resolveDocument(
       ? "Không thấy bản vẽ đang mở khớp chính xác target"
       : "Không thấy bản vẽ active");
   }
-  const exactTarget = document.file || document.title;
+  /* `file || instance || title`: bản vẽ CHƯA LƯU không có đường dẫn, nên mã
+     phiên là thứ duy nhất chỉ đích danh được khi hai bản vẽ trùng tiêu đề.
+     Ở file này mọi chỗ dùng `exactTarget` đều là đường GỬI — `requestDrawingInfo`,
+     `dispatchLiveJob`, và header `TARGET` của native job — và cả ba đều kết thúc
+     ở `findDocExact()` của plugin, thứ đã nhận mã phiên. Không có chốt LISP nào
+     so với `DWGNAME`, cũng không có giá trị nào được LƯU LẠI: `TARGET` chỉ sống
+     trong một lượt job. Vì vậy ở đây một đích là đủ, không cần tách đôi như
+     `drawingStandards`. */
+  const exactTarget = nativeDocumentTarget(document);
   if (!exactTarget) throw new Error("Bản vẽ đích chưa có title/path");
   return { document, exactTarget };
 }

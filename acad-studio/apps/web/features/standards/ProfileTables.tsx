@@ -27,9 +27,11 @@ import {
   LINEWEIGHTS,
   LINEWEIGHT_NAMES,
   ROOM_KIND,
+  aciHex,
   isHexColor,
   layerRowErrors,
   mappingRowErrors,
+  type AciPalette,
   type LayerRule,
   type MappingRule,
 } from "./model";
@@ -41,12 +43,8 @@ import {
  * cạnh tên layer tệ hơn không có ô màu nào, vì người dùng dựa vào đúng nó để
  * tìm nhầm lẫn. Trả `null` để giao diện hiện số thay vì bịa màu.
  */
-export function aciColor(value: number): string | null {
-  const known: Record<number, string> = {
-    1: "#ff0000", 2: "#ffff00", 3: "#00ff00", 4: "#00ffff",
-    5: "#0000ff", 6: "#ff00ff", 7: "#ffffff", 8: "#808080", 9: "#c0c0c0",
-  };
-  return known[value] ?? null;
+export function aciColor(value: number, palette?: AciPalette | null): string | null {
+  return aciHex(value, palette);
 }
 
 function lineweightLabel(value: string | number): string {
@@ -125,8 +123,10 @@ function TagInput({ values, onChange, label, disabled, placeholder }: {
  * Chọn màu ACI
  * ------------------------------------------------------------------ */
 
-function AciPicker({ value, onChange, disabled }: {
+function AciPicker({ value, onChange, disabled, palette }: {
   value: string | number;
+  /** Bảng màu thật từ AutoCAD. Thiếu = plugin cũ, lùi về 9 màu có quy ước. */
+  palette: AciPalette | null;
   /* `string` là mã màu thật `#RRGGBB`. Khai cứng `number` ở đây từng là thứ chặn
      màu thật đi hết đường: `LayerRule.color` vốn đã nhận chuỗi, chỉ riêng ô chọn
      là không. */
@@ -140,11 +140,12 @@ function AciPicker({ value, onChange, disabled }: {
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const wrap = useRef<HTMLSpanElement>(null);
   const pop = useRef<HTMLDivElement>(null);
+  const colorInput = useRef<HTMLInputElement>(null);
   const numeric = typeof value === "number" ? value : Number(value);
   /* Màu thật đã là mã màu — tô thẳng, không đi qua bảng ACI. `Number("#FF8000")`
      là `NaN`, nên không chặn ở đây là ô màu bỏ trống đúng lúc đã biết chắc màu. */
   const hex = typeof value === "string" && isHexColor(value) ? value.trim() : null;
-  const swatch = hex ?? (Number.isFinite(numeric) ? aciColor(numeric) : null);
+  const swatch = hex ?? (Number.isFinite(numeric) ? aciColor(numeric, palette) : null);
 
   const open = () => {
     const box = wrap.current?.getBoundingClientRect();
@@ -168,7 +169,30 @@ function AciPicker({ value, onChange, disabled }: {
        đầu còn mở được nút, cụt đáy thì ô nhập chỉ số nằm ngoài màn hình. */
     const top = Math.max(8, above >= 8 ? above : at.top - overflow);
     if (Math.abs(top - at.top) > 1) setAt({ ...at, top });
-  }, [at]);
+    /* `palette` nằm trong deps vì bảng màu về LÀM POPOVER CAO THÊM — lưới 246 ô
+       xuất hiện. Mở một ô ở cuối bảng trước khi `/aci-palette` trả lời thì
+       popover giữ nguyên vị trí cũ và đẩy ô nhập ra ngoài màn hình. */
+  }, [at, palette]);
+
+  /* Ô chọn màu thật không có `key` (gắn lại giữa lúc kéo là cướp thao tác), nên
+     nó KHÔNG tự đọc lại `defaultValue`. Mở một ô ACI 10–255 trước khi bảng màu
+     về là nó khởi tạo bằng `#000000`; bảng về sau đó làm ô vuông và lưới hiện
+     đúng màu AutoCAD, còn ô chọn vẫn đen — lần chọn kế tiếp bắt đầu từ một màu
+     sai. Đồng bộ bằng ref, và CHỈ khi `palette` đổi: bảng màu không đổi giữa lúc
+     người dùng đang kéo, nên chỗ này không bao giờ chen vào một thao tác. */
+  useEffect(() => {
+    /* `swatch` rỗng nghĩa là app KHÔNG biết chỉ số này màu gì (bảng màu vừa bị
+       xoá vì đổi phiên, và chỉ số nằm ngoài 1–9). Để nguyên ô chọn ở màu cũ là
+       ô vuông bên ngoài nói "không biết" trong khi ô chọn vẫn mời người dùng
+       nhận một màu của phiên trước — và nhận là nó vào hồ sơ dưới dạng màu thật.
+       Trả về đen: một giá trị trung tính, không giả vờ biết. */
+    if (colorInput.current) colorInput.current.value = swatch ?? "#000000";
+    /* CHỈ `palette` trong deps. Thêm `swatch` vào là hiệu ứng chạy mỗi lần giá
+       trị đổi — tức mỗi khung hình trong lúc người dùng kéo con trỏ trên bảng
+       màu hệ thống — và ghi `.value` vào một ô đang được thao tác là thứ không
+       nên làm. Bảng màu không đổi giữa lúc kéo, nên `[palette]` là đúng cửa sổ
+       duy nhất cần đồng bộ. */
+  }, [palette]);
 
   useEffect(() => {
     if (!at) return;
@@ -213,16 +237,92 @@ function AciPicker({ value, onChange, disabled }: {
                 onClick={() => { onChange(item.value); setAt(null); }}
                 aria-pressed={numeric === item.value}>
                 <span className="aciswatch" style={{ border: 0, padding: 0, height: "auto" }}>
-                  <i style={{ background: aciColor(item.value) ?? "transparent" }} />
+                  <i style={{ background: aciColor(item.value, palette) ?? "transparent" }} />
                   {item.value} · {item.label}
                 </span>
               </Button>
             ))}
           </div>
+          {palette ? (
+            <>
+              <div className="pophead" style={{ marginTop: "var(--s3)" }}>
+                Toàn bảng ACI
+              </div>
+              {/* Xếp 10 CỘT vì đó là cấu trúc thật của bảng: chỉ số 10–249 là 24
+                  nhóm màu, mỗi nhóm 10 sắc độ. Mỗi hàng vì thế là một họ màu,
+                  chứ không phải một dãy số bị ngắt tuỳ tiện. */}
+              <div style={{
+                display: "grid", gridTemplateColumns: "repeat(10, 1fr)", gap: 2,
+                maxHeight: 176, overflowY: "auto",
+              }}>
+                {Array.from({ length: 246 }, (_, offset) => offset + 10).map((index) => {
+                  const swatchColor = aciColor(index, palette);
+                  if (!swatchColor) return null;
+                  return (
+                    <button key={index} type="button"
+                      title={`ACI ${index}`} aria-label={`Màu ACI ${index}`}
+                      aria-pressed={numeric === index}
+                      onClick={() => { onChange(index); setAt(null); }}
+                      style={{
+                        height: 16, padding: 0, cursor: "pointer",
+                        background: swatchColor,
+                        /* `--fg` và `--border`, KHÔNG phải `--ink`/`--line`:
+                           hai cái sau không tồn tại trong hệ thiết kế, và một
+                           khai báo màu không hợp lệ bị trình duyệt bỏ lặng lẽ —
+                           ô đang chọn trông y hệt ô không chọn. */
+                        border: numeric === index
+                          ? "2px solid var(--fg)"
+                          : "1px solid var(--border)",
+                      }} />
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            /* Chưa có bảng thì nói RÕ vì sao, thay vì để một khoảng trống không
+               giải thích được. Chỉ số ngoài 1–9 vẫn gõ được ở ô dưới. */
+            <p className="hint" style={{ margin: "var(--s3) 0 0" }}>
+              Chưa đọc được bảng màu ACI từ AutoCAD, nên chỉ 1–9 hiện được màu.
+              Build lại plugin AcadBridge rồi khởi động lại AutoCAD.
+            </p>
+          )}
+
+          <div className="pophead" style={{ marginTop: "var(--s3)" }}>Màu thật</div>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--s2)" }}>
+            {/* KHÔNG `key` ở ô này. `onChange` bắn liên tục trong lúc kéo, nên
+                `key` theo giá trị sẽ gắn lại ô ngay giữa lúc người dùng đang
+                chọn — mất focus, và bảng màu hệ thống ngừng gửi cập nhật sau
+                lần đầu. Chính ô này là nguồn thay đổi nên nó không cần đọc lại;
+                thứ cần đọc lại là ô SỐ ở dưới, và ô đó có `key`. */}
+            <input type="color" ref={colorInput} aria-label="Chọn màu thật"
+              style={{ width: 44, height: 28, padding: 0, border: 0, background: "none" }}
+              /* Ô màu của trình duyệt CHỈ hiểu `#rrggbb`. Giá trị hiện tại có thể
+                 là một chỉ số ACI, và chỉ 1–9 suy được ra mã màu — ngoài dải đó
+                 thì mở ra ở đen thay vì bịa một màu cho chỉ số app không biết. */
+              defaultValue={hex ?? (Number.isFinite(numeric) ? aciColor(numeric, palette) : null) ?? "#000000"}
+              /* `onChange` chứ KHÔNG `onBlur`. Trên macOS ô này mở một bảng màu
+                 của hệ thống, và blur bắn ngay lúc bảng đó nhận focus — tức nhận
+                 đúng giá trị BAN ĐẦU rồi đóng popover trước khi người dùng kịp
+                 chọn gì. `onChange` bắn liên tục trong lúc kéo, nhưng đây mới là
+                 thứ đúng: hồ sơ còn là bản nháp, không có lượt gọi máy chủ nào,
+                 và người dùng thấy màu đổi ngay trên bảng.
+                 KHÔNG đóng popover ở đây — đóng giữa lúc đang kéo là cướp mất
+                 thao tác. Người dùng đóng bằng cách bấm ra ngoài hoặc Esc. */
+              onChange={(event) => onChange(event.target.value.toUpperCase())} />
+            <span className="hint" style={{ margin: 0 }}>
+              Màu đổi ngay khi bạn chọn. Bấm ra ngoài để đóng.
+            </span>
+          </label>
+
           <div className="pophead" style={{ marginTop: "var(--s3)" }}>
-            Chỉ số khác, hoặc màu thật
+            Chỉ số khác, hoặc gõ mã màu
           </div>
-          <input className="input" defaultValue={String(value)}
+          {/* `key` theo giá trị: ô này dùng `defaultValue` nên chỉ đọc lúc GẮN.
+              Ô chọn màu thật ở trên đổi giá trị mà popover vẫn mở, và nếu ô này
+              không gắn lại thì Enter ở đây lặng lẽ trả về giá trị TRƯỚC ĐÓ —
+              người dùng thấy màu vừa chọn biến mất. Ô này không phải thứ đang
+              được kéo nên gắn lại không cướp thao tác nào. */}
+          <input className="input" key={String(value)} defaultValue={String(value)}
             aria-label="Chỉ số ACI hoặc mã màu #RRGGBB"
             onKeyDown={(event) => {
               if (event.key !== "Enter") return;
@@ -240,15 +340,22 @@ function AciPicker({ value, onChange, disabled }: {
             }} />
           <p className="hint" style={{ margin: "var(--s2) 0 0" }}>
             Số nguyên 0–256, hoặc mã màu thật <b>#RRGGBB</b> (đủ 6 chữ số). Enter
-            để nhận. Mã màu thật hiện đúng màu; trong dải ACI thì chỉ 1–9 hiện
-            được — chỉ số khác app không đoán màu, vì đoán sai còn tệ hơn để
-            trống.
+            để nhận.
             {/* Không CHẶN 0 và 256 — máy chủ nhận chúng. Nhưng `layerColor()` ép
                 cả hai về 7 lúc áp dụng (một layer không thể kế thừa màu từ chính
                 nó), nên im lặng ở đây là để người dùng đặt 256 rồi thấy layer
                 hoá trắng mà không hiểu vì sao. */}
             {" "}<b>0</b> và <b>256</b> lưu được nhưng khi áp dụng sẽ thành{" "}
             <b>7</b>: một layer không kế thừa màu từ chính nó.
+          </p>
+          {/* Nhiều bộ quy chuẩn bắt buộc dùng CHỈ SỐ ACI chứ không phải màu thật,
+              vì bảng nét in (CTB) ánh xạ bề dày theo chỉ số màu. Chọn màu thật ở
+              một hồ sơ như vậy là bản vẽ in ra khác đi — và chỗ đó không lộ ra
+              trên màn hình này. */}
+          <p className="hint" style={{ margin: "var(--s2) 0 0" }}>
+            Nếu nơi bạn làm dùng bảng nét in <b>CTB</b> (bề dày nét ánh xạ theo
+            chỉ số màu), hãy chọn theo <b>chỉ số ACI</b> — màu thật sẽ không khớp
+            bảng đó.
           </p>
         </div>
       ) : null}
@@ -260,10 +367,12 @@ function AciPicker({ value, onChange, disabled }: {
  * Bảng layer
  * ------------------------------------------------------------------ */
 
-export function LayerTable({ layers, onChange, disabled, onImport }: {
+export function LayerTable({ layers, onChange, disabled, onImport, palette }: {
   layers: readonly LayerRule[];
   onChange: (next: LayerRule[]) => void;
   disabled: boolean;
+  /** Bảng màu ACI thật từ AutoCAD; `null` khi chưa đọc được. */
+  palette: AciPalette | null;
   /** Mở hộp thoại nhập layer từ bản vẽ. `undefined` = không có bản vẽ nào đang
    * mở, và nút phải nói lý do chứ không chỉ mờ đi. */
   onImport?: () => void;
@@ -313,7 +422,7 @@ export function LayerTable({ layers, onChange, disabled, onImport }: {
                   {errors[index] ? <span className="cellerr">{errors[index]}</span> : null}
                 </td>
                 <td>
-                  <AciPicker value={layer.color} disabled={disabled}
+                  <AciPicker value={layer.color} disabled={disabled} palette={palette}
                     onChange={(color) => patch(index, { color })} />
                 </td>
                 <td>

@@ -1,5 +1,254 @@
 # CHANGELOG
 
+## 2026-08-13 — Bảng màu ACI thật, và ô chọn màu
+
+### Added — 256 màu ACI lấy từ chính AutoCAD
+
+Trước đây chỉ **9** chỉ số có màu; 10–255 hiện ra là con số trần, và đó là lý do
+ô chọn màu khó dùng. Đoán bằng công thức HSL cho ra màu sai, mà một ô màu sai
+cạnh tên layer tệ hơn không có ô nào — người dùng dựa vào đúng nó để tìm nhầm
+lẫn. Nên lấy bảng **thật**:
+
+- Plugin gọi `acedGetRGB()` và ghi `aci-palette.json` **một lần mỗi phiên**, ở
+  đúng đường **daemon chủ động hỏi danh sách bản vẽ**. Không phải lúc nạp plugin,
+  và cũng không phải trong `writeDocs()` nói chung: `acedGetRGB()` đọc bảng màu
+  của **trình soạn thảo**, còn `writeDocs()` cũng được gọi từ reactor
+  `documentCreated` — thứ bắn khi AutoCAD tạo bản vẽ đầu tiên **trong lượt khởi
+  động**, tức vẫn có thể sớm. Chỉ đường daemon hỏi mới chắc chắn AutoCAD đã chạy.
+  Và chỉ đánh dấu "đã ghi" khi ghi **thành công** — đặt cờ trong mọi trường hợp
+  là một lần ghi hỏng khoá luôn cả phiên.
+  Daemon vì thế phải **hỏi danh sách bản vẽ trước rồi mới đọc file** — chính lượt
+  hỏi đó làm plugin ghi bảng màu ra; đọc trước là lượt đầu sau mỗi lần khởi động
+  AutoCAD luôn trả 404.
+  `Adesk::ColorRef` là định dạng COLORREF `0x00bbggrr` — **R nằm ở byte thấp**,
+  đảo R/B là sinh ra đúng loại màu sai đang muốn tránh.
+- Daemon có `GET /api/acad/aci-palette` riêng. Không ghép vào `/docs` (bị hỏi
+  liên tục, nhét 256 mã màu tĩnh vào mỗi lượt là lãng phí) cũng không vào
+  `/drawing-info` (màn Hồ sơ không gắn bản vẽ nào nên không gọi nó bao giờ).
+- Web đọc **một lần**. Thiếu bảng = plugin bản cũ → lùi về 9 màu có quy ước, chỉ
+  số khác hiện bằng số. Đọc hỏng thì im lặng: không có bảng màu không chặn việc
+  gì cả.
+
+Kiểm **từng mục** chứ không chỉ kiểm mảng, ở cả daemon lẫn web. Một mục hỏng lọt
+qua là một ô màu sai — đúng thứ cả tính năng này dựng ra để tránh. Mục `0` phải
+rỗng: một mã màu ở đó nghĩa là bảng lệch chỉ số và **mọi** ô màu sau đó sai một
+bậc.
+
+### Added — ô chọn màu thật trong bảng layer
+
+- **Toàn bảng ACI**: lưới bấm chọn, xếp **10 cột** vì đó là cấu trúc thật của
+  bảng (chỉ số 10–249 là 24 nhóm màu × 10 sắc độ), nên mỗi hàng là một họ màu chứ
+  không phải một dãy số bị ngắt tuỳ tiện.
+- **Màu thật**: ô chọn màu của trình duyệt, cho ra `#RRGGBB`.
+- Vẫn giữ ô gõ chỉ số/mã màu cho ai cần một giá trị cụ thể.
+
+Ô chọn màu dùng `onChange` chứ **không** `onBlur`: trên macOS nó mở bảng màu của
+hệ thống, và blur bắn ngay lúc bảng đó nhận focus — tức nhận đúng giá trị BAN ĐẦU
+rồi đóng popover trước khi người dùng kịp chọn gì.
+
+**Cảnh báo CTB đã ghi thẳng vào giao diện**: nhiều bộ quy chuẩn bắt buộc dùng chỉ
+số ACI vì bảng nét in ánh xạ bề dày theo chỉ số màu. Chọn màu thật ở một hồ sơ
+như vậy là bản vẽ in ra khác đi, và chỗ đó không tự lộ ra trên màn hình.
+
+### Fixed — Codex review vòng hai của mục này
+
+- **[P2] Hai ô nhập trong bảng chọn màu không theo kịp nhau.** Cả hai dùng
+  `defaultValue`, tức chỉ đọc giá trị lúc gắn. Chọn một ô ở lưới rồi bấm Enter ở
+  ô số vẫn còn mở là **lặng lẽ trả về giá trị cũ** — người dùng thấy màu vừa chọn
+  biến mất. Nay `key` theo giá trị, nên chúng gắn lại khi giá trị đổi.
+- **[P2] Bảng màu cũ được phục vụ như thể của phiên hiện tại.** File nằm lại sau
+  khi AutoCAD thoát, nên hạ cấp plugin hoặc một lượt ghi thất bại là giao diện
+  hiện màu của phiên trước — rõ nhất ở ACI 7, vì màu của nó theo màu nền bản vẽ.
+  Nay plugin đóng dấu **mã phiên** vào cả bảng màu lẫn danh sách bản vẽ, và
+  daemon đòi hai bên **khớp** chứ không chỉ "có mặt".
+- **[P3] `var(--ink)` không tồn tại** — cùng với `var(--line)` ngay bên cạnh mà
+  Codex không nêu. Tên thật là `--fg` và `--border`. Khai báo màu không hợp lệ bị
+  trình duyệt bỏ lặng lẽ, nên ô đang chọn trông y hệt ô không chọn.
+
+### Added — guardrail cho token CSS treo
+
+`var(--x)` với `--x` không tồn tại là một khai báo **không hợp lệ**: trình duyệt
+bỏ nó, không cảnh báo, không lỗi. Hậu quả trông y hệt "quên viết CSS" nên nó sống
+sót qua review. Tôi đã mắc **hai lần** trong cùng một mục (`--danger`, rồi
+`--ink`/`--line`), cả hai lần đều chỉ lộ ra khi có người soi lại bằng mắt.
+
+`pnpm check:css` nay bắt luôn việc đó. Bộ quét phải gom định nghĩa từ **cả ba**
+nguồn hợp lệ — file `.css` bất kỳ (gồm `*.module.css`), token đặt inline trong
+TSX (`style={{ "--review-zoom": … }}`), và `var(--x, fallback)` — vì một script
+hay báo sai sẽ bị nới lỏng cho tới lúc vô dụng. Và phải **bỏ chú thích** trước
+khi tìm: chính `design-system.css` có một chú thích giải thích lỗi `var(--danger)`.
+
+Bắt được **một lỗi có sẵn**: `var(--r-2)` ở `/drawing-info` và `ApprovalDialog`
+— token không tồn tại, nên hai khối mã ở đó không hề được bo góc. Đổi sang
+`--r-sm`.
+
+### Fixed — Codex review vòng ba: trạng thái cũ sống sót qua lần nạp lại plugin
+
+- **[P2] `completeDocument()` đánh rơi `targetsInstance`.** Nó dựng lại đối tượng
+  bản vẽ theo từng trường, nên cờ năng lực biến mất và `nativeDocumentTarget()`
+  thấy `undefined` — tức "plugin không nhận mã phiên" — rồi lùi về tiêu đề. Hai
+  bản vẽ vừa được chọn ĐÚNG bằng mã phiên lại chết ở `target_ambiguous` ngay bước
+  sau. Đúng cái bẫy mà chú thích của `space` **ngay trong hàm đó** đã cảnh báo:
+  "chốt viết xong, verify xanh, nhưng nó không bao giờ chạy." Nay có test, và test
+  đã được kiểm là đỏ khi bỏ sửa ra.
+- **[P2] `/review` giữ mã phiên đã chết.** Nạp lại plugin trong lúc trang còn mở
+  là mọi bản vẽ chưa lưu nhận mã phiên mới; đích đang giữ không khớp mục nào và
+  nút quét bị chặn, không có gì nói vì sao. Nay đích phải TRỎ TỚI một bản vẽ còn
+  trong danh sách, không chỉ "khác rỗng" — nhưng chỉ đổi khi nó thật sự đã chết,
+  vì đổi mỗi lượt nạp sẽ cướp lựa chọn của người đang xem bản vẽ không active.
+- **[P2] Bảng màu không đọc lại khi phiên đổi.** Một lượt đọc duy nhất lúc gắn
+  sai ở hai đầu: mở trang TRƯỚC khi AutoCAD sẵn sàng thì không bao giờ có bảng
+  màu, còn nạp lại plugin thì bảng ở lại từ phiên trước. Nay đọc lại theo sự kiện
+  `pluginLoaded` và gửi `cache: "no-store"` — để trình duyệt đệm một tài nguyên
+  gắn với phiên là quay lại đúng vấn đề vừa sửa.
+
+### Fixed — Codex review vòng bốn
+
+- **[P2] `key` trên ô chọn màu thật là một hồi quy của chính bản sửa trước.**
+  `onChange` bắn liên tục trong lúc kéo, nên `key` theo giá trị gắn lại ô ngay
+  giữa lúc người dùng đang chọn — mất focus, và bảng màu hệ thống ngừng gửi cập
+  nhật sau lần đầu. Nay chỉ ô SỐ có `key` (nó cần đọc lại), còn ô chọn màu không
+  (nó là nguồn thay đổi, và nó là thứ đang được kéo).
+- **[P2] Đua tiến trình ở lượt đọc bảng màu ĐẦU TIÊN của mỗi phiên.** Daemon chờ
+  `docs.json` mới hơn lượt hỏi rồi mới đọc bảng màu, nhưng plugin ghi bảng màu
+  **sau** `docs.json` — nên có một khe: daemon thấy `docs.json` đã mới và đi đọc
+  một file chưa kịp ra đời, trả 404, và giao diện kẹt ở màu dự phòng cho tới một
+  sự kiện tình cờ nào đó. Sửa bằng **thứ tự** chứ không phải cơ chế thử lại: ghi
+  bảng màu **trước** `docs.json`, và khe đó biến mất.
+- **[P2] Popover không đo lại khi bảng màu về.** Lưới 246 ô làm nó cao thêm, mà
+  hiệu ứng lật chỉ chạy theo `at`. Mở một ô ở cuối bảng trước khi bảng màu trả
+  lời thì popover giữ nguyên vị trí và đẩy ô nhập ra ngoài màn hình.
+- **[P2] Ô chọn màu thật kẹt ở `#000000`.** Nó không có `key` (gắn lại giữa lúc
+  kéo là cướp thao tác) nên không tự đọc lại giá trị khởi tạo. Mở một ô ACI
+  10–255 trước khi bảng màu về là ô vuông và lưới hiện đúng màu AutoCAD còn ô
+  chọn vẫn đen — lần chọn kế tiếp bắt đầu từ một màu sai. Nay đồng bộ bằng ref,
+  và **chỉ** khi `palette` đổi: bảng màu không đổi giữa lúc kéo, nên chỗ này
+  không bao giờ chen vào một thao tác.
+- **[P2] Ghi bảng màu hỏng vẫn được tính là thành công.** Một lượt `fwrite` thiếu
+  (hết đĩa) vẫn `rename` được, và chỗ gọi đặt cờ "đã ghi" rồi bỏ qua mọi lần thử
+  lại — **cả phiên** kẹt với một bảng màu cụt. Nay kiểm cả `fwrite` lẫn `fclose`
+  (nơi dữ liệu trong bộ đệm thực sự chạm đĩa) và xoá file tạm khi hỏng.
+- **[P2] Guardrail token CSS tự chọc thủng chính nó.** Nó bỏ chú thích ở lượt tìm
+  *chỗ dùng* nhưng **không** ở lượt gom *định nghĩa*, nên một `--foo:` nằm trong
+  chú thích được tính là đã khai báo và `var(--foo)` thật đi qua trong im lặng.
+  Nay bỏ chú thích ở cả hai lượt. `//` chỉ bỏ khi chiếm trọn dòng — `//` giữa
+  dòng có thể là `https://`, và bỏ nhầm ở đó lại giấu mất một định nghĩa thật.
+- **[P2] Ân hạn 50ms của `listOpenDocs()` để lại một khe hẹp.** Thứ tự ghi trong
+  plugin đóng được khe chính, nhưng một `docs.json` viết ngay trước lượt hỏi vẫn
+  được nhận và có thể là của lượt trước. Nay thử lại **một lần** — đủ, vì lượt
+  hỏi đầu đã kích plugin ghi.
+- **[P3] Ô chọn màu giữ màu cũ khi bảng màu bị xoá.** Ô vuông bên ngoài nói
+  "không biết" trong khi ô chọn vẫn mời nhận một màu của phiên trước — và nhận là
+  nó vào hồ sơ dưới dạng màu thật. Nay trả về đen: trung tính, không giả vờ biết.
+- **[P2] Bảng màu cũ còn hiện trong lúc đọc lại.** `pluginLoaded` khởi động một
+  lượt đọc mới, nhưng bảng của phiên trước vẫn nằm trên màn hình cho tới khi
+  phản hồi về — mà lượt đọc đó hỏi plugin nên có thể mất vài giây. Người dùng kịp
+  chọn một ô màu cũ rồi lưu hồ sơ. Nay xoá NGAY khi bắt đầu đọc lại: mất bảng màu
+  vài giây chỉ làm chỉ số hiện bằng số, còn chọn nhầm màu thì đi vào hồ sơ.
+- **[P2] Đọc bảng màu hỏng thì giữ nguyên bảng cũ.** Tức hiện màu của phiên
+  AutoCAD trước như thể của phiên này — đúng thứ mã phiên phía máy chủ vừa dựng
+  ra để chặn. Chặn ở máy chủ rồi lại tự bịa lại ở client thì vô nghĩa. Nay xoá.
+- **[P2] Chốt Sửa không phân biệt được hai bản vẽ chưa lưu trùng tiêu đề.** Quét
+  bản vẽ A rồi chuyển AutoCAD sang B vẫn thấy nút Sửa BẬT, và người dùng chỉ biết
+  mình sai khi máy chủ từ chối. Nay `/standards/scan` phát `documentInstance` và
+  chốt so bằng nó; thiếu định danh ở bất kỳ vế nào thì lùi về so tên — kém hơn,
+  nhưng không được vì thiếu một trường mới mà bỏ luôn chốt cũ.
+
+**Một lỗ hổng kiểu lộ ra khi làm mục trên**: `OpenDocument` của `drawingStandards`
+khai đúng ba trường, trong khi code ở đó thật sự đọc `instance` và
+`targetsInstance` qua `nativeDocumentTarget()` — hàm nhận mọi trường ở dạng tuỳ
+chọn nên nó qua typecheck trong im lặng. Kiểu hẹp hơn dữ liệu thật thì hệ kiểu
+không còn nói cho ai biết chỗ nào phụ thuộc vào cái gì. Đã nới.
+
+### Fixed — bản sao thứ ba và thứ tư của phép tìm bản vẽ
+
+Codex review bắt được `mepraw.cpp::findExactRawDocument` chỉ khớp title/file, nên
+**mọi** yêu cầu selection chết ở đó trước khi tới được hai chỗ đã sửa. Truy tiếp
+thì còn `findDocByName` — bản thứ tư. Đã sửa cả hai.
+
+Đây mới là vấn đề gốc: **bốn bản sao** của cùng một phép tìm bản vẽ, và sửa ba
+bản thì bản còn lại im lặng từ chối.
+
+### Technical
+
+- `aciColor()` của `ProfileTables` nay chỉ là lớp mỏng gọi `aciHex()` ở `model.ts`
+  — nằm trong component thì không khoá được bằng test.
+- Hai mã lỗi mới (`palette_unavailable`, `palette_invalid`) có entry trong
+  `guards.ts`; `pnpm check:guards` bắt đúng lúc còn thiếu.
+- `pnpm verify`: **180 test**, 10 guardrail, exit 0.
+
+## 2026-08-13 — Layer đang tắt, và mã phiên đi hết đường
+
+### Fixed — đặt màu ACI không còn BẬT lại layer đang tắt
+
+`acadstd:ensure-layer` ghi màu bằng `subst` một số **dương** vào DXF group 62.
+Dấu âm của group 62 nghĩa là layer đang **TẮT** — một trạng thái người dùng đặt,
+và hồ sơ tiêu chuẩn không có cột nào để ghi đè lên nó. Áp hồ sơ màu sắc vì thế
+làm hiện ra thứ họ đã cố ý tắt, trên đường ghi một pha không hoàn tác được.
+
+Nay giữ nguyên dấu. Đường màu thật đã đúng sẵn vì nó không đụng tới 62.
+
+**Chưa kiểm được bằng test hành vi**: dự án không có harness chạy AutoLISP. Chỗ
+này khoá bằng một bất biến **văn bản** trên chương trình phát đi — nó chỉ chặn
+việc ai đó "đơn giản hoá" lại, không chứng minh hành vi. Kiểm thật phải làm trên
+AutoCAD.
+
+### Added — `blockLibraryRouter`, `cadSelection` và quét/áp nhận mã phiên
+
+Ba đường này vẫn dựng đích bằng `file || title`, nên bản vẽ chưa lưu trùng tiêu
+đề không dùng được ở đó. Nay:
+
+- `blockLibraryRouter` và `cadSelection` dùng `nativeDocumentTarget()`. Ở hai file
+  này **mọi** chỗ dùng đích đều là đường GỬI, và cả ba đường (`requestDrawingInfo`,
+  `dispatchLiveJob`, header `TARGET` của native job) đều kết thúc ở `findDocExact`.
+  `TARGET` chỉ sống trong một lượt job, không được lưu lại — mã phiên chỉ có
+  nghĩa trong một phiên AutoCAD nên lưu nó xuống đĩa sẽ là một lỗi khác.
+- `drawingStandards` phải TÁCH ĐÔI: `nativeTarget` để gửi, `exactTarget` giữ
+  nguyên cho `documentGuardLisp()` — chốt cuối cùng chạy bên trong AutoCAD, so
+  với `DWGNAME`, mà LISP không biết mã phiên là gì — và cho `session.exactTarget`.
+- `selection_control.cpp` nhận mã phiên làm `exactTarget`. Không nới lỏng chốt
+  nào: `documentInstance` vẫn phải khớp ngay bên dưới, và đó là phép kiểm **chặt
+  hơn** so tiêu đề.
+- `/review` gửi `sendTarget()` nhưng vẫn SO bằng `targetOf()`.
+
+**Chỗ suýt hỏng, bắt được khi tự soát:** `applyBlockedReason` so cả `target` lẫn
+`activeTarget` với `scan.target`. Daemon đặt `scan.target` bằng `file || title`
+của bản vẽ nó giải quyết được, bất kể ta gửi đích nào — nên đưa mã phiên vào hai
+trường đó là chặn **vĩnh viễn** mọi bản vẽ chưa lưu: phép so không bao giờ khớp
+và nút sửa không bao giờ bật. Đúng dạng lỗi đã lặp lại bốn vòng review ở phía
+daemon, lần này ở phía web. Đã tách và khoá bằng test.
+
+### Fixed — Codex review: bốn chỗ mã phiên chưa đi hết đường
+
+- **[P1] Phiên quét chỉ lưu `exactTarget`.** Lượt áp tìm lại bản vẽ bằng nó, mà
+  hai bản vẽ chưa lưu trùng tiêu đề cho ra cùng một giá trị — chết ở
+  `target_ambiguous`, tức **quét được mà không sửa được**. Nay lưu thêm
+  `nativeTarget` và tra bằng nó; phép SO vẫn dùng `exactTarget` vì đó là câu hỏi
+  khác ("vẫn đúng bản vẽ của lượt quét chứ?").
+- **[P1] Hai chỗ GỬI còn sót**: `requestDrawingInfo` sau lượt quét, và
+  `dispatchLiveJob` của `/action`. Tôi đổi một số chỗ và quên hai chỗ — đúng dạng
+  lỗi "sửa một tầng" đã lặp lại.
+- **`latestFrame()` tra phiên quét bằng `target`** mà `/review` nay gửi mã phiên,
+  nên lượt quét trước đó tồn tại mà không ai tìm thấy. Nay tra được bằng cả ba
+  cách gọi tên.
+- **[P2] `cadSelection` có bản CHÉP TAY của phép khớp bản vẽ** — chỉ khớp `file`
+  rồi `title`. `selectOpenDocument` học thêm nhánh mã phiên thì bản chép ở lại
+  phía sau, và khách gửi mã phiên nhận `target_not_found`. Nay gọi thẳng
+  `selectOpenDocument`: một phép khớp, một chỗ định nghĩa.
+- **[P2] Cờ năng lực bị bỏ qua ở phía daemon.** `nativeDocumentTarget()` gửi mã
+  phiên cho cả plugin cũ, làm hỏng thứ đang chạy — bản vẽ chưa lưu tiêu đề duy
+  nhất trước đây đọc được. Nay phép kiểm `targetsInstance` nằm **ngay trong hàm
+  đó**, không ở từng chỗ gọi: đặt ở chỗ gọi là mời mỗi chỗ quên một kiểu.
+
+### Technical — giới hạn còn lại của chốt LISP
+
+Với hai bản vẽ chưa lưu trùng tiêu đề, `documentGuardLisp()` **không phân biệt
+được chúng** — nó chỉ có `DWGNAME`. Nhưng plugin định tuyến job bằng mã phiên qua
+`resolveTarget()` → `findDocExact()`, một phép giải quyết chính xác chạy bên
+trong AutoCAD lúc job thật sự chạy. Nên tổng thể không yếu đi: định tuyến chặt
+hơn, còn chốt LISP giữ nguyên vai trò chặn trường hợp một bản vẽ hoàn toàn khác
+đang hoạt động.
+
 ## 2026-08-13 — Ba ca biên của đường nhập layer
 
 Ba mục nợ kỹ thuật ghi lại sau mục 1.1. Cả ba đụng plugin ObjectARX nên

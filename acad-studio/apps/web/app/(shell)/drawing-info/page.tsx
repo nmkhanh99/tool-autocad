@@ -856,7 +856,7 @@ export default function DrawingInfoPage() {
                       lineHeight: 1.55,
                       padding: "var(--s3)",
                       border: "1px solid var(--border)",
-                      borderRadius: "var(--r-2)",
+                      borderRadius: "var(--r-sm)",
                       background: "var(--bg)",
                       whiteSpace: "pre",
                     }}

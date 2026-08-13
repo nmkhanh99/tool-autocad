@@ -295,6 +295,45 @@ assert.equal(catalogScopeParams.catalogScopeSelectedAll, 0);
   assert.equal(test.calls[0].exactTarget, drawing.file);
 }
 
+/* Bản vẽ CHƯA LƯU trùng tiêu đề: đích gửi đi phải là MÃ PHIÊN.
+   `completeDocument()` dựng lại đối tượng bản vẽ theo từng trường, nên quên chép
+   `targetsInstance` là `nativeDocumentTarget()` thấy `undefined` — tức "plugin
+   không nhận mã phiên" — và lùi về tiêu đề. Hai bản vẽ vừa được chọn ĐÚNG bằng
+   mã phiên lại chết ở `target_ambiguous` ngay bước sau: chốt viết xong, verify
+   xanh, mà cả đường vẫn hỏng. Đúng cái bẫy chú thích của `space` đã cảnh báo. */
+{
+  const unsavedA = {
+    title: "Drawing1.dwg", file: "", active: true,
+    instance: "DOC-AAAA", revision: 3, targetsInstance: true,
+  };
+  const unsavedB = { ...unsavedA, active: false, instance: "DOC-BBBB" };
+  const test = harness({
+    documents: [unsavedA, unsavedB],
+    snapshot: snapshot({ instance: unsavedA.instance, revision: unsavedA.revision }),
+  });
+  const current = await invoke(test.router, "GET", "/current", {
+    query: { target: unsavedA.instance },
+  });
+  assert.equal(current.status, 200, JSON.stringify(current.payload));
+  assert.equal(
+    test.calls[0].exactTarget,
+    unsavedA.instance,
+    "đích gửi đi phải là mã phiên, không phải tiêu đề trùng",
+  );
+
+  /* Không có cờ năng lực = plugin bản cũ: phải lùi về tiêu đề, vì gửi mã phiên
+     cho nó là nhận `not_found`. */
+  const legacy = harness({
+    documents: [{ ...unsavedA, targetsInstance: undefined }],
+    snapshot: snapshot({ instance: unsavedA.instance, revision: unsavedA.revision }),
+  });
+  const legacyCurrent = await invoke(legacy.router, "GET", "/current", {
+    query: { target: "Drawing1.dwg" },
+  });
+  assert.equal(legacyCurrent.status, 200, JSON.stringify(legacyCurrent.payload));
+  assert.equal(legacy.calls[0].exactTarget, "Drawing1.dwg");
+}
+
 // Prepare/reject activate is server-only; a confirmed apply invokes native once.
 {
   const test = harness();

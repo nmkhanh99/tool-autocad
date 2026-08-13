@@ -805,10 +805,104 @@ hồ" đo trên `open.docs`, một ảnh chụp đã cũ. Đóng một bản v�
 trùng tiêu đề trong khoảng đó là lượt lùi đọc bản vẽ khác. Vì vậy phản hồi phải
 mang đúng `instance` đã chọn, không thì bỏ lượt lùi.
 
-**Các route KHÁC vẫn chưa nhận mã phiên**: `blockLibraryRouter`, `cadSelection` và
-đường quét/áp của `drawingStandards` đều dựng `exactTarget` theo lối cũ. Bản vẽ
-chưa lưu trùng tiêu đề vẫn không dùng được ở đó. Giới hạn có sẵn, không mở rộng
-trong mục này.
+**Các route khác cũng nhận mã phiên (2026-08-13)**, nhưng theo hai khuôn khác nhau
+tuỳ vào việc đích có bị SO hay LƯU ở đâu không:
+
+- `blockLibraryRouter`, `cadSelection`: **một** đích. Mọi chỗ dùng đều là đường
+  gửi, và cả ba (`requestDrawingInfo`, `dispatchLiveJob`, header `TARGET` của
+  native job) đều kết thúc ở `findDocExact`. `TARGET` chỉ sống trong một lượt
+  job — mã phiên chỉ có nghĩa trong một phiên AutoCAD, nên lưu nó xuống đĩa sẽ
+  là một lỗi khác.
+- `drawingStandards`: **hai** đích. `nativeTarget` để gửi; `exactTarget` giữ
+  `file || title` cho `documentGuardLisp()` và `session.exactTarget`.
+- `selection_control.cpp` nhận mã phiên làm `exactTarget`, và `documentInstance`
+  vẫn phải khớp ngay bên dưới — phép kiểm chặt hơn hẳn so tiêu đề.
+
+`/standards/scan` phát `documentInstance` — **định danh** bản vẽ đã quét, không
+phải tên nó. Chốt "bản vẽ đã quét có đang hoạt động không" ở phía client phải so
+bằng nó: `target` là `file || title`, mà hai bản vẽ chưa lưu trùng tiêu đề cho ra
+cùng một giá trị, nên so bằng tên sẽ bật nút Sửa cho bản vẽ SAI rồi để máy chủ từ
+chối. Thiếu định danh ở bất kỳ vế nào thì lùi về so tên.
+
+**Phía web cũng có đúng cặp đó**: `/review` gửi `sendTarget()` nhưng SO bằng
+`targetOf()`. `applyBlockedReason` đòi CẢ HAI trường đích ở dạng `targetOf()`, vì
+cả hai chỉ dùng để so với `scan.target` — thứ daemon đặt bằng `file || title` của
+bản vẽ nó giải quyết được, bất kể ta gửi đích nào. Trộn hai dạng là chặn vĩnh
+viễn mọi bản vẽ chưa lưu.
+
+`ScanSession` lưu **cả hai**: `exactTarget` để so, `nativeTarget` để tìm lại bản
+vẽ lúc áp. Thiếu cái sau là hai bản vẽ chưa lưu trùng tiêu đề quét được mà không
+sửa được. `latestFrame()` tra được bằng cả ba cách gọi tên (`target`,
+`exactTarget`, `nativeTarget`) vì khách gửi cách nào cũng phải tìm ra.
+
+Cờ `targetsInstance` được kiểm **bên trong `nativeDocumentTarget()`**, không ở
+từng chỗ gọi — đặt ở chỗ gọi là mời mỗi chỗ quên một kiểu. Cùng lý do,
+`cadSelection` gọi thẳng `selectOpenDocument` thay vì giữ bản chép tay của phép
+khớp: bản chép đứng yên trong khi bản gốc học thêm nhánh mới.
+
+**Giới hạn còn lại**: với hai bản vẽ chưa lưu trùng tiêu đề, `documentGuardLisp()`
+không phân biệt được chúng — nó chỉ có `DWGNAME`. Bù lại, plugin định tuyến job
+bằng mã phiên qua `resolveTarget()` → `findDocExact()`, chạy bên trong AutoCAD
+đúng lúc job chạy. Tổng thể không yếu đi.
+
+#### Bảng màu ACI lấy từ AutoCAD, không đoán
+
+Chỉ số ACI 1–9 có quy ước cố định; từ 10 trở đi là bảng tra do AutoCAD định
+nghĩa. Đoán bằng công thức cho ra màu sai, mà một ô màu sai cạnh tên layer tệ hơn
+không có ô nào. Vì vậy plugin gọi `acedGetRGB()` và ghi
+`~/Acad-Bridge/aci-palette.json`; daemon phục vụ nó ở `GET /api/acad/aci-palette`.
+
+**Thời điểm ghi**: ở đúng nhánh xử lý `docs.req` — tức khi **daemon chủ động
+hỏi**. Không phải lúc nạp plugin (`kInitAppMsg` chạy trước khi trình soạn thảo
+dựng xong, mà `acedGetRGB()` đọc bảng màu của trình soạn thảo), và cũng không
+phải trong `writeDocs()` nói chung: hàm đó còn được gọi từ reactor
+`documentCreated`, thứ bắn khi AutoCAD tạo bản vẽ đầu tiên trong lượt khởi động.
+Cờ "đã ghi" chỉ đặt khi ghi **thành công**, vì đặt trong mọi trường hợp là một
+lần ghi hỏng khoá luôn cả phiên.
+
+Hệ quả cho daemon: endpoint phải **gọi `listOpenDocs()` trước rồi mới đọc file** —
+chính lượt hỏi đó làm plugin ghi ra bảng màu, nên đọc trước là lượt đầu sau mỗi
+lần khởi động AutoCAD luôn trả 404.
+
+Và trong plugin, bảng màu ghi **trước** `docs.json`. Thứ tự đó là chốt: daemon chờ
+`docs.json` mới hơn lượt hỏi, nên ghi bảng màu sau sẽ để lại một khe trong đó
+daemon thấy `docs.json` đã mới mà bảng màu chưa ra đời. Đổi thứ tự làm khe biến
+mất — không cần cơ chế thử lại nào.
+
+`Adesk::ColorRef` là định dạng COLORREF của Win32 — `0x00bbggrr`, **R ở byte
+thấp**. Đảo R/B là sinh ra đúng loại màu sai mà cả tính năng này dựng ra để tránh
+(đối chiếu `adesk.h` dòng 126).
+
+Đường riêng chứ không ghép: `/docs` bị hỏi liên tục nên nhét 256 mã màu tĩnh vào
+mỗi lượt là lãng phí, còn `/drawing-info` thì màn Hồ sơ **không gọi bao giờ** vì
+nó không gắn với bản vẽ nào.
+
+`readAciPalette()` kiểm **từng mục**, không chỉ kiểm mảng — một mục hỏng lọt qua
+là một ô màu sai. Mục `0` phải rỗng: ByBlock không phải một màu, và một mã màu ở
+đó nghĩa là bảng lệch chỉ số nên mọi ô sau đó sai một bậc. Thiếu bảng thì
+`aciHex()` lùi về 9 màu có quy ước, ngoài dải đó trả `null` để giao diện hiện số.
+
+File này **nằm lại** sau khi AutoCAD thoát, nên nó phải mang **mã phiên**: plugin
+đóng dấu `session` vào cả bảng màu lẫn danh sách bản vẽ, và daemon đòi hai bên
+KHỚP chứ không chỉ "có mặt". Thiếu chốt đó thì hạ cấp plugin, hoặc một lượt ghi
+thất bại, là giao diện hiện bảng màu của phiên trước như thể của phiên này.
+
+Ngoại lệ đã biết: `acedGetRGB(7)` trả trắng trên nền tối và đen trên nền sáng.
+Đổi màu nền AutoCAD **trong cùng một phiên** thì file này cũ — chấp nhận được, vì
+nó chỉ ảnh hưởng đúng một ô màu; đổi giữa hai phiên thì mã phiên đã chặn.
+
+#### `pnpm check:css` bắt cả token treo
+
+`var(--x)` với `--x` không tồn tại là khai báo **không hợp lệ** — trình duyệt bỏ
+lặng lẽ, không cảnh báo. Hậu quả trông y hệt "quên viết CSS", nên nó sống sót qua
+review; đã mắc hai lần trong một mục.
+
+Bộ quét gom định nghĩa từ **cả ba** nguồn hợp lệ: file `.css` bất kỳ (gồm
+`*.module.css` tự khai token riêng), token đặt inline trong TSX
+(`style={{ "--review-zoom": … }}`), và bỏ qua `var(--x, fallback)` vì fallback vẫn
+vẽ ra thứ gì đó. Bỏ sót một nguồn là script báo sai, và một script hay báo sai sẽ
+bị nới lỏng cho tới lúc vô dụng. Nó cũng **bỏ chú thích** trước khi tìm — chính
+`design-system.css` có một chú thích giải thích lỗi `var(--danger)`.
 
 #### Màu layer: ACI, hay `#RRGGBB` ghi vào DXF group 420
 
@@ -816,6 +910,16 @@ trong mục này.
 hoặc mã màu thật `#RRGGBB` (đúng **6** chữ số hex — `#abc` là cú pháp CSS chứ
 không phải cú pháp DXF, và đoán nó thành `#aabbcc` là tự chọn thay người dùng một
 màu họ không gõ).
+
+**Đặt màu ACI phải GIỮ DẤU của group 62.** Dấu âm nghĩa là layer đang **tắt** —
+trạng thái người dùng đặt, mà hồ sơ tiêu chuẩn không có cột nào để ghi đè lên.
+`subst` thẳng một số dương vào đó sẽ bật layer lên, tức áp hồ sơ màu sắc làm hiện
+ra thứ họ đã cố ý tắt, trên đường ghi một pha không hoàn tác được. Đường màu thật
+không mắc lỗi này vì nó không đụng tới 62.
+
+Không có harness chạy AutoLISP, nên chỗ này chỉ khoá được bằng một bất biến **văn
+bản** trên chương trình phát đi (`test-drawing-standards.mjs`) — nó chặn việc
+"đơn giản hoá" lại, không chứng minh hành vi.
 
 Quy tắc của AutoCAD chi phối cả đường ghi: **group 420 có mặt thì nó thắng group
 62.** Hai chiều, và bỏ sót chiều nào cũng là một lượt áp dụng báo thành công mà

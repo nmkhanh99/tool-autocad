@@ -337,7 +337,15 @@ static bool currentExactDocument(const Request& request, AcApDocument*& document
     }
     const std::string title = toUtf8(active->docTitle());
     const std::string file = toUtf8(active->fileName());
-    if (title != request.exactTarget && file != request.exactTarget) {
+    // Ma phien cung la mot dich hop le. Can no cho BAN VE CHUA LUU: chung khong
+    // co duong dan, nen tieu de la thu duy nhat con lai — va hai ban ve chua luu
+    // trung tieu de thi khong cach nao chi dich danh.
+    //
+    // Khong noi long chot nao ca: ngay ben duoi, `documentInstance` van phai
+    // khop, va do la phep kiem CHAT HON so tieu de — ma phien la duy nhat, tieu
+    // de thi khong.
+    if (title != request.exactTarget && file != request.exactTarget
+        && acadDocumentInstanceToken(active) != request.exactTarget) {
         error = "active/current document no longer matches exactTarget";
         return false;
     }

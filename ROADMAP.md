@@ -413,8 +413,10 @@ route, như `blocks.module.css` vừa làm.
     Codex review bắt được một tầng nữa: `GET /drawing-info` dựng lại đích bằng
     `file || title` sau khi đã chọn đúng bản vẽ, nên cả đường vẫn hỏng ở bước kế.
     Nay có `nativeDocumentTarget()`. **Các route khác** (`blockLibraryRouter`,
-    `cadSelection`, đường quét/áp của `drawingStandards`) vẫn chưa nhận mã phiên —
-    giới hạn có sẵn, ghi ra để không mất dấu.
+    `cadSelection`, đường quét/áp của `drawingStandards`) cũng đã nhận mã phiên
+    (2026-08-13). Còn lại: `documentGuardLisp()` không phân biệt được hai bản vẽ
+    chưa lưu trùng tiêu đề vì nó chỉ có `DWGNAME` — bù lại plugin định tuyến job
+    bằng mã phiên, nên tổng thể không yếu đi.
   - ~~Layer **màu thật** không nhập được.~~ **Xong.** Hồ sơ nhận `#RRGGBB`, đường áp
     dụng ghi DXF **group 420**. Ba điểm phải đúng cùng lúc: (a) plugin phát thêm
     `colorMethod` vì màu thật ĐEN TUYỀN cũng là `rgb: [0,0,0]` nên không đoán được

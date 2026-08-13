@@ -300,6 +300,17 @@ std::string readAll(const std::string& p) {
 
 static std::string gEventsPath;
 
+static std::string gAciPalettePath;
+
+// Ma PHIEN cua lan nap plugin nay. Lay tu `gDocumentNonce` — thu da duy nhat
+// theo phien va da dung lam tien to cho ma phien tai lieu.
+static std::string sessionToken() {
+    char token[32] = {};
+    snprintf(token, sizeof token, "%016llX",
+             static_cast<unsigned long long>(gDocumentNonce));
+    return std::string(token);
+}
+
 static void initPaths() {
     const char* home = std::getenv("HOME");
     std::string primary = std::string(home ? home : "/tmp") + "/Acad-Bridge";
@@ -329,6 +340,7 @@ static void initPaths() {
     gNativePath     = gBridgeDir + "/native.job";    // job C++ thuan (bang tab), khong LISP
     gNativeDonePath = gBridgeDir + "/native.done";   // plugin ghi so entity da tao
     gSelReqPath     = gBridgeDir + "/select.req";     // "<target>|<layer>" -> highlight + zoom
+    gAciPalettePath = gBridgeDir + "/aci-palette.json";
     gDrawingInfoReqPath = gBridgeDir + "/drawing-info.req";
     gGeomReqPath        = gBridgeDir + "/geometry.req";
     gGeomPath           = gBridgeDir + "/geometry.json";
@@ -368,7 +380,7 @@ std::string currentSpaceName(AcDbDatabase* db);
 static void writeDocs() {
     if (acDocManager == nullptr) return;
     AcApDocument* pActive = acDocManager->mdiActiveDocument();
-    std::string json = "{\"docs\":[";
+    std::string json = "{\"session\":\"" + sessionToken() + "\",\"docs\":[";
     bool first = true;
     AcApDocumentIterator* it = acDocManager->newAcApDocumentIterator();
     if (it) {
@@ -445,6 +457,62 @@ static void writeDocs() {
     rename(tmp.c_str(), gDocsPath.c_str());
 }
 
+// ============================ bang mau ACI ============================
+//
+// Chi so ACI 1-9 co quy uoc co dinh; tu 10 tro di la mot bang tra do AutoCAD
+// dinh nghia. DOAN no bang cong thuc HSL cho ra mau SAI, ma mot o mau sai canh
+// ten layer te hon khong co o mau nao — nguoi dung dua vao dung no de tim nham
+// lan. Vi vay lay bang THAT tu chinh AutoCAD.
+//
+// Ghi MOT LAN luc nap: bang nay tinh trong ca phien. Ngoai le duy nhat la mau
+// nen ban ve: `acedGetRGB(7)` tra trang tren nen toi va den tren nen sang. Doi
+// mau nen giua phien thi file nay cu — chap nhan duoc, vi no chi anh huong dung
+// mot o mau tren giao dien.
+static bool writeAciPalette() {
+    if (gAciPalettePath.empty()) return false;
+    // `Adesk::ColorRef` la dinh dang COLORREF cua Win32: 0x00bbggrr. R nam o
+    // byte THAP. Dao R va B o day la sinh ra dung loai mau sai ma ca ham nay
+    // dung ra de tranh. Da doi chieu voi adesk.h dong 126.
+    // Dong dau ma phien vao file. File nay NAM LAI sau khi AutoCAD thoat, nen
+    // khong co no thi daemon phuc vu mot bang mau CU nhu the no cua phien hien
+    // tai — dung luc nguoi dung ha cap plugin, hoac luot ghi sau that bai. Sai
+    // ro nhat la ACI 7: no theo mau nen ban ve.
+    std::string json = "{\"version\":1,\"session\":\"" + sessionToken() + "\",\"colors\":[";
+    for (int index = 0; index <= 255; ++index) {
+        if (index) json += ",";
+        if (index == 0) { json += "\"\""; continue; }  // 0 = ByBlock, khong phai mot mau
+        const Adesk::ColorRef cref = acedGetRGB(index);
+        char hex[10];
+        snprintf(hex, sizeof(hex), "#%02X%02X%02X",
+                 (unsigned)(cref & 0xFF),
+                 (unsigned)((cref >> 8) & 0xFF),
+                 (unsigned)((cref >> 16) & 0xFF));
+        json += "\"";
+        json += hex;
+        json += "\"";
+    }
+    json += "]}";
+    // Kiem CA `fwrite` lan `fclose`. Mot luot ghi thieu (het dia) van `rename`
+    // thanh cong, va cho goi se dat co "da ghi" roi bo qua moi lan thu lai —
+    // ca phien ket voi mot bang mau CUT. Doc phia daemon se bat duoc no
+    // (`palette_invalid`), nhung luc do khong con ai ghi lai nua.
+    // `fclose` cung phai kiem: no la cho du lieu trong bo dem thuc su cham dia.
+    const std::string tmp = gAciPalettePath + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "wb");
+    if (!f) return false;
+    const size_t written = fwrite(json.data(), 1, json.size(), f);
+    const bool closed = fclose(f) == 0;
+    if (written != json.size() || !closed) {
+        unlink(tmp.c_str());
+        return false;
+    }
+    if (rename(tmp.c_str(), gAciPalettePath.c_str()) != 0) {
+        unlink(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
 // ============================ tim ban ve theo title/fileName chinh xac ============================
 AcApDocument* findDocByName(const std::string& want) {
     if (acDocManager == nullptr) return nullptr;
@@ -459,7 +527,12 @@ AcApDocument* findDocByName(const std::string& want) {
             if (!d) continue;
             std::string title = toUtf8(d->docTitle());
             std::string file  = toUtf8(d->fileName());
-            if (title == want || file == want) {
+            // Ma phien cung la mot dich hop le, GIONG `findDocExact` va
+            // `findExactRawDocument`. Day la ban thu TU cua cung mot phep tim.
+            // De sot mot ban lai chinh la cach vong review nay sinh ra: sua ba
+            // cho, con mot cho im lang tu choi.
+            if (title == want || file == want
+                || acadDocumentInstanceToken(d) == want) {
                 if (hit) {
                     hit = nullptr;
                     break;
@@ -3754,6 +3827,29 @@ static void fsCallback(ConstFSEventStreamRef, void*, size_t, void*,
     }
     if (stat(gReqPath.c_str(), &st) == 0 && tsChanged(st.st_mtimespec, gReqMtime)) {
         gReqMtime = st.st_mtimespec;
+        // Bang mau ghi TRUOC `writeDocs()`, va thu tu do la co y.
+        //
+        // Daemon cho `docs.json` moi hon luot hoi roi moi doc bang mau. Ghi bang
+        // mau SAU thi co mot khe: daemon thay `docs.json` da moi va di doc bang
+        // mau trong khi file do chua kip ra doi — luot doc dau tien cua moi phien
+        // tra 404, va giao dien ket o mau du phong cho toi mot su kien tinh co
+        // nao do. Doi thu tu la khe do bien mat, khong can co che thu lai nao.
+        //
+        // Bang mau ACI ghi o DUNG cho nay, khong o `writeDocs()` va cang khong
+        // luc nap plugin.
+        //
+        // `acedGetRGB()` doc bang mau dang hieu luc cua TRINH SOAN THAO. Goi no
+        // truoc khi trinh soan thao dung xong thi gia tri tra ve khong bao dam.
+        // `writeDocs()` khong dam bao dieu do: no con duoc goi tu reactor
+        // `documentCreated`, thu ban khi AutoCAD tao ban ve dau tien TRONG luot
+        // khoi dong. Chi rieng duong nay — daemon chu dong hoi — moi chac chan
+        // la AutoCAD da chay va co nguoi dang dung.
+        //
+        // Chi danh dau da ghi khi ghi THANH CONG: dat co trong moi truong hop la
+        // mot lan ghi hong khoa luon ca phien, va giao dien mat bang mau cho toi
+        // lan khoi dong sau ma khong ai biet vi sao.
+        static bool paletteWritten = false;
+        if (!paletteWritten && writeAciPalette()) paletteWritten = true;
         writeDocs();                         // app hoi danh sach ban ve (heartbeat)
     }
     if (stat(gBomReqPath.c_str(), &st) == 0 && tsChanged(st.st_mtimespec, gBomReqMtime)) {

@@ -215,6 +215,24 @@ export const guards: Record<string, Guard> = {
     why: "App không tìm thấy AutoCAD ở các vị trí cài đặt tiêu chuẩn.",
     fix: "Cài AutoCAD, hoặc dùng các chức năng offline không cần AutoCAD.",
   },
+  palette_stale: {
+    title: "Bảng màu ACI đã cũ",
+    why: "Bảng màu còn lại từ một phiên AutoCAD trước. Dùng nó là hiện màu của "
+      + "phiên cũ — rõ nhất ở chỉ số 7, vì màu của nó theo màu nền bản vẽ.",
+    fix: "Build lại plugin rồi khởi động lại AutoCAD.",
+  },
+  palette_unavailable: {
+    title: "Chưa có bảng màu ACI",
+    why: "Bản plugin đang chạy không ghi bảng màu, nên chỉ 9 chỉ số đầu hiện "
+      + "được màu; các chỉ số khác hiện bằng số vì app không đoán màu.",
+    fix: "Build lại plugin rồi khởi động lại AutoCAD — AutoCAD không nạp lại bundle giữa phiên.",
+  },
+  palette_invalid: {
+    title: "Bảng màu ACI không đọc được",
+    why: "File bảng màu plugin ghi ra không đúng định dạng. App bỏ nó thay vì vẽ "
+      + "màu sai — một ô màu sai cạnh tên layer tệ hơn không có ô nào.",
+    fix: "Build lại plugin rồi khởi động lại AutoCAD.",
+  },
   plugin_unavailable: {
     title: "Plugin AcadBridge chưa nạp",
     why: "Không có plugin thì app không đọc hay ghi được vào bản vẽ đang mở.",

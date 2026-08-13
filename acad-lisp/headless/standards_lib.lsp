@@ -366,7 +366,18 @@
       (if (and (numberp color) (not (numberp rgb)))
         (setq data
           (if (assoc 62 data)
-            (subst (cons 62 color) (assoc 62 data) data)
+            ;; GIU DAU cua group 62. Dau AM nghia la layer dang TAT, va do la
+            ;; mot trang thai NGUOI DUNG dat, khong phai thuoc tinh cua ho so
+            ;; tieu chuan. `subst` thang mot so duong vao day se BAT layer len:
+            ;; ap ho so mau sac lai lam hien ra thu ho da co y tat, tren duong
+            ;; ghi mot pha khong hoan tac duoc.
+            ;;
+            ;; Ho so KHONG mang cot bat/tat, nen khong co gi de ghi de len trang
+            ;; thai ay ca — giu nguyen la lua chon duy nhat dung.
+            (subst
+              (cons 62
+                (if (minusp (cdr (assoc 62 data))) (- color) color))
+              (assoc 62 data) data)
             (append data (list (cons 62 color))))))
       (if (numberp rgb)
         (setq data
