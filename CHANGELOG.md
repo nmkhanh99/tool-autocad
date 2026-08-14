@@ -1,5 +1,30 @@
 # CHANGELOG
 
+## 2026-08-14 — Ô chọn màu thật: đổi thiết kế thay vì vá lần thứ tư
+
+Codex review trên **cả hai commit** (`9b9af50…HEAD`) thay vì trên cây làm việc —
+bảy vòng trước mỗi vòng chỉ nhìn phần diff đang dở, nên không vòng nào thấy được
+trọn đường đi.
+
+### Fixed — ô chọn màu thật nay là controlled
+
+Ô này đã qua **ba** vòng review với ba bản vá, mỗi bản chỉ bịt được một đường:
+
+1. `key` theo giá trị → gắn lại ô **ngay giữa lúc kéo**, mất focus và bảng màu hệ
+   thống ngừng gửi cập nhật.
+2. Gỡ `key`, đồng bộ bằng `ref` theo `[palette]` → bỏ sót **mọi đường đổi giá trị
+   khác**: đổi hồ sơ trong lúc popover còn mở là ô giữ màu của layer cũ, rồi một
+   chỉnh nhỏ sẽ lưu ra màu dựa trên trạng thái cũ.
+
+Gốc của cả ba là **một ô không điều khiển phải vừa phản ánh thay đổi từ ngoài vừa
+không bị giật khi đang kéo** — hai yêu cầu không thể cùng thoả bằng `defaultValue`.
+Điều khiển nó thì cả hai tự thoả: `value` luôn bằng giá trị hiện tại, còn lúc kéo
+thì chính lượt kéo sinh ra giá trị đó nên không có gì để giành. Bỏ được cả `ref`
+lẫn hiệu ứng đồng bộ.
+
+Đúng quy tắc đã ghi ở mục 1.1: ba vòng cùng một dạng lỗi nghĩa là **thiết kế
+sai**, không phải cần thêm một bản vá.
+
 ## 2026-08-13 — Bảng màu ACI thật, và ô chọn màu
 
 ### Added — 256 màu ACI lấy từ chính AutoCAD

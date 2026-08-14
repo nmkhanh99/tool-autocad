@@ -140,7 +140,6 @@ function AciPicker({ value, onChange, disabled, palette }: {
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const wrap = useRef<HTMLSpanElement>(null);
   const pop = useRef<HTMLDivElement>(null);
-  const colorInput = useRef<HTMLInputElement>(null);
   const numeric = typeof value === "number" ? value : Number(value);
   /* Màu thật đã là mã màu — tô thẳng, không đi qua bảng ACI. `Number("#FF8000")`
      là `NaN`, nên không chặn ở đây là ô màu bỏ trống đúng lúc đã biết chắc màu. */
@@ -173,26 +172,6 @@ function AciPicker({ value, onChange, disabled, palette }: {
        xuất hiện. Mở một ô ở cuối bảng trước khi `/aci-palette` trả lời thì
        popover giữ nguyên vị trí cũ và đẩy ô nhập ra ngoài màn hình. */
   }, [at, palette]);
-
-  /* Ô chọn màu thật không có `key` (gắn lại giữa lúc kéo là cướp thao tác), nên
-     nó KHÔNG tự đọc lại `defaultValue`. Mở một ô ACI 10–255 trước khi bảng màu
-     về là nó khởi tạo bằng `#000000`; bảng về sau đó làm ô vuông và lưới hiện
-     đúng màu AutoCAD, còn ô chọn vẫn đen — lần chọn kế tiếp bắt đầu từ một màu
-     sai. Đồng bộ bằng ref, và CHỈ khi `palette` đổi: bảng màu không đổi giữa lúc
-     người dùng đang kéo, nên chỗ này không bao giờ chen vào một thao tác. */
-  useEffect(() => {
-    /* `swatch` rỗng nghĩa là app KHÔNG biết chỉ số này màu gì (bảng màu vừa bị
-       xoá vì đổi phiên, và chỉ số nằm ngoài 1–9). Để nguyên ô chọn ở màu cũ là
-       ô vuông bên ngoài nói "không biết" trong khi ô chọn vẫn mời người dùng
-       nhận một màu của phiên trước — và nhận là nó vào hồ sơ dưới dạng màu thật.
-       Trả về đen: một giá trị trung tính, không giả vờ biết. */
-    if (colorInput.current) colorInput.current.value = swatch ?? "#000000";
-    /* CHỈ `palette` trong deps. Thêm `swatch` vào là hiệu ứng chạy mỗi lần giá
-       trị đổi — tức mỗi khung hình trong lúc người dùng kéo con trỏ trên bảng
-       màu hệ thống — và ghi `.value` vào một ô đang được thao tác là thứ không
-       nên làm. Bảng màu không đổi giữa lúc kéo, nên `[palette]` là đúng cửa sổ
-       duy nhất cần đồng bộ. */
-  }, [palette]);
 
   useEffect(() => {
     if (!at) return;
@@ -289,17 +268,24 @@ function AciPicker({ value, onChange, disabled, palette }: {
 
           <div className="pophead" style={{ marginTop: "var(--s3)" }}>Màu thật</div>
           <label style={{ display: "flex", alignItems: "center", gap: "var(--s2)" }}>
-            {/* KHÔNG `key` ở ô này. `onChange` bắn liên tục trong lúc kéo, nên
-                `key` theo giá trị sẽ gắn lại ô ngay giữa lúc người dùng đang
-                chọn — mất focus, và bảng màu hệ thống ngừng gửi cập nhật sau
-                lần đầu. Chính ô này là nguồn thay đổi nên nó không cần đọc lại;
-                thứ cần đọc lại là ô SỐ ở dưới, và ô đó có `key`. */}
-            <input type="color" ref={colorInput} aria-label="Chọn màu thật"
+            {/* CONTROLLED, không `defaultValue` và không `key`.
+                Ô này đã đi qua ba vòng review với ba bản vá khác nhau, và mỗi
+                bản chỉ bịt được một đường:
+                  · `key` theo giá trị → gắn lại ô NGAY GIỮA LÚC kéo, mất focus.
+                  · gỡ `key`, đồng bộ bằng ref theo `[palette]` → bỏ sót mọi
+                    đường đổi giá trị KHÁC (đổi hồ sơ khi popover còn mở).
+                Gốc của cả ba là một ô KHÔNG ĐIỀU KHIỂN phải vừa phản ánh thay
+                đổi từ ngoài vừa không bị giật khi đang kéo. Điều khiển nó thì cả
+                hai yêu cầu tự thoả: `value` luôn bằng giá trị hiện tại, còn lúc
+                kéo thì chính lượt kéo sinh ra giá trị đó nên không có gì để
+                giành. Không còn ref, không còn hiệu ứng đồng bộ. */}
+            <input type="color" aria-label="Chọn màu thật"
               style={{ width: 44, height: 28, padding: 0, border: 0, background: "none" }}
-              /* Ô màu của trình duyệt CHỈ hiểu `#rrggbb`. Giá trị hiện tại có thể
-                 là một chỉ số ACI, và chỉ 1–9 suy được ra mã màu — ngoài dải đó
-                 thì mở ra ở đen thay vì bịa một màu cho chỉ số app không biết. */
-              defaultValue={hex ?? (Number.isFinite(numeric) ? aciColor(numeric, palette) : null) ?? "#000000"}
+              /* Ô màu của trình duyệt CHỈ hiểu `#rrggbb`, còn giá trị hiện tại
+                 có thể là một chỉ số ACI. `swatch` rỗng nghĩa là app KHÔNG suy
+                 được chỉ số đó ra màu nào — đen là giá trị trung tính, không giả
+                 vờ biết. */
+              value={swatch ?? "#000000"}
               /* `onChange` chứ KHÔNG `onBlur`. Trên macOS ô này mở một bảng màu
                  của hệ thống, và blur bắn ngay lúc bảng đó nhận focus — tức nhận
                  đúng giá trị BAN ĐẦU rồi đóng popover trước khi người dùng kịp
