@@ -545,15 +545,8 @@ rồi khởi động lại AutoCAD.
 - **`copyfloor` và `tagmeta`** trong `functions.ts` khai `liveRecipe` nhưng không
   có trong 15 recipe headless — chưa đối chiếu với `/api/acad/live`. Nếu không
   có handler thì đó là 2 nút luôn báo lỗi.
-- **Bảy script test mang đường dẫn tuyệt đối của một máy cụ thể.**
-  `ACAD_SCRATCH`/`MEP_SCRATCH` không đặt thì chúng lùi về một thư mục trong
-  `/var/folders` của máy tác giả — chạy được ở đúng máy ấy, hỏng ở mọi máy khác,
-  và trên Linux thì `mkdirSync` ném EACCES. `test-bridge-contract.mjs` đã sửa
-  (2026-08-13) vì nó vào `pnpm verify`; bảy file còn lại
-  (`test-acad-stability`, `test-acad-control`, `test-headless-layer`,
-  `test-preview-apply`, `test-objectarx-live`, `test-live-preview`,
-  `test-product-identity`) chưa. Sửa cùng lúc với việc dựng CI, vì trước đó không
-  có gì phát hiện được chúng hỏng.
+- ~~**Script test mang đường dẫn tuyệt đối của một máy cụ thể.**~~ **Xong
+  2026-08-14** — chín file (không phải bảy), nay dùng `mkdtempSync(tmpdir())`.
 - **Không có lint/format.** Ba ranh giới thư mục kiểm bằng script riêng.
 - **Chat vẫn thiếu test cho luồng gửi/nhận.** Đã có 7 test cho việc sửa message
   theo ID và 8 test cho bus sự kiện, nhưng `send()` và luồng stream SSE của

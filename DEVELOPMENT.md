@@ -805,6 +805,14 @@ hồ" đo trên `open.docs`, một ảnh chụp đã cũ. Đóng một bản v�
 trùng tiêu đề trong khoảng đó là lượt lùi đọc bản vẽ khác. Vì vậy phản hồi phải
 mang đúng `instance` đã chọn, không thì bỏ lượt lùi.
 
+**Chốt cuối cùng của job ghi so bằng MÃ PHIÊN.** `documentGuardLisp()` chạy bên
+trong AutoCAD, sau mọi chốt khác, vì mọi chốt phía trên đều đọc trạng thái trước
+khi AutoCAD thật sự chạy lệnh. Nó từng chỉ so `DWGNAME` — thứ không phân biệt
+được hai bản vẽ chưa lưu trùng tiêu đề. Nay plugin khai `acad:doc-instance` vào
+ngữ cảnh nó chạy job (chỉ plugin biết mã phiên; LISP không tự đọc được), và chốt
+so với mã phiên mong đợi. Có mã phiên thì **không** so tên nữa — "Save As" giữa
+chừng đổi `DWGNAME` mà vẫn đúng bản vẽ. Thiếu nó (plugin cũ) thì lùi về so tên.
+
 **Các route khác cũng nhận mã phiên (2026-08-13)**, nhưng theo hai khuôn khác nhau
 tuỳ vào việc đích có bị SO hay LƯU ở đâu không:
 

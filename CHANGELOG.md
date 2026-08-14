@@ -1,5 +1,42 @@
 # CHANGELOG
 
+## 2026-08-14 — Hai mục nợ kỹ thuật: chốt cuối biết bản vẽ nào, và test chạy được ở máy khác
+
+### Fixed — `documentGuardLisp()` phân biệt được hai bản vẽ chưa lưu trùng tiêu đề
+
+Chốt cuối cùng của job ghi trước đây chỉ so `DWGNAME`/`DWGPREFIX`. Hai bản vẽ
+**chưa lưu** trùng tiêu đề cho ra cùng một chuỗi, nên trên đúng nhóm bản vẽ cần
+nó nhất thì chốt đó không bảo vệ gì cả.
+
+LISP không có cách nào tự đọc mã phiên — chỉ plugin biết. Nay plugin khai
+`(setq acad:doc-instance "…")` **ngay trong ngữ cảnh nó sẽ chạy job**, với mã
+phiên của bản vẽ nó **thật sự** giải quyết được; daemon phát mã phiên **mong
+đợi** vào chốt. Có mã phiên thì **không so tên nữa**: mã phiên đã xác định đúng
+một bản vẽ, còn so thêm tên chỉ tạo một đường từ chối sai — "Save As" giữa chừng
+đổi `DWGNAME` mà vẫn là đúng bản vẽ đó.
+
+Bản plugin cũ không đặt biến này; AutoLISP đọc một symbol chưa gán trả `nil` nên
+nhánh so tên chạy và hành vi y hệt trước.
+
+`documentGuardLisp()` nay được **export** để khoá bằng test — nó là chốt cuối
+trên đường ghi mà trước đó không có test nào chạm tới. Test kiểm cả phép escape
+dấu nháy, và đã được xác nhận là **đỏ** khi bỏ `lispString()` ra: không escape
+thì một tiêu đề chứa dấu nháy sẽ đóng sớm chuỗi LISP và phá vỡ cả chương trình.
+
+### Fixed — chín script test không còn đường dẫn cứng theo máy tác giả
+
+`ACAD_SCRATCH`/`MEP_SCRATCH` không đặt thì chúng lùi về một thư mục trong
+`/var/folders` của **một máy cụ thể** — chạy được ở đúng máy ấy nên không ai
+thấy, còn trên Linux thì `/var/folders` không tồn tại và `mkdirSync` ném EACCES.
+Nay `mkdtempSync(tmpdir())`; `mkdtemp` chứ không phải một tên cố định, vì hai
+lượt chạy song song sẽ giẫm lên nhau.
+
+**Chín** file chứ không phải sáu như ghi nhận trước — con số cũ lấy từ một lượt
+`grep` bị cắt. Không chạy chúng để kiểm (một số có thể khởi động lại AutoCAD);
+thay vào đó kiểm cú pháp từng file, rồi tách riêng phần `import` + biểu thức
+`SCRATCH` ra chạy thật để chắc import giải quyết được và thư mục tạm sinh ra
+đúng.
+
 ## 2026-08-14 — Kiểm trên AutoCAD thật: ba mục còn treo đã xong
 
 Chạy trên AutoCAD 2027 sau khi khởi động lại. Ba thứ trước đây chỉ có test mà

@@ -355,10 +355,26 @@ function setUnitsExpression(drawing: DrawingStandard): string {
  * So cả đường dẫn đầy đủ lẫn tên tệp: bản vẽ CHƯA LƯU không có đường dẫn, và
  * `exactTarget` lúc đó là tiêu đề.
  */
-function documentGuardLisp(exactTarget: string): string {
-  return `(if (and (/= (strcat (getvar "DWGPREFIX") (getvar "DWGNAME"))
+export function documentGuardLisp(exactTarget: string, expectedInstance = ""): string {
+  /* Ưu tiên MÃ PHIÊN, lùi về tên khi không có.
+     Plugin khai `acad:doc-instance` ngay trong ngữ cảnh nó chạy job — đó là bản
+     vẽ nó THẬT SỰ giải quyết được. So với mã phiên là phép kiểm chặt hơn hẳn:
+     hai bản vẽ chưa lưu trùng tiêu đề cho ra cùng `DWGNAME`, nên chốt theo tên
+     không phân biệt được chúng.
+     Khi có mã phiên thì KHÔNG so tên nữa: mã phiên đã xác định đúng một bản vẽ,
+     còn so thêm tên chỉ tạo ra một đường từ chối sai — "Save As" giữa chừng đổi
+     `DWGNAME` mà vẫn là đúng bản vẽ đó.
+     Bản plugin cũ không đặt biến này; AutoLISP đọc một symbol chưa gán trả `nil`,
+     nên nhánh dưới chạy và hành vi y hệt trước. */
+  const byName = `(and (/= (strcat (getvar "DWGPREFIX") (getvar "DWGNAME"))
                  ${lispString(exactTarget)})
-            (/= (getvar "DWGNAME") ${lispString(exactTarget)}))
+            (/= (getvar "DWGNAME") ${lispString(exactTarget)}))`;
+  const test = expectedInstance
+    ? `(if (= (type acad:doc-instance) 'STR)
+      (/= acad:doc-instance ${lispString(expectedInstance)})
+      ${byName})`
+    : byName;
+  return `(if ${test}
   (progn
     (acad:write-result "error"
       "code=wrong_document message=Ban ve dang mo khong phai ban ve da chuan bi")
@@ -368,7 +384,7 @@ function documentGuardLisp(exactTarget: string): string {
 
 function actionProgram(
   expression: string,
-  options: { mutates?: boolean; guardTarget?: string } = {},
+  options: { mutates?: boolean; guardTarget?: string; guardInstance?: string } = {},
 ): string {
   const begin = options.mutates
     ? `(setq acadstd:outer-error *error*)
@@ -386,7 +402,9 @@ function actionProgram(
 (command "_.REGEN")
 `
     : "";
-  const guard = options.guardTarget ? documentGuardLisp(options.guardTarget) : "";
+  const guard = options.guardTarget
+    ? documentGuardLisp(options.guardTarget, options.guardInstance || "")
+    : "";
   return `${readStandardsLib().trimEnd()}
 
 ${guard}${begin}(setq acadstd:action-result ${expression})
@@ -1121,7 +1139,7 @@ export function drawingStandardsRouter(
       }
       const lisp = actionProgram(
         `(progn ${programs.join("\n")} ${programs.length})`,
-        { mutates: true, guardTarget: exactTarget },
+        { mutates: true, guardTarget: exactTarget, guardInstance: document.instance || "" },
       );
       const job = await dependencies.dispatchLiveJob(lisp, nativeTarget, 30_000);
       if (job.state !== "done" || job.result?.status !== "ok") {

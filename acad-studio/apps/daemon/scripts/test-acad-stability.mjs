@@ -3,15 +3,20 @@
  * Drives shipped acadControl builders + setup actions.
  * Run: pnpm test:stability
  */
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, mkdtempSync} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+  /* Thu muc nhap theo MAY dang chay. Duong lui cu la mot duong dan tuyet doi
+     trong `/var/folders` cua mot may cu the: chay duoc o dung may do nen khong
+     ai thay, con tren Linux thi `/var/folders` khong ton tai va `mkdirSync` nem
+     EACCES. `mkdtemp` chu khong phai mot ten co dinh duoi `tmpdir()`: hai luot
+     chay song song se giam len nhau. */
 const SCRATCH =
   process.env.MEP_SCRATCH ||
-  "/var/folders/d6/t6kbyns970j6_5vd0qnwnm7r0000gn/T/grok-goal-901b3dbcb1e1/implementer";
+  mkdtempSync(join(tmpdir(), "acad-test-"));
 mkdirSync(SCRATCH, { recursive: true });
 
 const ctrl = await import("../src/acadControl.ts");

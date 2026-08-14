@@ -2,14 +2,20 @@
  * UI preview accept/decline + stage machine tests (shipped code paths).
  * Run: pnpm test:ui-preview
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, mkdtempSync} from "node:fs";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+  /* Thu muc nhap theo MAY dang chay. Duong lui cu la mot duong dan tuyet doi
+     trong `/var/folders` cua mot may cu the: chay duoc o dung may do nen khong
+     ai thay, con tren Linux thi `/var/folders` khong ton tai va `mkdirSync` nem
+     EACCES. `mkdtemp` chu khong phai mot ten co dinh duoi `tmpdir()`: hai luot
+     chay song song se giam len nhau. */
 const SCRATCH =
   process.env.MEP_SCRATCH ||
-  "/var/folders/d6/t6kbyns970j6_5vd0qnwnm7r0000gn/T/grok-goal-7897e59e1f75/implementer";
+  mkdtempSync(join(tmpdir(), "acad-test-"));
 mkdirSync(SCRATCH, { recursive: true });
 
 const lp = await import("../src/livePreview.ts");

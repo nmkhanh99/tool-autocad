@@ -5,15 +5,21 @@
  * Run: cd acad-studio/apps/daemon && npx tsx scripts/test-objectarx-raw.mjs
  *   or: node --import tsx scripts/test-objectarx-raw.mjs
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync} from "node:fs";
 import { resolve, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+  /* Thu muc nhap theo MAY dang chay. Duong lui cu la mot duong dan tuyet doi
+     trong `/var/folders` cua mot may cu the: chay duoc o dung may do nen khong
+     ai thay, con tren Linux thi `/var/folders` khong ton tai va `mkdirSync` nem
+     EACCES. `mkdtemp` chu khong phai mot ten co dinh duoi `tmpdir()`: hai luot
+     chay song song se giam len nhau. */
 const SCRATCH =
   process.env.MEP_SCRATCH ||
-  "/var/folders/d6/t6kbyns970j6_5vd0qnwnm7r0000gn/T/grok-goal-019ab89128d1/implementer";
+  mkdtempSync(join(tmpdir(), "acad-test-"));
 mkdirSync(SCRATCH, { recursive: true });
 
 // Import shipped modules (tsx resolves .ts)

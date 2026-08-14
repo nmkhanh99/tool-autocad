@@ -2,16 +2,21 @@
  * Preview → confirm apply / reject tests against SHIPPED session module.
  * Run: cd acad-studio/apps/daemon && pnpm test:preview
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync, mkdtempSync} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+  /* Thu muc nhap theo MAY dang chay. Duong lui cu la mot duong dan tuyet doi
+     trong `/var/folders` cua mot may cu the: chay duoc o dung may do nen khong
+     ai thay, con tren Linux thi `/var/folders` khong ton tai va `mkdirSync` nem
+     EACCES. `mkdtemp` chu khong phai mot ten co dinh duoi `tmpdir()`: hai luot
+     chay song song se giam len nhau. */
 const SCRATCH =
   process.env.MEP_SCRATCH ||
-  "/var/folders/d6/t6kbyns970j6_5vd0qnwnm7r0000gn/T/grok-goal-fcfb56d9fc5d/implementer";
+  mkdtempSync(join(tmpdir(), "acad-test-"));
 mkdirSync(SCRATCH, { recursive: true });
 
 // Isolate sessions from user home

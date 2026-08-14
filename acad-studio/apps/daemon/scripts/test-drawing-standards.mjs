@@ -13,11 +13,61 @@ process.env.ACAD_BRIDGE_DIR = bridgeDir;
 
 const {
   buildStandardsAction,
+  documentGuardLisp,
   drawingRevision,
   drawingStandardsRouter,
   isIncompleteSnapshotWarning,
 } = await import("../src/drawingStandards.ts");
 const { DEFAULT_PROFILE } = await import("../src/standardsProfile.ts");
+
+/* Chot CUOI CUNG cua job ghi: chuong trinh tu tu choi neu no khong chay tren
+   dung ban ve. Moi chot phia tren deu doc trang thai TRUOC khi AutoCAD thuc su
+   chay lenh, va giua hai moc do nguoi dung doi tab duoc.
+
+   Uu tien MA PHIEN. Chot theo TEN khong phan biet duoc hai ban ve CHUA LUU trung
+   tieu de — ca hai cho ra cung mot `DWGNAME` — nen tren dung nhom ban ve can no
+   nhat thi no khong bao ve gi ca. */
+{
+  const named = documentGuardLisp("/a/Plan.dwg");
+  assert.ok(named.includes('(getvar "DWGNAME")'), "khong co ma phien thi so theo ten");
+  assert.ok(!named.includes("acad:doc-instance"), "khong co ma phien thi khong nhac toi no");
+  assert.ok(named.includes("wrong_document"));
+
+  const byInstance = documentGuardLisp("Drawing1.dwg", "AAA-001");
+  assert.ok(
+    byInstance.includes("acad:doc-instance"),
+    "co ma phien thi phai so bang no",
+  );
+  assert.ok(byInstance.includes('"AAA-001"'), "ma phien mong doi phai nam trong chuong trinh");
+  /* Co ma phien thi KHONG so ten nua: ma phien da xac dinh dung mot ban ve, con
+     so them ten chi tao ra mot duong tu choi SAI — "Save As" giua chung doi
+     `DWGNAME` ma van la dung ban ve do. Nhung nhanh ten phai CON LAI lam duong
+     lui cho ban plugin cu (`acad:doc-instance` la `nil`). */
+  assert.ok(
+    byInstance.includes("(= (type acad:doc-instance) 'STR)"),
+    "phai kiem KIEU truoc: ban plugin cu tra nil, va nil khong duoc coi la lech",
+  );
+  assert.ok(
+    byInstance.includes('(getvar "DWGNAME")'),
+    "nhanh lui theo ten phai con lai cho ban plugin cu",
+  );
+
+  /* Chuoi phai duoc trich dan dung. Mot tieu de chua dau nhay se dong som chuoi
+     LISP va pha vo ca chuong trinh — tren duong GHI khong hoan tac duoc. */
+  const quoted = documentGuardLisp('a"b.dwg', 'i"j');
+  const instanceLine = quoted
+    .split("\n")
+    .find((line) => line.includes("acad:doc-instance") && line.includes("/="));
+  assert.ok(instanceLine, "phai co dong so ma phien");
+  assert.ok(
+    instanceLine.includes('"i\\"j"'),
+    `dau nhay phai duoc escape, nhan duoc: ${instanceLine}`,
+  );
+  assert.ok(
+    quoted.includes('"a\\"b.dwg"'),
+    "dau nhay trong TEN cung phai duoc escape",
+  );
+}
 
 const scaleAll = buildStandardsAction(
   "scale",

@@ -3779,8 +3779,21 @@ static void runJob() {
     std::wstring jobW = toWide(snapshotPath);
     // Marker de `lispWillStart` nhan ra day la job CHI DOC cua daemon.  Dat o
     // dau chuoi vi callback chi duoc nhan `firstLine`.
+    // Khai bao DINH DANH cua ban ve ma plugin THAT SU giai quyet duoc, ngay
+    // trong ngu canh no se chay.
+    //
+    // Chot cuoi cung cua job (`documentGuardLisp` phia daemon) truoc day chi so
+    // duoc `DWGNAME`/`DWGPREFIX` — ma hai ban ve CHUA LUU trung tieu de cho ra
+    // cung mot chuoi, nen chot do khong phan biet duoc chung. LISP khong co cach
+    // nao tu doc ma phien; chi plugin biet, va day la cho duy nhat noi duoc.
+    //
+    // Ban plugin cu khong dat bien nay: LISP doc mot symbol chua gan tra `nil`,
+    // va chot se lui ve so theo ten nhu truoc.
+    const std::wstring instanceDecl =
+        L"(setq acad:doc-instance \"" + toWide(acadDocumentInstanceToken(pDoc)) + L"\") ";
     std::wstring cmd =
         (readOnly ? toWide(std::string(kReadOnlyLispPrefix) + " ") : std::wstring()) +
+        instanceDecl +
         L"((lambda (mep:tp mep:tp-changed mep:load-result) "
         L"(if (null mep:tp) (setq mep:tp \"\")) "
         L"(if (and (null (vl-string-search \"Acad-Bridge\" mep:tp)) (null (vl-string-search \"MEP-Bridge\" mep:tp))) "
