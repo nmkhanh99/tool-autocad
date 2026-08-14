@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## 2026-08-14 — Kiểm trên AutoCAD thật: ba mục còn treo đã xong
+
+Chạy trên AutoCAD 2027 sau khi khởi động lại. Ba thứ trước đây chỉ có test mà
+chưa có bằng chứng chạy thật, nay đã đo được:
+
+### Bảng màu ACI — đường thành công
+
+`GET /api/acad/aci-palette` trả **200**, 256 mục hợp lệ, dải xám ở 250–255 đúng
+chuẩn. Bằng chứng nó đến từ AutoCAD chứ không rơi về bảng dự phòng: **ACI 7 =
+`#000000`**, trong khi bảng gõ cứng trong code ghi `#FFFFFF` — máy này dùng nền
+sáng. Đỏ ra `#FF0000` chứ không phải `#0000FF`, nên thứ tự byte `0x00bbggrr` xử
+lý đúng. Plugin cũng phát đủ `session`, `targetsInstance`, `colorMethod` (43/43
+layer là `0xC3` = ACI, khớp phép đo cũ) và `maxLayerItems: 5000`.
+
+### Layer đang tắt — không còn bị bật lại
+
+Đo bằng AcCoreConsole trên file nháp (không đụng bản vẽ đang mở). Layer tắt màu
+đỏ có `62 = -1`; áp hồ sơ màu ACI 3 cho ra **`62 = -3`** — màu đổi, dấu âm còn
+nguyên, layer vẫn tắt. Trước bản sửa nó sẽ là `+3`.
+
+### Màu thật — ghi đúng DXF group 420
+
+`420 = 16744448` (`0xFF8000`); đặt lại màu ACI thì 420 **bị xoá** đúng như thiết
+kế; layer mới mang màu thật cũng ra 420 đúng.
+
+### Technical — một hành vi của AutoCAD chưa ai lường
+
+AutoCAD **tự tính lại group 62 từ 420** thành chỉ số ACI gần nhất, và **giữ
+dấu**. Ghi `#FF8000` lên layer đang tắt cho `62 = -30`, mà ACI 30 trong bảng vừa
+đọc là `#FF7F00` — hai cơ chế độc lập khớp nhau. Nghĩa là màu dự phòng `7` ở
+nhánh `entmake` không quan trọng, và trạng thái tắt an toàn trên cả đường ACI lẫn
+đường màu thật.
+
+Ca "màu thật đặt lên layer đang tắt" **không nằm trong thiết kế ban đầu** — nó
+chỉ lộ ra khi đọc số liệu đo, và đã kiểm riêng.
+
 ## 2026-08-14 — Ô chọn màu thật: đổi thiết kế thay vì vá lần thứ tư
 
 Codex review trên **cả hai commit** (`9b9af50…HEAD`) thay vì trên cây làm việc —

@@ -932,6 +932,17 @@ màu không đổi:
   `subst` một số dương vào đó sẽ BẬT layer lên, tức đổi màu lại làm hiện ra thứ
   người dùng đã tắt.
 
+**AutoCAD tự tính lại group 62 từ 420, và GIỮ DẤU.** Đo trên AcCoreConsole
+2026-08-14: ghi `420 = 0xFF8000` lên một layer đang tắt (`62 = -1`) cho ra
+`62 = -30` — chỉ số 30 là màu ACI gần nhất (`#FF7F00`), và dấu âm còn nguyên nên
+layer vẫn tắt. Hai hệ quả:
+
+- Màu dự phòng `7` mà nhánh `entmake` ghi vào 62 **không quan trọng**: AutoCAD
+  ghi đè nó bằng chỉ số gần nhất ngay khi thấy 420 (đo được: layer mới mang màu
+  thật `#0000FF` ra `62 = 5`, đúng ACI của xanh lam).
+- Trạng thái bật/tắt an toàn trên **cả hai** đường: đường ACI giữ dấu vì
+  `ensure-layer-rgb` giữ, còn đường màu thật giữ dấu vì chính AutoCAD giữ.
+
 Đường ghi là `acadstd:ensure-layer-rgb`; `acadstd:ensure-layer` giữ nguyên chữ ký
 cũ và gọi vào nó, còn `acadstd:sync-layers` nhận `rgb` làm trường **thứ sáu, tuỳ
 chọn**. Hồ sơ không dùng màu thật thì daemon không phát nó và hành vi y hệt cũ.

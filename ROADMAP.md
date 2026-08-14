@@ -417,7 +417,9 @@ route, như `blocks.module.css` vừa làm.
     (2026-08-13). Còn lại: `documentGuardLisp()` không phân biệt được hai bản vẽ
     chưa lưu trùng tiêu đề vì nó chỉ có `DWGNAME` — bù lại plugin định tuyến job
     bằng mã phiên, nên tổng thể không yếu đi.
-  - ~~Layer **màu thật** không nhập được.~~ **Xong.** Hồ sơ nhận `#RRGGBB`, đường áp
+  - ~~Layer **màu thật** không nhập được.~~ **Xong**, và đã kiểm trên AutoCAD
+    2027 thật (2026-08-14): 420 ghi đúng, đặt ACI xoá 420, layer đang tắt không
+    bị bật lại ở cả hai đường. Hồ sơ nhận `#RRGGBB`, đường áp
     dụng ghi DXF **group 420**. Ba điểm phải đúng cùng lúc: (a) plugin phát thêm
     `colorMethod` vì màu thật ĐEN TUYỀN cũng là `rgb: [0,0,0]` nên không đoán được
     từ `rgb`; (b) đặt màu ACI phải **xoá** 420, vì 420 thắng 62 và sót lại là lệnh
