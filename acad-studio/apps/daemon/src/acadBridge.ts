@@ -405,11 +405,30 @@ export type DrawingInfoPluginSnapshot = {
 };
 
 /** Protocol body: line 1 is requestId; the remaining text is the exact document target. */
-export function buildDrawingInfoRequest(requestId: string, target = ""): string {
+export function buildDrawingInfoRequest(
+  requestId: string,
+  target = "",
+  layerOffset = 0,
+): string {
   if (!requestId || /[\r\n]/.test(requestId)) {
     throw new Error("drawing-info requestId must be one non-empty line");
   }
-  return `${requestId}\n${target}`;
+  /* `target` phải nằm trên ĐÚNG một dòng: dòng thứ ba là offset bảng layer, nên
+     một xuống dòng lọt vào target sẽ bị plugin đọc thành offset. Đích đến từ
+     tiêu đề bản vẽ do người dùng đặt, tức dữ liệu không kiểm soát được. */
+  if (/[\r\n]/.test(target)) {
+    throw new Error("drawing-info target must be one line");
+  }
+  if (!Number.isInteger(layerOffset) || layerOffset < 0) {
+    throw new Error("drawing-info layerOffset must be a non-negative integer");
+  }
+  /* Chỉ THÊM dòng khi thật sự cần. Bản plugin cũ đọc "phần còn lại sau dòng 1"
+     LÀ target, nên một dòng thứ ba luôn có mặt sẽ biến target thành `"tên\n0"`
+     và không bản vẽ nào khớp — mọi lượt đọc hỏng, ở mọi người dùng chưa build
+     lại plugin. */
+  return layerOffset > 0
+    ? `${requestId}\n${target}\n${layerOffset}`
+    : `${requestId}\n${target}`;
 }
 
 /** Parse only the response belonging to this request; malformed/stale data is ignored. */
@@ -461,8 +480,11 @@ async function withDrawingInfoLock<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-export async function requestDrawingInfo(target: string, timeoutMs = 8000):
-  Promise<DrawingInfoPluginSnapshot | null> {
+export async function requestDrawingInfo(
+  target: string,
+  timeoutMs = 8000,
+  layerOffset = 0,
+): Promise<DrawingInfoPluginSnapshot | null> {
   return withDrawingInfoLock(async () => {
     ensureBridgeDirs();
     const bridgeDir = getBridgeDir();
@@ -470,7 +492,7 @@ export async function requestDrawingInfo(target: string, timeoutMs = 8000):
     const requestStartedAt = Date.now();
     atomicWrite(
       drawingInfoRequestPath(bridgeDir),
-      buildDrawingInfoRequest(requestId, target),
+      buildDrawingInfoRequest(requestId, target, layerOffset),
     );
     const responsePath = drawingInfoResponsePath(bridgeDir);
     while (Date.now() - requestStartedAt < timeoutMs) {
@@ -1270,6 +1292,80 @@ async function waitForPlotJob(
   });
 }
 
+/** Đọc TOÀN BỘ bảng layer bằng cách xin từng trang, hoặc `null` nếu không xong.
+ *
+ * Plugin cắt bảng layer ở `kInfoMaxLayerItems`, và một danh sách cụt **không đủ**
+ * để kết luận "layer này không còn trong bản vẽ" — nên giao diện phải ẩn nhóm
+ * xoá. Nâng trần chỉ đẩy giới hạn đi xa hơn; đọc theo trang mới xoá được nó.
+ *
+ * Nguy hiểm của việc ghép nhiều lượt đọc là bản vẽ đổi GIỮA CHỪNG: hai trang
+ * thuộc hai trạng thái khác nhau ghép lại thành một danh sách **chưa từng tồn
+ * tại**, và chính danh sách đó quyết định layer nào bị XOÁ khỏi hồ sơ. Vì vậy
+ * mọi trang phải cùng `instance` và cùng `revision`; lệch một cái là bỏ cả lượt
+ * đọc chứ không ghép — đọc lại tốn vài giây, ghép nhầm thì mất dữ liệu.
+ */
+export async function readAllLayerPages(
+  nativeTarget: string,
+  first: DrawingInfoPluginSnapshot,
+  /* Lượt đọc trang tiêm được để test. Vòng ghép này là chỗ nguy hiểm nhất của cả
+     tính năng, mà bản vẽ thật ở máy dev chỉ có 43 layer nên nó không bao giờ
+     chạy — không tiêm được thì nó vĩnh viễn không có test. */
+  fetchPage: (
+    target: string,
+    timeoutMs: number,
+    layerOffset: number,
+  ) => Promise<DrawingInfoPluginSnapshot | null> = requestDrawingInfo,
+): Promise<{ layers: unknown[]; complete: boolean } | null> {
+  const rowsOf = (snapshot: DrawingInfoPluginSnapshot) => {
+    const tables = drawingInfoRecord(snapshot.tables);
+    const value = tables?.layers ?? drawingInfoRecord(snapshot.drawing)?.layers;
+    return Array.isArray(value) ? value : [];
+  };
+  /* Định danh phải ĐẦY ĐỦ mới dùng được, `null` khi không.
+     Ghép `instance ?? ""` với `revision ?? ""` là fail-OPEN: một phản hồi thiếu
+     cả hai trường cho ra cùng một chuỗi ở MỌI trang, nên mọi trang "khớp" nhau
+     và được ghép — chốt tự vô hiệu trong im lặng. */
+  const identityOf = (snapshot: DrawingInfoPluginSnapshot): string | null => {
+    const document = snapshotDocument(snapshot);
+    const instance = document?.instance;
+    const revision = document?.revision;
+    /* Kiểm KIỂU, không chỉ kiểm "khác rỗng". `String({})` là `"[object Object]"`
+       — không rỗng, nên hai phản hồi từ hai bản vẽ KHÁC NHAU đều cho ra cùng
+       chuỗi đó và được ghép. Cùng họ với lỗi `?? ""` vừa sửa: mọi đường quy một
+       giá trị lạ về một chuỗi chung đều làm chốt tự vô hiệu trong im lặng. */
+    if (typeof instance !== "string" || !instance.trim()) return null;
+    if (typeof revision !== "number" || !Number.isFinite(revision)) return null;
+    return `${instance.trim()}|${revision}`;
+  };
+  const truncated = (snapshot: DrawingInfoPluginSnapshot) =>
+    Array.isArray(snapshot.warnings)
+    && snapshot.warnings.includes("layers_truncated");
+
+  const layers = [...rowsOf(first)];
+  if (!truncated(first)) return { layers, complete: true };
+  /* Một trang duy nhất không cắt thì không cần định danh — không có gì để ghép.
+     Cần ghép mà không có định danh thì từ chối ngay, đừng đọc thêm trang nào. */
+  const identity = identityOf(first);
+  if (!identity) return null;
+
+  /* Trần vòng lặp. Một trang rỗng mà cờ cắt vẫn bật nghĩa là plugin và daemon
+     hiểu khác nhau về offset — dừng và báo chưa đủ, thay vì quay vòng mãi. */
+  for (let page = 1; page <= 40; page += 1) {
+    const next = await fetchPage(nativeTarget, 10_000, layers.length);
+    if (!next || next.ok === false) return null;
+    /* Trang ĐẦU đã qua chốt busy ở route; các trang sau thì chưa. Plugin trả
+       `ok: true` kèm `document_not_quiescent` khi người dùng bắt đầu một lệnh
+       giữa hai trang, và một trang đọc lúc bản vẽ đang bị sửa không được ghép. */
+    if (drawingInfoBusyCode(next)) return null;
+    if (identityOf(next) !== identity) return null;
+    const rows = rowsOf(next);
+    if (!rows.length) return { layers, complete: false };
+    layers.push(...rows);
+    if (!truncated(next)) return { layers, complete: true };
+  }
+  return { layers, complete: false };
+}
+
 export function acadBridgeRouter(): Router {
   const r = express.Router();
 
@@ -1880,6 +1976,23 @@ export function acadBridgeRouter(): Router {
        bản cũ cũng không có `findDocExact` nhận mã phiên — nên hai đích không bao
        giờ cần đúng cùng lúc. */
     const nativeTarget = nativeDocumentTarget(document);
+    /* Đích phải nằm trên ĐÚNG một dòng — giao thức `drawing-info.req` là văn bản
+       theo dòng, và dòng thứ ba là offset bảng layer. `buildDrawingInfoRequest`
+       ném lỗi khi thấy xuống dòng, nhưng nó được gọi sâu bên trong một handler
+       async của Express 4 — thứ KHÔNG bắt được throw bất đồng bộ — nên lỗi đó sẽ
+       thành unhandled rejection thay vì một phản hồi tử tế.
+       Chặn ngay tại đây: tiêu đề bản vẽ do người dùng đặt, tức dữ liệu không
+       kiểm soát được. */
+    if (/[\r\n]/.test(nativeTarget) || /[\r\n]/.test(exactTarget)) {
+      return res.status(409).json({
+        ok: false,
+        status: "target_unusable",
+        code: "target_unusable",
+        error: "Tên hoặc đường dẫn bản vẽ có ký tự xuống dòng nên không chỉ đích "
+          + "danh được. Đổi tên bản vẽ rồi thử lại.",
+        ...drawingInfoRuntime(true, true, open.docs),
+      });
+    }
     if (!document || !nativeTarget) {
       const status = requestedTarget ? "not_found" : "active_document_not_found";
       return res.status(404).json({
@@ -1956,9 +2069,59 @@ export function acadBridgeRouter(): Router {
       });
     }
 
-    const responseSnapshot = snapshot.ok === false
-      ? snapshot
-      : await withLegacySelectionCatalog(snapshot, exactTarget);
+    /* `allLayers=1`: đọc bảng layer theo TRANG cho tới hết.
+       Chỉ làm khi người gọi xin, vì mỗi trang là một lượt hỏi plugin trả về CẢ
+       ảnh chụp (block, dictionary, thiết lập…) — bắt mọi người gọi trả giá đó
+       trong khi hầu hết không quan tâm tới layer thứ 5.001 là lãng phí. Hộp
+       thoại nhập layer là chỗ duy nhất cần, vì nó là chỗ duy nhất kết luận
+       "layer này KHÔNG CÒN trong bản vẽ" rồi xoá nó khỏi hồ sơ.
+
+       Và chỉ khi plugin CÔNG BỐ là nó đọc được theo trang. Bản cũ đọc dòng thứ
+       ba như một phần của target nên trả `not_found`; suy ngược từ lỗi đó sẽ báo
+       sai nguyên nhân, và tệ hơn là làm hỏng thứ đang chạy — người dùng plugin
+       cũ mất luôn danh sách cắt vốn vẫn dùng được cho hai nhóm thêm/ghi đè. */
+    let snapshotForResponse = snapshot;
+    const pagesLayers = drawingInfoRecord(snapshot.limits)?.pagesLayers === true;
+    if (snapshot.ok !== false && pagesLayers
+      && String(req.query.allLayers ?? "") === "1") {
+      /* NỖ LỰC TỐT NHẤT, không phải điều kiện tiên quyết. Không xong — bản vẽ
+         đổi giữa chừng, một trang đọc lúc đang bận, định danh thiếu — thì giữ
+         nguyên TRANG ĐẦU với cờ cắt. Trang đầu tự nó là một lượt đọc nhất quán,
+         và cờ cắt giữ nhóm xoá ở trạng thái ẩn, tức đúng hành vi an toàn đã có
+         trước khi có phân trang. Báo lỗi ở đây chỉ chặn người dùng khỏi hai nhóm
+         còn lại mà không đổi lại được gì. */
+      const paged = await readAllLayerPages(nativeTarget, snapshot);
+      if (paged) {
+        const tables = {
+          ...(drawingInfoRecord(snapshot.tables) ?? {}),
+          layers: paged.layers,
+        };
+        /* Payload phơi bảng layer ở HAI chỗ: `tables.layers` và `drawing.layers`.
+           Chỉ thay một chỗ là chỗ kia đứng nguyên ở trang đầu — trong khi cờ cắt
+           đã bị gỡ, nên ai đọc bản lồng sẽ coi một danh sách THIẾU là đã đủ, rồi
+           kết luận "layer này không còn" và xoá nó. `readDrawingLayers()` lùi về
+           đúng `drawing.layers` khi thiếu `tables.layers`. */
+        const drawing = drawingInfoRecord(snapshot.drawing);
+        const drawingProjection = drawing && "layers" in drawing
+          ? { drawing: { ...drawing, layers: paged.layers } }
+          : {};
+        const warnings = (Array.isArray(snapshot.warnings) ? snapshot.warnings : [])
+          .filter((warning) => warning !== "layers_truncated");
+        snapshotForResponse = {
+          ...snapshot,
+          tables,
+          ...drawingProjection,
+          /* Giữ cờ cắt khi VẪN chưa đọc hết — chạm trần vòng lặp, hoặc plugin
+             ngừng trả thêm. Bỏ nó lúc đó là nói dối rằng danh sách đã đủ, và
+             nhóm xoá sẽ hiện ra trên một danh sách thiếu. */
+          warnings: paged.complete ? warnings : [...warnings, "layers_truncated"],
+        };
+      }
+    }
+
+    const responseSnapshot = snapshotForResponse.ok === false
+      ? snapshotForResponse
+      : await withLegacySelectionCatalog(snapshotForResponse, exactTarget);
     const pluginCode = typeof responseSnapshot.code === "string"
       ? responseSnapshot.code.toLowerCase()
       : "";

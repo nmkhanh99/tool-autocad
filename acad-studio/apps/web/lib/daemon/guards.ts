@@ -215,6 +215,12 @@ export const guards: Record<string, Guard> = {
     why: "App không tìm thấy AutoCAD ở các vị trí cài đặt tiêu chuẩn.",
     fix: "Cài AutoCAD, hoặc dùng các chức năng offline không cần AutoCAD.",
   },
+  target_unusable: {
+    title: "Không chỉ đích danh được bản vẽ",
+    why: "Tên hoặc đường dẫn bản vẽ có ký tự xuống dòng. App gửi đích cho plugin "
+      + "theo từng dòng, nên một tên nhiều dòng sẽ bị đọc sai thành hai thứ khác nhau.",
+    fix: "Đổi tên bản vẽ (bỏ ký tự xuống dòng) rồi thử lại.",
+  },
   palette_stale: {
     title: "Bảng màu ACI đã cũ",
     why: "Bảng màu còn lại từ một phiên AutoCAD trước. Dùng nó là hiện màu của "

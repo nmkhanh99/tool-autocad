@@ -1,5 +1,130 @@
 # CHANGELOG
 
+## 2026-08-14 — Đọc bảng layer theo trang: nhóm xoá không còn bị ẩn
+
+Mục nợ kỹ thuật cuối. Nâng trần chỉ đẩy giới hạn đi xa hơn — đọc theo **trang**
+mới xoá được nó.
+
+### Added — `?allLayers=1` đọc hết bảng layer
+
+- **Plugin**: `drawing-info.req` nhận **dòng thứ ba** tuỳ chọn = offset bảng
+  layer. Dòng đó chỉ được thêm khi thật sự cần: bản plugin cũ đọc "phần còn lại
+  sau dòng 1" **là** target, nên một dòng thứ ba luôn có mặt sẽ biến target thành
+  `"tên\n0"` và không bản vẽ nào khớp — mọi lượt đọc hỏng, ở mọi người dùng chưa
+  build lại plugin.
+- Cờ `layers_truncated` nay tính theo **cửa sổ vừa phát** (`total > offset +
+  emitted`), không theo trần: một trang cuối đầy đủ vẫn phải báo "hết".
+- **Daemon**: chỉ chạy vòng ghép khi người gọi xin `allLayers=1`. Mỗi trang là
+  một lượt hỏi plugin trả về **cả** ảnh chụp (block, dictionary, thiết lập…), nên
+  bắt mọi người gọi trả giá đó trong khi hầu hết không quan tâm tới layer thứ
+  5.001 là lãng phí.
+- **Web**: hộp thoại nhập layer là chỗ **duy nhất** xin — cũng là chỗ duy nhất
+  kết luận "layer này không còn trong bản vẽ" rồi xoá nó khỏi hồ sơ.
+
+### Technical — chốt cho đúng cái bẫy đã cảnh báo trước khi làm
+
+Ghép nhiều lượt đọc kéo lại họ lỗi đã cắn tám vòng ở mục 1.1: bản vẽ đổi **giữa
+chừng** thì hai trang thuộc hai trạng thái khác nhau, ghép lại thành một danh
+sách **chưa từng tồn tại** — và chính danh sách đó quyết định layer nào bị xoá.
+
+Vì vậy mọi trang phải cùng `instance` **và** cùng `revision`; lệch một cái là
+**bỏ cả lượt ghép** chứ không nối. Ghép nhầm thì mất dữ liệu, còn bỏ thì chỉ mất
+phần mở rộng — trang đầu vẫn dùng được như trước.
+
+Cờ cắt được **giữ lại** khi vẫn chưa đọc hết (chạm trần vòng lặp, hoặc plugin
+ngừng trả thêm). Bỏ nó lúc đó là nói dối rằng danh sách đã đủ, và nhóm xoá sẽ
+hiện ra trên một danh sách thiếu.
+
+`readAllLayerPages()` nhận lượt đọc **tiêm được**, và có 6 test: một trang · nhiều
+trang (kiểm cả offset tăng đúng) · bản vẽ đổi giữa chừng · trang rỗng · lượt đọc
+hỏng · chạm trần vòng lặp. Bản vẽ thật ở máy này chỉ có 43 layer nên vòng lặp
+không bao giờ chạy — không tiêm được thì nó vĩnh viễn không có test. Test đã được
+xác nhận **đỏ** khi bỏ chốt nhất quán ra.
+
+### Fixed — Codex review: một đường mất dữ liệu còn sót, và bản chiếu lồng
+
+- **[P1] Panel cũ ở `/` không đọc theo trang.** Nó **thay sạch** danh sách layer
+  của hồ sơ bằng thứ đọc được, nên một bảng bị cắt không chỉ thiếu — nó **xoá**
+  phần còn lại khỏi hồ sơ, im lặng, ngay lúc lưu. Panel này sắp bị xoá nhưng vẫn
+  đang chạy, nên đường mất dữ liệu đó vẫn thật. Nay cũng xin `allLayers=1`.
+
+  **Lần sửa đầu gắn cờ vào NHẦM hàm** — file có hai dòng dựng query giống hệt
+  nhau, và tôi đánh vào cái đầu tiên: `importCurrentSelection()`, thứ gọi
+  `/selection/current` (route đó bỏ qua cờ hoàn toàn). Đường thay-sạch thật sự là
+  `importCurrentLayers()` thì vẫn thiếu. Cùng dạng với lỗi thay nhầm hàm trong
+  `mepbridge.cpp` ở mục 1.1 — thay theo văn bản trùng lặp mà không neo vào ngữ
+  cảnh. Nay kiểm bằng script: liệt kê từng query kèm hàm chứa nó và endpoint nó
+  gọi, thay vì đọc bằng mắt.
+
+  **Và gắn cờ vẫn CHƯA đủ.** `allLayers=1` chỉ là nỗ lực tốt nhất: plugin cũ
+  không đọc theo trang được, còn một lượt đọc dở cũng trả về trang đầu kèm cờ
+  cắt — mà panel này **phớt lờ** cờ đó rồi thay sạch. Nay nó **từ chối** khi thấy
+  `layers_truncated`, kèm câu nói rõ vì sao và cách xử lý. Hộp thoại mới không
+  cần chốt này vì nó không thay sạch: nó ẩn riêng nhóm xoá.
+- **[P2] Payload phơi bảng layer ở HAI chỗ.** Phân trang chỉ thay `tables.layers`,
+  còn `drawing.layers` đứng nguyên ở trang đầu — trong khi cờ cắt đã bị gỡ. Ai
+  đọc bản lồng sẽ coi một danh sách thiếu là đã đủ rồi kết luận "layer này không
+  còn" và xoá nó. `readDrawingLayers()` lùi về đúng `drawing.layers` khi thiếu
+  `tables.layers`, nên đây không phải đường chết. Nay thay cả hai.
+
+### Fixed — Codex review: hai đường nữa của cùng một họ lỗi
+
+- **[P2] `instance` không phải chuỗi vẫn lọt.** `String({})` là
+  `"[object Object]"` — **không rỗng**, nên phép kiểm "khác rỗng" cho qua, và hai
+  phản hồi từ hai bản vẽ **khác nhau** đều cho ra cùng chuỗi đó rồi được ghép.
+  Cùng họ với lỗi `?? ""` vừa sửa ở vòng trước: mọi đường quy một giá trị lạ về
+  một chuỗi chung đều làm chốt tự vô hiệu. Nay kiểm **kiểu**. Test phủ 8 ca, gồm
+  `instance` là object và là số.
+- **[P2] Tiêu đề bản vẽ có ký tự xuống dòng gây unhandled rejection.** Phép kiểm
+  một-dòng tôi thêm vào `buildDrawingInfoRequest` ném lỗi sâu trong một handler
+  async của Express 4 — thứ **không bắt được** throw bất đồng bộ. Nay chặn ngay
+  tại route và trả `409 target_unusable` kèm hướng xử lý.
+
+### Fixed — Codex review: plugin cũ mất luôn view đang dùng được
+
+Với bản plugin **chưa có phân trang**, một bản vẽ vượt trần cho ra `layers_truncated`
+ở trang đầu → daemon gửi offset > 0 → plugin cũ đọc dòng thứ ba **như một phần
+của target** → `not_found`. Người dùng đó **mất** cả danh sách cắt vốn vẫn dùng
+được cho hai nhóm thêm/ghi đè, và còn nhận thông báo **sai nguyên nhân** (đổ cho
+bản vẽ thay đổi).
+
+Hai sửa, theo đúng bài học của loạt mã phiên:
+
+- Plugin **công bố** `limits.pagesLayers`; daemon chỉ phân trang khi thấy cờ đó.
+  Suy ngược từ lỗi `not_found` là đoán, và đoán ở đây báo sai nguyên nhân.
+- Phân trang là **nỗ lực tốt nhất**, không phải điều kiện tiên quyết. Không xong
+  thì giữ nguyên **trang đầu** với cờ cắt — trang đầu tự nó là một lượt đọc nhất
+  quán, và cờ cắt giữ nhóm xoá ở trạng thái ẩn, tức đúng hành vi an toàn đã có
+  trước khi có phân trang. Mã lỗi `drawing_changed_while_reading` vì thế bị gỡ.
+
+`check:guards` bắt được cả **chiều ngược** — copy UI còn lại cho một mã daemon
+không còn phát ra nữa.
+
+### Fixed — Codex review: hai lỗ hổng của chính chốt vừa dựng
+
+- **[P1] Định danh thiếu thì mọi trang "khớp" nhau.** `instance ?? ""` ghép với
+  `revision ?? ""` cho ra `"|"` ở **mọi** trang khi phản hồi thiếu cả hai trường,
+  nên chúng được ghép — chốt tự vô hiệu **trong im lặng**, đúng thứ nó sinh ra để
+  chặn. Nay đòi `instance` không rỗng **và** `revision` là số hữu hạn; thiếu là
+  từ chối ngay, không đọc thêm trang nào. Một trang duy nhất không cắt thì vẫn
+  không cần định danh — không có gì để ghép.
+- **[P2] Trang đọc trong lúc AutoCAD đang bận vẫn được ghép.** Plugin trả
+  `ok: true` kèm `document_not_quiescent`, nên phép kiểm `ok === false` không bắt
+  được. Trang **đầu** đã qua chốt busy ở route; các trang sau thì chưa. Nay dùng
+  `drawingInfoBusyCode()` cho từng trang.
+
+**Test đầu tiên tôi viết cho lỗ hổng định danh chỉ bắt 1/5 ca** — vì trang sau
+trong test vẫn có định danh, nên phép so "trang sau khác trang trước" bắt hộ. Ca
+nguy hiểm thật là **mọi trang đều thiếu**. Đã sửa test: nay đỏ đủ 5/5 khi bỏ chốt.
+
+### Fixed — một phép kiểm đang đúng vì lý do sai
+
+`test-bridge-contract.mjs` khoá "route đọc bằng exact target" bằng cách tìm
+literal `requestDrawingInfoWithBusyRetry(exactTarget)`. Sau khi route đổi sang
+`nativeTarget` (2026-08-13) nó **vẫn xanh** — vì literal đó còn nằm trong
+`withLegacySelectionCatalog` và ở nhánh lùi. Một phép kiểm đúng vì lý do sai còn
+tệ hơn không có; nay nó neo vào đúng dòng của route.
+
 ## 2026-08-14 — Hai mục nợ kỹ thuật: chốt cuối biết bản vẽ nào, và test chạy được ở máy khác
 
 ### Fixed — `documentGuardLisp()` phân biệt được hai bản vẽ chưa lưu trùng tiêu đề

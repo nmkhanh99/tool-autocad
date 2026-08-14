@@ -753,8 +753,24 @@ Ba thứ dữ liệu phải đúng, và cả ba đều từng sai:
    chung cho linetype/textstyle/dimstyle; plugin công bố cả hai trong `limits`.
    Một danh sách cụt không đủ để nói layer nào *không còn* trong bản vẽ — nên
    nhóm xoá bị ẩn khi cờ này bật, còn hai nhóm kia vẫn dùng được vì chúng chỉ
-   chạm tới layer thật sự đọc được. **Ngưỡng lớn hơn không phải là phân trang**:
-   bản vẽ quá 5.000 layer vẫn ẩn nhóm xoá.
+   chạm tới layer thật sự đọc được.
+
+   **Đọc theo trang (2026-08-14) xoá được giới hạn đó.** `drawing-info.req` nhận
+   dòng thứ ba tuỳ chọn = offset, và `GET /drawing-info?allLayers=1` lặp cho tới
+   hết. Chỉ hộp thoại nhập layer xin nó, vì mỗi trang kéo về cả ảnh chụp.
+   Chỉ chạy khi plugin công bố `limits.pagesLayers` — bản cũ đọc dòng thứ ba như
+   một phần của target và trả `not_found`, nên suy ngược từ lỗi sẽ báo sai nguyên
+   nhân.
+
+   Chốt bắt buộc: mọi trang phải cùng `instance` **và** `revision` (cả hai phải
+   CÓ THẬT — thiếu là từ chối, vì `?? ""` ở cả hai cho ra cùng một chuỗi ở mọi
+   trang và chốt tự vô hiệu), và không trang nào được đọc lúc bản vẽ đang bận.
+   Ghép hai trang thuộc hai trạng thái khác nhau cho ra một danh sách chưa từng
+   tồn tại, mà chính nó quyết định layer nào bị xoá.
+
+   Không xong thì **giữ nguyên trang đầu** với cờ cắt, không báo lỗi: trang đầu
+   tự nó nhất quán, và cờ cắt giữ nhóm xoá ở trạng thái ẩn — đúng hành vi an toàn
+   trước khi có phân trang.
 3. **Dòng có thuộc tính không ĐỌC ĐƯỢC phải bị bỏ, không được điền mặc định.**
    Plugin luôn phát đủ `aci` · `linetype` · `lineweight`; một dòng thiếu bất kỳ
    cái nào không phải dòng bảng layer. Ba ca nữa cũng rơi vào `skipped`, vì cả ba

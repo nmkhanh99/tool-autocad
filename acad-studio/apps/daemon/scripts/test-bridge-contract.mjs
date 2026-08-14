@@ -371,6 +371,130 @@ assert(
   "open-document selection resolves one active document",
 );
 
+/* Vong GHEP TRANG bang layer. Day la cho nguy hiem nhat cua ca tinh nang: no
+   quyet dinh danh sach dung de XOA layer khoi ho so. Ban ve that o may nay chi co
+   43 layer nen vong lap khong bao gio chay — khong tiem duoc luot doc thi no
+   vinh vien khong co test. */
+{
+  const snap = (names, { truncated = false, instance = "I1", revision = 7 } = {}) => ({
+    ok: true,
+    document: { instance, revision },
+    tables: { layers: names.map((name) => ({ name })) },
+    warnings: truncated ? ["layers_truncated"] : [],
+  });
+  const namesOf = (result) => (result?.layers ?? []).map((row) => row.name);
+
+  // 1. Mot trang, khong cat -> xong ngay, khong hoi them luot nao.
+  let calls = 0;
+  let out = await bridge.readAllLayerPages("T", snap(["a", "b"]), async () => {
+    calls++; return null;
+  });
+  assert(out?.complete === true && namesOf(out).join(",") === "a,b", "mot trang: xong ngay");
+  assert(calls === 0, "khong cat thi KHONG hoi them trang");
+
+  // 2. Nhieu trang -> ghep dung thu tu, offset tang theo so dong da co.
+  const offsets = [];
+  out = await bridge.readAllLayerPages("T", snap(["a", "b"], { truncated: true }),
+    async (_t, _ms, offset) => {
+      offsets.push(offset);
+      return offset === 2 ? snap(["c", "d"], { truncated: true }) : snap(["e"]);
+    });
+  assert(namesOf(out).join(",") === "a,b,c,d,e", `ghep sai: ${namesOf(out)}`);
+  assert(out.complete === true, "het cat thi bao da du");
+  assert(offsets.join(",") === "2,4", `offset phai theo so dong da co: ${offsets}`);
+
+  // 3. Ban ve DOI giua chung -> BO ca luot doc, khong ghep.
+  for (const changed of [{ instance: "I2" }, { revision: 8 }]) {
+    out = await bridge.readAllLayerPages("T", snap(["a"], { truncated: true }),
+      async () => snap(["b"], { ...changed }));
+    assert(out === null, `ban ve doi (${JSON.stringify(changed)}) phai bo ca luot doc`);
+  }
+
+  // 4. Trang rong ma co cat van bat -> bao CHUA DU, khong quay vong mai.
+  out = await bridge.readAllLayerPages("T", snap(["a"], { truncated: true }),
+    async () => snap([], { truncated: true }));
+  assert(out?.complete === false && namesOf(out).join(",") === "a",
+    "trang rong: giu nguyen thu da co va bao chua du");
+
+  // 5. Luot doc hong -> BO, khong tra ve mot danh sach thieu tuong la du.
+  out = await bridge.readAllLayerPages("T", snap(["a"], { truncated: true }), async () => null);
+  assert(out === null, "luot doc hong phai bo ca luot");
+  out = await bridge.readAllLayerPages("T", snap(["a"], { truncated: true }),
+    async () => ({ ok: false }));
+  assert(out === null, "phan hoi loi phai bo ca luot");
+
+  // 6. Dinh danh THIEU -> tu choi ghep, khong coi la "giong nhau".
+  //    Ghep `instance ?? ""` voi `revision ?? ""` la fail-OPEN: mot phan hoi
+  //    thieu ca hai truong cho ra cung mot chuoi o MOI trang, nen moi trang
+  //    "khop" nhau va duoc ghep — chot tu vo hieu trong im lang.
+  //    Ca NGUY HIEM that su la MOI trang deu thieu — luc do phep so "trang sau
+  //    khac trang truoc" khong bat ho duoc nua, va chi rieng phep doi dinh danh
+  //    day du moi chan. Nen trang sau phai mang DUNG cai document hong do.
+  //    `{}` va `[]` lam `String(...)` ra `"[object Object]"`/`""` — cai dau
+  //    KHONG rong nen mot phep kiem "khac rong" se cho lot, va hai ban ve khac
+  //    nhau deu cho ra cung chuoi do roi duoc ghep.
+  for (const doc of [{}, { instance: "" }, { instance: "I1" }, { revision: 7 },
+                     { instance: "I1", revision: "7" },
+                     { instance: {}, revision: 7 }, { instance: 5, revision: 7 },
+                     { instance: "I1", revision: Number.NaN }]) {
+    const bad = (names, truncated) => ({
+      ok: true, document: doc, tables: { layers: names.map((name) => ({ name })) },
+      warnings: truncated ? ["layers_truncated"] : [],
+    });
+    out = await bridge.readAllLayerPages("T", bad(["a"], true), async () => bad(["b"], false));
+    assert(out === null, `dinh danh thieu phai tu choi: ${JSON.stringify(doc)}`);
+  }
+  //    Nhung mot trang duy nhat KHONG cat thi khong can dinh danh — khong co gi
+  //    de ghep, va doi hoi no o day se pha ca duong doc binh thuong.
+  out = await bridge.readAllLayerPages("T",
+    { ok: true, document: {}, tables: { layers: [{ name: "a" }] }, warnings: [] },
+    async () => null);
+  assert(out?.complete === true, "mot trang khong cat thi khong can dinh danh");
+
+  // 7. Trang doc trong luc AutoCAD DANG BAN -> khong duoc ghep.
+  //    Plugin tra `ok: true` kem `document_not_quiescent`, nen phep kiem
+  //    `ok === false` o tren khong bat duoc. Trang DAU da qua chot busy o route;
+  //    cac trang sau thi chua.
+  for (const busy of [{ code: "document_not_quiescent" }, { code: "busy" }]) {
+    out = await bridge.readAllLayerPages("T", snap(["a"], { truncated: true }),
+      async () => ({ ...snap(["b"]), ...busy }));
+    assert(out === null, `trang doc luc dang ban phai bi tu choi: ${busy.code}`);
+  }
+
+  // 8. Cham tran vong lap -> bao chua du chu khong chay mai.
+  let served = 0;
+  out = await bridge.readAllLayerPages("T", snap(["x0"], { truncated: true }),
+    async () => { served++; return snap([`x${served}`], { truncated: true }); });
+  assert(out?.complete === false, "cham tran phai bao CHUA du");
+  assert(served <= 40, `phai co tran vong lap, da goi ${served} lan`);
+}
+
+/* Dong thu ba cua `drawing-info.req` la offset bang layer — va CHI duoc them khi
+   that su can. Ban plugin cu doc "phan con lai sau dong 1" LA target, nen mot
+   dong thu ba luon co mat se bien target thanh "ten\n0" va khong ban ve nao
+   khop: moi luot doc hong, o moi nguoi dung chua build lai plugin. */
+assert(
+  bridge.buildDrawingInfoRequest("req-1", "/a/Plan.dwg") === "req-1\n/a/Plan.dwg",
+  "offset 0 KHONG duoc them dong thu ba",
+);
+assert(
+  bridge.buildDrawingInfoRequest("req-1", "/a/Plan.dwg", 5000) === "req-1\n/a/Plan.dwg\n5000",
+  "offset duong nam o dong thu ba",
+);
+/* `target` phai nam tren dung MOT dong: mot xuong dong lot vao se bi plugin doc
+   thanh offset. Tieu de ban ve do nguoi dung dat, nen day la du lieu khong kiem
+   soat duoc. */
+for (const bad of ["a\nb.dwg", "a\rb.dwg"]) {
+  let threw = false;
+  try { bridge.buildDrawingInfoRequest("req-1", bad); } catch { threw = true; }
+  assert(threw, `target nhieu dong phai bi tu choi: ${JSON.stringify(bad)}`);
+}
+for (const bad of [-1, 1.5, Number.NaN]) {
+  let threw = false;
+  try { bridge.buildDrawingInfoRequest("req-1", "/a.dwg", bad); } catch { threw = true; }
+  assert(threw, `offset khong hop le phai bi tu choi: ${bad}`);
+}
+
 const unsavedDocs = [
   { title: "Drawing1.dwg", file: "", instance: "AAA-001", active: true },
   { title: "Drawing1.dwg", file: "", instance: "BBB-002", active: false },
@@ -851,15 +975,57 @@ assert(bridgeSrc.includes('DRAWING_INFO_REQUEST_NAME = "drawing-info.req"'), "so
 assert(bridgeSrc.includes('DRAWING_INFO_RESPONSE_NAME = "drawing-info.json"'), "source drawing-info response name");
 const acadBridgeSrc = readFileSync(join(__dirname, "../src/acadBridge.ts"), "utf8");
 assert(acadBridgeSrc.includes('r.get("/drawing-info"'), "drawing-info HTTP route wired");
+/* Luot doc CHINH cua route phai dung dich GUI DI (`nativeTarget`), khong phai
+   dich de SO (`exactTarget`).
+   Phep kiem cu tim literal `requestDrawingInfoWithBusyRetry(exactTarget)`, va sau
+   khi route doi sang `nativeTarget` thi no VAN XANH — vi literal do con o trong
+   `withLegacySelectionCatalog` va o nhanh lui. Mot phep kiem dung vi ly do sai
+   con te hon khong co, nen no phai neo vao dung dong cua route. */
 assert(
-  acadBridgeSrc.includes("requestDrawingInfoWithBusyRetry(exactTarget)"),
-  "drawing-info route retries only transient busy snapshots for the exact target",
+  acadBridgeSrc.includes("let snapshot = await requestDrawingInfoWithBusyRetry(nativeTarget)"),
+  "drawing-info route reads with the native (send) target",
 );
 assert(
-  acadBridgeSrc.includes("withLegacySelectionCatalog(snapshot, exactTarget)") &&
+  acadBridgeSrc.includes("requestDrawingInfoWithBusyRetry(exactTarget)"),
+  "legacy fallback still retries with the compare target",
+);
+assert(
+  acadBridgeSrc.includes("withLegacySelectionCatalog(snapshotForResponse, exactTarget)") &&
     acadBridgeSrc.includes("{ readOnly: true }") &&
     acadBridgeSrc.includes("selection_catalog_document_stale"),
   "drawing-info enriches old-plugin snapshots through a guarded read-only one-pass scan",
+);
+/* Doc bang layer theo TRANG: co cat phai duoc GIU LAI khi chua doc het.
+   Bo no luc do la noi doi rang danh sach da du, va nhom xoa se hien ra tren mot
+   danh sach thieu — dung duong mat du lieu ma ca tinh nang nay sinh ra de chan. */
+assert(
+  acadBridgeSrc.includes('paged.complete ? warnings : [...warnings, "layers_truncated"]'),
+  "paged layer read keeps the truncated flag when it did not finish",
+);
+assert(
+  acadBridgeSrc.includes("if (identityOf(next) !== identity) return null"),
+  "paged layer read refuses to stitch pages from different drawing states",
+);
+/* Payload phoi bang layer o HAI cho. Chi thay `tables.layers` la ban long
+   `drawing.layers` dung nguyen o trang dau, trong khi co cat da bi go — ai doc
+   ban long se coi mot danh sach THIEU la da du roi ket luan "layer nay khong
+   con" va xoa no. `readDrawingLayers()` lui ve dung `drawing.layers`. */
+assert(
+  acadBridgeSrc.includes('drawing && "layers" in drawing') &&
+    acadBridgeSrc.includes("...drawingProjection,"),
+  "paged layer read updates the nested drawing.layers projection too",
+);
+/* Trang dau da qua chot busy o route; cac trang sau thi chua. */
+assert(
+  acadBridgeSrc.includes("if (drawingInfoBusyCode(next)) return null"),
+  "paged layer read refuses a page read while AutoCAD is busy",
+);
+/* Chi phan trang khi plugin CONG BO nang luc. Suy nguoc tu `not_found` cua ban
+   cu se bao sai nguyen nhan VA lam hong view cat von dang dung duoc. */
+assert(
+  acadBridgeSrc.includes("pagesLayers") &&
+    acadBridgeSrc.includes('drawingInfoRecord(snapshot.limits)?.pagesLayers === true'),
+  "paging is gated on the plugin-published capability",
 );
 assert(
   acadBridgeSrc.includes("snapshotCollectedAt: responseSnapshot.collectedAt"),

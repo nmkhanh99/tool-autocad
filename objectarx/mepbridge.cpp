@@ -1036,11 +1036,23 @@ static void collectSelectionScope(AcDbDatabase* db, SelectionScopeStats& stats,
     if (unreadable) addWarning(warnings, "selection_scope_scan_incomplete");
 }
 
+// `offset` = bo qua bao nhieu layer dau tien. Cho phep app doc bang layer theo
+// TRANG khi ban ve vuot `kInfoMaxLayerItems`.
+//
+// Vi sao can: man Ho so doi chieu bang layer cua ban ve voi ho so, va mot danh
+// sach CUT thi khong du de noi "layer nay khong con trong ban ve" — giao dien
+// buoc phai an han nhom xoa. Nang tran chi day gioi han di xa hon; phan trang
+// mới xoá được nó.
+//
+// `total` van la TONG so layer doc duoc (khong phu thuoc offset), nen app biet
+// chinh xac con bao nhieu trang thay vi phai doan.
 static std::string layerTableJson(AcDbDatabase* db,
                                   const SelectionScopeStats& selectionScope,
                                   long long& total,
-                                  std::vector<std::string>& warnings) {
+                                  std::vector<std::string>& warnings,
+                                  size_t offset = 0) {
     total = 0;
+    size_t emitted = 0;
     AcDbLayerTable* table = nullptr;
     if (!db || db->getLayerTable(table, AcDb::kForRead) != Acad::eOk || !table) {
         addWarning(warnings, "layers_unavailable");
@@ -1054,7 +1066,7 @@ static std::string layerTableJson(AcDbDatabase* db,
         for (; !it->done(); it->step()) {
             AcDbLayerTableRecord* layer = nullptr;
             if (it->getRecord(layer, AcDb::kForRead) != Acad::eOk || !layer) continue;
-            if (count < kInfoMaxLayerItems) {
+            if (count >= offset && emitted < kInfoMaxLayerItems) {
                 AcString name, description;
                 layer->getName(name);
                 layer->description(description);
@@ -1088,6 +1100,7 @@ static std::string layerTableJson(AcDbDatabase* db,
                        ",\"plottable\":" + jsonBool(layer->isPlottable()) +
                        ",\"inUse\":" + jsonBool(layer->isInUse()) +
                        ",\"description\":" + jsonString(toUtf8(description.kwszPtr())) + "}";
+                emitted++;
             }
             count++;
             total++;
@@ -1098,7 +1111,10 @@ static std::string layerTableJson(AcDbDatabase* db,
         addWarning(warnings, "layers_iterator_unavailable");
     }
     table->close();
-    if (count > kInfoMaxLayerItems) addWarning(warnings, "layers_truncated");
+    // Cat = con layer o SAU cua so vua phat. So `total` voi `offset + emitted`
+    // chu khong so voi tran: mot trang cuoi day du van phai bao "het", va mot
+    // offset qua tay phai bao "khong con gi".
+    if (total > (long long)(offset + emitted)) addWarning(warnings, "layers_truncated");
     return out + "]";
 }
 
@@ -1674,6 +1690,21 @@ static void writeDrawingInfo() {
     std::string requestId = nl == std::string::npos ? raw : raw.substr(0, nl);
     std::string target = nl == std::string::npos ? "" : raw.substr(nl + 1);
     if (!requestId.empty() && requestId.back() == '\r') requestId.pop_back();
+    // DONG THU BA (tuy chon) = offset cua bang layer. Bo qua bao nhieu layer dau
+    // tien truoc khi phat. Them mot dong chu khong doi hai dong dau: ban daemon
+    // cu gui hai dong van chay y nguyen, va ban plugin cu nhan ba dong se coi
+    // dong thu ba la mot phan cua target roi khong tim thay ban ve — bao loi ro
+    // rang chu khong lang le doc sai trang.
+    size_t layerOffset = 0;
+    const size_t nl2 = target.find('\n');
+    if (nl2 != std::string::npos) {
+        const std::string offsetText = target.substr(nl2 + 1);
+        target = target.substr(0, nl2);
+        try {
+            const long long parsed = std::stoll(offsetText);
+            if (parsed > 0) layerOffset = (size_t)parsed;
+        } catch (...) { /* khong doc duoc thi coi nhu trang dau */ }
+    }
     while (!target.empty() && (target.back() == '\r' || target.back() == '\n'))
         target.pop_back();
     if (requestId.empty()) {
@@ -1740,7 +1771,7 @@ static void writeDrawingInfo() {
     long long layerCount = 0, blockCount = 0, layoutCount = 0, xrefCount = 0;
     long long dataLinkCount = 0;
     const std::string layers =
-        layerTableJson(db, selectionScope, layerCount, warnings);
+        layerTableJson(db, selectionScope, layerCount, warnings, layerOffset);
     AcDbSymbolTable* linetypeTable = nullptr;
     if (db->getLinetypeTable(linetypeTable, AcDb::kForRead) != Acad::eOk) linetypeTable = nullptr;
     const std::string linetypes =
@@ -1850,6 +1881,11 @@ static void writeDrawingInfo() {
             std::to_string(kInfoMaxSelectionScopeEntities) +
         ",\"maxTableItems\":" + std::to_string(kInfoMaxTableItems) +
         ",\"maxLayerItems\":" + std::to_string(kInfoMaxLayerItems) +
+        // Ban plugin nay doc duoc bang layer theo TRANG (dong thu ba cua
+        // `drawing-info.req` = offset). Cong bo su that do thay vi de daemon
+        // THU roi doan tu loi: ban cu doc dong thu ba nhu mot phan cua target
+        // nen tra `not_found`, va suy nguoc tu do se bao sai nguyen nhan.
+        ",\"pagesLayers\":true" +
         ",\"maxMapKeys\":" + std::to_string(kInfoMaxMapKeys) +
         ",\"maxDictionaryItems\":" + std::to_string(kInfoMaxDictionaryItems) +
         ",\"maxSelectionObjects\":" + std::to_string(kInfoMaxSelectionObjects) +

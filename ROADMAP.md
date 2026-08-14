@@ -425,7 +425,9 @@ route, như `blocks.module.css` vừa làm.
     từ `rgb`; (b) đặt màu ACI phải **xoá** 420, vì 420 thắng 62 và sót lại là lệnh
     chạy xong mà màu không đổi; (c) đặt màu thật thì **không đụng** 62 — giữ nguyên
     được cả dấu ÂM của nó, mà dấu âm nghĩa là layer đang TẮT.
-  - ~~Bảng layer quá **500 dòng** thì nhóm xoá bị ẩn vĩnh viễn.~~ **Nới, chưa hết.**
+  - ~~Bảng layer quá **500 dòng** thì nhóm xoá bị ẩn vĩnh viễn.~~ **XONG
+    2026-08-14** — đọc theo trang (`?allLayers=1`), mọi trang phải cùng
+    `instance`+`revision`. Ghi chú nâng trần bên dưới giữ lại làm bối cảnh.
     Riêng bảng layer lên **5.000** dòng (`kInfoMaxLayerItems`, tách khỏi
     `kInfoMaxTableItems` dùng chung cho linetype/textstyle/dimstyle) và plugin công
     bố ngưỡng đó trong `limits`. Bản vẽ **quá 5.000 layer vẫn ẩn nhóm xoá** —

@@ -1386,11 +1386,28 @@ export default function DrawingStandardsPanel({
     setLayerImportBusy(true);
     setNotice(null);
     try {
-      const query = `?target=${encodeURIComponent(target)}`;
+      /* `allLayers=1`: hàm NÀY thay sạch danh sách layer của hồ sơ bằng thứ
+         đọc được. Một bảng bị cắt vì thế không chỉ thiếu — nó XOÁ phần còn lại
+         khỏi hồ sơ, im lặng, ngay lúc lưu. Panel này sắp bị xoá nhưng vẫn đang
+         chạy ở `/`, nên đường mất dữ liệu đó vẫn thật. */
+      const query = `?target=${encodeURIComponent(target)}&allLayers=1`;
       const body = await daemonJson<JsonRecord>(await fetch(
         `${baseUrl}/api/acad/drawing-info${query}`,
         { cache: "no-store" },
       ));
+      /* Bảng bị CẮT thì TỪ CHỐI, không thay.
+         Hàm này thay sạch danh sách layer của hồ sơ, nên một danh sách thiếu
+         không chỉ thiếu — nó XOÁ phần còn lại, im lặng, ngay lúc lưu. `allLayers=1`
+         ở trên chỉ là nỗ lực tốt nhất: plugin cũ không đọc theo trang được, và
+         một lượt đọc dở cũng trả về trang đầu kèm cờ cắt. Bỏ qua cờ đó là để
+         nguyên đúng đường mất dữ liệu vừa đi sửa. */
+      if (Array.isArray(body.warnings) && body.warnings.includes("layers_truncated")) {
+        throw new Error(
+          "Bản vẽ có nhiều layer hơn mức plugin trả về được, nên danh sách đọc "
+          + "được chưa đủ. Thay danh sách bằng nó sẽ xoá mất phần còn lại của hồ "
+          + "sơ. Build lại plugin AcadBridge rồi khởi động lại AutoCAD.",
+        );
+      }
       const drawing = asRecord(body.drawing);
       const tables = asRecord(body.tables);
       const rows = recordRows(tables?.layers ?? drawing?.layers ?? body.layers);

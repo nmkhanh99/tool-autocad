@@ -145,7 +145,13 @@ export function ImportLayers({ layers, docs, docsAlive, onCancel, onApply }: {
   const read = useCallback(async (file: string): Promise<Snapshot> => {
     const body = await daemonRecord(
       await fetch(
-        `${endpoints.drawingInfo(DAEMON_BASE)}?target=${encodeURIComponent(file)}`,
+        /* `allLayers=1`: đọc bảng layer theo TRANG cho tới hết.
+           Đây là chỗ DUY NHẤT xin nó, vì cũng là chỗ duy nhất kết luận "layer
+           này không còn trong bản vẽ" rồi xoá nó khỏi hồ sơ — và một danh sách
+           bị cắt không đủ để kết luận như vậy. Mỗi trang là một lượt hỏi plugin
+           trả về cả ảnh chụp, nên bắt mọi người gọi khác trả giá đó là lãng phí. */
+        `${endpoints.drawingInfo(DAEMON_BASE)}?target=${encodeURIComponent(file)}`
+        + "&allLayers=1",
         { cache: "no-store" },
       ),
     );
