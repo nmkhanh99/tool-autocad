@@ -19,19 +19,27 @@
  * `ByBlock`) lưu dạng chuỗi, phần còn lại là số milimét `0…2.11`. Gộp về một
  * kiểu là hỏng một nửa — xem `LINEWEIGHTS` trong `model.ts`.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/icons";
 import {
   ACI_NAMED,
   LINEWEIGHTS,
   LINEWEIGHT_NAMES,
+  AREA_UNITS,
   ROOM_KIND,
   aciHex,
+  deadBoundsKeys,
+  readAreaBounds,
+  readRegionBounds,
+  rawRegionBounds,
+  shouldSyncField,
+  writeBounds,
   isHexColor,
   layerRowErrors,
   mappingRowErrors,
   type AciPalette,
+  type JsonRecord,
   type LayerRule,
   type MappingRule,
 } from "./model";
@@ -491,6 +499,18 @@ export function MappingTable({ mappings, onChange, disabled }: {
   const errors = mappingRowErrors(mappings);
   const patch = (index: number, next: Partial<MappingRule>) =>
     onChange(mappings.map((item, i) => (i === index ? { ...item, ...next } : item)));
+  /* Mở theo `sourceId`+vị trí, KHÔNG theo chỉ số: xoá một dòng phía trên làm mọi
+     chỉ số trượt, và khối đang mở sẽ nhảy sang ánh xạ khác. */
+  const [openBounds, setOpenBounds] = useState<string | null>(null);
+  /* Neo theo `sourceId`, KHÔNG theo vị trí. Xoá một dòng phía trên làm chỉ số
+     của mọi dòng dưới nó tụt đi một, nên khoá có chỉ số sẽ đóng sập đúng cái
+     bảng giới hạn người dùng đang mở — và giới hạn là thứ cần nhìn lâu nhất.
+     Dòng MỚI chưa có `sourceId` nên vẫn phải dùng chỉ số. Chấp nhận: nó là dòng
+     người dùng vừa thêm và đang sửa, mất mát tối đa là một khối gập lại. Thêm
+     một mã cục bộ vào `MappingRule` để chữa nốt ca đó là mời nó lọt vào thân
+     PUT gửi lên daemon — cái giá đó lớn hơn cái được. */
+  const boundsKey = (mapping: MappingRule, index: number) =>
+    mapping.sourceId ? `id:${mapping.sourceId}` : `moi:${index}`;
 
   return (
     <section className="panel">
@@ -537,14 +557,15 @@ export function MappingTable({ mappings, onChange, disabled }: {
             </tr>
           </thead>
           <tbody>
+            {/* Khoá theo `sourceId`, KHÔNG theo chỉ số: xoá một dòng phía trên
+                làm React tái dùng component của dòng dưới cho một ánh xạ khác,
+                mang theo cả chữ đang gõ dở trong ô thẻ. Cũng không khoá theo
+                `id` — nó sửa được, nên mỗi phím gõ sẽ dựng lại dòng và cướp mất
+                con trỏ. Dòng mới chưa có `sourceId` thì đành theo chỉ số; chúng
+                luôn nằm cuối nên không bị dịch bởi dòng phía trên. */}
             {mappings.map((mapping, index) => (
-              /* Khoá theo `sourceId`, KHÔNG theo chỉ số: xoá một dòng phía trên
-                 làm React tái dùng component của dòng dưới cho một ánh xạ khác,
-                 mang theo cả chữ đang gõ dở trong ô thẻ. Cũng không khoá theo
-                 `id` — nó sửa được, nên mỗi phím gõ sẽ dựng lại dòng và cướp
-                 mất con trỏ. Dòng mới chưa có `sourceId` thì đành theo chỉ số;
-                 chúng luôn nằm cuối nên không bị dịch bởi dòng phía trên. */
-              <tr key={mapping.sourceId || `moi-${index}`}
+            <Fragment key={mapping.sourceId || `moi-${index}`}>
+              <tr
                 data-invalid={errors[index] ? "true" : "false"}>
                 <td>
                   <input className="cell mono" value={mapping.id} disabled={disabled}
@@ -601,13 +622,42 @@ export function MappingTable({ mappings, onChange, disabled }: {
                     aria-label={`Bắt buộc dòng ${index + 1}`}
                     onChange={(event) => patch(index, { required: event.target.checked })} />
                 </td>
-                <td style={{ textAlign: "right" }}>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                  {(() => {
+                    const key = boundsKey(mapping, index);
+                    const open = openBounds === key;
+                    const region = readRegionBounds(mapping.bounds);
+                    const area = readAreaBounds(mapping.bounds);
+                    const set = [region.minX, region.minY, region.maxX, region.maxY]
+                      .some((value) => value !== undefined)
+                      || area.minArea !== undefined || area.maxArea !== undefined;
+                    return (
+                      <Button aria-expanded={open}
+                        aria-label={`Giới hạn nhận diện dòng ${index + 1}`}
+                        onClick={() => setOpenBounds(open ? null : key)}>
+                        {/* Nói CÓ ĐANG ĐẶT hay không ngay trên nút: giới hạn nằm
+                            trong khối gập, nên không có dấu này thì một quy tắc
+                            bị thu hẹp trông y hệt một quy tắc không giới hạn. */}
+                        Giới hạn{set ? " ✓" : ""}
+                      </Button>
+                    );
+                  })()}
+                  {" "}
                   <Button disabled={disabled} aria-label={`Xoá ánh xạ dòng ${index + 1}`}
                     onClick={() => onChange(mappings.filter((_, i) => i !== index))}>
                     Xoá
                   </Button>
                 </td>
               </tr>
+              {openBounds === boundsKey(mapping, index) ? (
+                <tr>
+                  <td colSpan={9} style={{ background: "var(--surface)" }}>
+                    <BoundsEditor mapping={mapping} disabled={disabled} index={index}
+                      onChange={(bounds) => patch(index, { bounds })} />
+                  </td>
+                </tr>
+              ) : null}
+            </Fragment>
             ))}
             {!mappings.length ? (
               <tr><td colSpan={9}>
@@ -618,6 +668,129 @@ export function MappingTable({ mappings, onChange, disabled }: {
         </table>
       </div>
     </section>
+  );
+}
+
+
+/** Khối **giới hạn nhận diện** của một ánh xạ — hai nhóm, không phải ô JSON.
+ *
+ * Panel cũ cho sửa `bounds` bằng một ô JSON thô, tức cho gõ những khoá không có
+ * tác dụng mà không báo gì. `bounds` thực ra là **ba thứ khác nhau chung một
+ * tên**, chạy ở hai nơi và hai thời điểm — nên chúng phải là hai nhóm có nhãn
+ * theo tác dụng THẬT, và nhóm thứ ba (khoá chết) phải được nói ra.
+ */
+function BoundsEditor({ mapping, onChange, disabled, index }: {
+  mapping: MappingRule;
+  onChange: (next: JsonRecord | undefined) => void;
+  disabled: boolean;
+  index: number;
+}) {
+  const region = readRegionBounds(mapping.bounds);
+  const area = readAreaBounds(mapping.bounds);
+  /* Ô nhập nhận giá trị THÔ, không phải giá trị đã phân tích. Cho nó ăn
+     `region[key]` là dựng một vòng: gõ `-` để bắt đầu một số âm → `Number("-")`
+     không hữu hạn → giá trị ngoài thành `undefined` → ô tự xoá ngay trước phím
+     kế. Không cách nào gõ được số âm, trừ khi dán.
+     `region`/`area` vẫn dùng cho phần LOGIC (đếm đủ bốn số, câu cảnh báo đơn
+     vị) — đó mới là chỗ cần số. */
+  const raw = rawRegionBounds(mapping.bounds);
+  const rawArea: Record<string, unknown> = mapping.bounds ?? {};
+  const dead = deadBoundsKeys(mapping.bounds);
+  const set = (patch: Record<string, number | string | undefined>) =>
+    onChange(writeBounds(mapping.bounds, patch));
+
+  /* Bốn số phải ĐỦ mới có tác dụng: chương trình LISP làm
+     `(not (and (numberp minx) …))` rồi ngắn mạch, nên thiếu một số là bỏ lọc
+     HOÀN TOÀN — không phải lọc một phần. Nửa vời ở đây trông y hệt đã cấu hình. */
+  const regionCount = [region.minX, region.minY, region.maxX, region.maxY]
+    .filter((value) => value !== undefined).length;
+
+  return (
+    <div style={{ display: "grid", gap: "var(--s3)", padding: "var(--s3) 0" }}>
+      <div>
+        <div className="pophead">Giới hạn vùng · lọc trong AutoCAD, lúc quét</div>
+        <p className="hint" style={{ margin: "var(--s1) 0 var(--s2)" }}>
+          Chỉ nhận đối tượng có <b>tâm</b> nằm trong hình chữ nhật, theo đơn vị bản
+          vẽ. Phải đủ <b>cả bốn</b> số mới có tác dụng.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "var(--s2)" }}>
+          {([["minX", "X trái"], ["minY", "Y dưới"], ["maxX", "X phải"], ["maxY", "Y trên"]] as const)
+            .map(([key, label]) => (
+              <label key={key} style={{ display: "grid", gap: 2 }}>
+                <span className="hint" style={{ margin: 0 }}>{label}</span>
+                <ExtraValueField name={`${label} dòng ${index + 1}`} numeric
+                  value={raw[key]} disabled={disabled}
+                  onChange={(next) => set({ [key]: next as number | string | undefined })} />
+              </label>
+            ))}
+        </div>
+        {regionCount > 0 && regionCount < 4 ? (
+          <p className="hint" style={{ margin: "var(--s2) 0 0" }}>
+            Mới có <b>{regionCount}/4</b> số, nên giới hạn vùng <b>chưa có tác dụng
+            nào</b> — lượt quét vẫn nhận đối tượng ở mọi vị trí.
+          </p>
+        ) : null}
+      </div>
+
+      <div>
+        <div className="pophead">Giới hạn diện tích · lọc ở máy chủ, SAU lượt quét</div>
+        <p className="hint" style={{ margin: "var(--s1) 0 var(--s2)" }}>
+          Chạy ở chỗ khác và thời điểm khác với giới hạn vùng — cần biết điều này để
+          hiểu vì sao số đối tượng lại ra như vậy.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.2fr", gap: "var(--s2)" }}>
+          <label style={{ display: "grid", gap: 2 }}>
+            <span className="hint" style={{ margin: 0 }}>Nhỏ nhất</span>
+            <ExtraValueField name={`diện tích nhỏ nhất dòng ${index + 1}`} numeric
+              value={rawArea.minArea} disabled={disabled}
+              onChange={(next) => set({ minArea: next as number | string | undefined })} />
+          </label>
+          <label style={{ display: "grid", gap: 2 }}>
+            <span className="hint" style={{ margin: 0 }}>Lớn nhất</span>
+            <ExtraValueField name={`diện tích lớn nhất dòng ${index + 1}`} numeric
+              value={rawArea.maxArea} disabled={disabled}
+              onChange={(next) => set({ maxArea: next as number | string | undefined })} />
+          </label>
+          <label style={{ display: "grid", gap: 2 }}>
+            <span className="hint" style={{ margin: 0 }}>Đơn vị</span>
+            <select className="input" value={area.areaUnit} disabled={disabled}
+              aria-label={`Đơn vị diện tích dòng ${index + 1}`}
+              onChange={(event) => set({ areaUnit: event.target.value })}>
+              {AREA_UNITS.map((unit) => (
+                <option key={unit.value} value={unit.value}>{unit.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {area.areaUnit !== "drawing-unit2"
+          && (area.minArea !== undefined || area.maxArea !== undefined) ? (
+          <p className="hint" style={{ margin: "var(--s2) 0 0" }}>
+            Quy đổi đơn vị chỉ chạy khi bản vẽ có <span className="mono">INSUNITS</span>{" "}
+            hiểu được. Bản vẽ không đơn vị thì máy chủ so thẳng theo đơn vị bản vẽ,
+            không báo gì.
+          </p>
+        ) : null}
+      </div>
+
+      {dead.length ? (
+        <div>
+          {/* KHÔNG tự xoá. Hồ sơ mặc định mang bốn khoá này ở ánh xạ
+              `drawing-frame`, nên gần như hồ sơ nào cũng có — nhưng chúng là dữ
+              liệu chết, và xoá hộ là quyết định của người dùng chứ không phải
+              của giao diện. */}
+          <p className="hint" style={{ margin: 0 }}>
+            <b>{dead.length} giá trị ở đây không có tác dụng</b> —{" "}
+            <span className="mono">{dead.join(" · ")}</span>. Không dòng mã nào đọc
+            tới chúng; việc so khung với khổ giấy lấy số từ mục <b>Khổ giấy</b> của
+            hồ sơ.
+          </p>
+          <Button disabled={disabled} style={{ marginTop: "var(--s2)" }}
+            onClick={() => set(Object.fromEntries(dead.map((key) => [key, undefined])))}>
+            Xoá {dead.length} giá trị chết
+          </Button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -646,11 +819,12 @@ function ExtraValueField({ name, numeric, value, onChange, disabled }: {
   const shown = value == null ? "" : String(value);
   const [text, setText] = useState(shown);
 
-  /* Đồng bộ từ ngoài vào CHỈ khi giá trị thật lệch với thứ đang gõ — đổi hồ sơ,
-     hoàn nguyên, nạp lại. Không có chốt này thì mỗi lần cha render lại sẽ xoá
-     dấu chấm vừa gõ. */
+  /* Quyết định nạp lại nằm ở `shouldSyncField()` — hàm thuần, có test. Ô SỐ so
+     bằng GIÁ TRỊ (`"2."` và `"2"` là một, nên không đụng vào thứ đang gõ); ô CHỮ
+     so nguyên văn, vì ở đó `"2."` và `"2"` là hai chuỗi khác nhau và bỏ qua
+     chênh lệch là giữ lại văn bản của hồ sơ CŨ sau khi đã đổi hồ sơ. */
   useEffect(() => {
-    if (shown !== text) setText(shown);
+    if (shouldSyncField(text, shown, numeric)) setText(shown);
   }, [shown]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (

@@ -12,11 +12,18 @@ import test from "node:test";
 import {
   aciHex,
   applyBlockedReason,
+  dimspaceBlockedReason,
   applyProfileEdits,
   applySummary,
   filterIssues,
   normalizeIssue,
   normalizeProfile,
+  readRegionBounds,
+  rawRegionBounds,
+  shouldSyncField,
+  readAreaBounds,
+  deadBoundsKeys,
+  writeBounds,
   normalizeScan,
   pickBlockedReason,
   profileDriftNote,
@@ -59,6 +66,8 @@ const scan = (over: Partial<Scan> = {}): Scan => ({
   target: "/x.dwg",
   documentInstance: "",
   selectGuard: null,
+  dimensions: [],
+  dimensionsTruncated: false,
   scannedSpace: "",
   profileId: "p1",
   profileRevision: "hash-a",
@@ -146,6 +155,7 @@ test("nói trước vì sao chưa quét hoặc chưa sửa được", () => {
   const apply = {
     scan: scan({ scanId: "s" }), target: "/x.dwg", activeTarget: "/x.dwg",
     activeInstance: "", selected: 2, driftNote: "", drawingChanged: false, busy: false,
+    dimNote: "",
   };
   assert.equal(applyBlockedReason(apply), "");
   assert.match(applyBlockedReason({ ...apply, scan: null }), /Chưa có lượt quét/);
@@ -294,20 +304,19 @@ test("chỉ cho tích những mục máy chủ THẬT SỰ sửa được", () =
      `drawingStandards.ts` dựng chương trình LISP. Viết theo kiểu cấm thì mỗi
      hành động mới máy chủ thêm vào mặc định được coi là sửa được, và người dùng
      phát hiện ra bằng một lỗi 400. */
-  for (const action of ["apply-units", "sync-layers", "apply-dimstyle", "resize-frame"]) {
+  /* `dimspace` nay nằm trong danh sách này (2026-08-15): bảng dimension đã có chỗ
+     chọn DIM chuẩn nên `dimBaseHandle` hỏi được. Trước đây nó bị chặn ở đây như
+     một NĂNG LỰC THIẾU; giờ "chưa chọn chuẩn" chỉ là trạng thái nhất thời của
+     màn hình và thuộc về `applyBlockedReason`. */
+  for (const action of [
+    "apply-units", "sync-layers", "apply-dimstyle", "resize-frame", "dimspace",
+  ]) {
     assert.equal(
       unsupportedFixReason(normalizeIssue({ id: action, suggestedAction: action }, 0)),
       "",
       action,
     );
   }
-
-  /* `dimspace` máy chủ chạy được, nhưng nó đòi `dimBaseHandle` mà màn hình chưa
-     hỏi được — thiếu là 400. */
-  assert.match(
-    unsupportedFixReason(normalizeIssue({ id: "d1", suggestedAction: "dimspace" }, 0)),
-    /chưa hỏi được/,
-  );
 
   /* Ngoài danh sách → máy chủ IM LẶNG bỏ qua và trả `skippedIssueIds`. Trộn một
      mục như vậy vào lô sửa được là để người dùng tưởng đã sửa xong. */
@@ -1274,6 +1283,282 @@ test("màu phải ĐỌC ĐƯỢC, không chỉ có mặt — `?? 7` là đườ
   assert.equal(read.skipped, 4);
 });
 
+test("dimspace: phải có DIM chuẩn, và không còn bị chặn như năng lực thiếu", () => {
+  /* `dimspace` từng bị `unsupportedFixReason()` chặn vì màn hình chưa có chỗ hỏi
+     DIM chuẩn. Nay hỏi được, nên nó KHÔNG còn là năng lực thiếu — "chưa chọn
+     chuẩn" là trạng thái nhất thời, và thuộc về `applyBlockedReason`. */
+  assert.equal(
+    unsupportedFixReason({ action: "dimspace" } as never),
+    "",
+    "dimspace không còn bị chặn như năng lực thiếu",
+  );
+
+  const withGuard = scan({ scanId: "s1" });
+  const base = {
+    scan: withGuard, target: "/x.dwg", activeTarget: "/x.dwg", activeInstance: "",
+    selected: 2, driftNote: "", drawingChanged: false, busy: false,
+    dimNote: "",
+  };
+  assert.equal(applyBlockedReason(base), "", "lô không có dimspace thì không đòi chuẩn");
+  assert.match(
+    applyBlockedReason({ ...base, dimNote: "Chọn một DIM làm chuẩn ở bảng dưới." }),
+    /Chọn một DIM làm chuẩn/,
+  );
+});
+
+test("dimspace: một lô — một trục — một DIM chuẩn cùng trục", () => {
+  /* `acadstd:dimspace` nhận ĐÚNG MỘT handle mốc rồi căn mọi handle còn lại theo
+     nó. Trộn hai trục, hoặc lấy mốc ở trục khác, vẫn chạy êm và không báo lỗi —
+     các DIM chỉ đơn giản nằm sai chỗ, trên đường ghi MỘT PHA không hoàn tác
+     được. Đây là loại sai tệ nhất: không có tín hiệu nào ngoài con mắt. */
+  /* Lô phải có ÍT NHẤT hai handle: mốc bị trừ khỏi danh sách cần dời, nên một lô
+     một-handle sẽ dừng ở phép kiểm "không còn gì để dời" trước khi tới phần trục
+     mà test này muốn soi. */
+  const issue = (id: string, axis: string) => ({
+    id, scope: "dim-row", severity: "warning" as const, message: "",
+    handles: ["A1", "B2"],
+    current: null, expected: null, suggestedAction: { action: "dimspace", axis },
+    action: "dimspace",
+  });
+  const dims = [
+    { handle: "A1", layer: "", style: "", axis: "H", row: 0, measurement: 0, text: "" },
+    { handle: "B2", layer: "", style: "", axis: "V", row: 0, measurement: 0, text: "" },
+  ];
+  const other = {
+    id: "units", scope: "drawing", severity: "warning" as const, message: "", handles: [],
+    current: null, expected: null, suggestedAction: { action: "apply-units" },
+    action: "apply-units",
+  };
+
+  assert.equal(
+    dimspaceBlockedReason({ selected: [other], dimensions: dims, baseHandle: "" }),
+    "",
+    "lô không có dimspace thì không đòi gì",
+  );
+  assert.match(
+    dimspaceBlockedReason({ selected: [issue("dim-row-h", "H")], dimensions: dims, baseHandle: "" }),
+    /Chọn một DIM làm chuẩn/,
+  );
+  assert.match(
+    dimspaceBlockedReason({
+      selected: [issue("dim-row-h", "H"), issue("dim-row-v", "V")],
+      dimensions: dims, baseHandle: "A1",
+    }),
+    /CẢ hai trục/,
+    "hai trục trong một lô phải bị chặn dù đã chọn chuẩn",
+  );
+  assert.match(
+    dimspaceBlockedReason({
+      selected: [issue("dim-row-h", "H")], dimensions: dims, baseHandle: "B2",
+    }),
+    /cùng trục/,
+    "chuẩn trục dọc không căn được lô trục ngang",
+  );
+  /* Handle còn sót từ một lượt quét trước, hoặc bảng dimension bị cắt mất dòng
+     đó. Gửi đi là hỏng GIỮA CHỪNG — lúc ấy vài lệnh khác trong lô đã ghi xong. */
+  assert.match(
+    dimspaceBlockedReason({
+      selected: [issue("dim-row-h", "H")], dimensions: dims, baseHandle: "ZZZ",
+    }),
+    /không có trong lượt quét/,
+  );
+  assert.equal(
+    dimspaceBlockedReason({
+      selected: [issue("dim-row-h", "H")], dimensions: dims, baseHandle: "A1",
+    }),
+    "",
+  );
+});
+
+test("dimension của lượt quét: thiếu số thì để lộ, không quy về 0", () => {
+  /* `row` là toạ độ hàng và `0` là giá trị HỢP LỆ, nên quy thiếu-trường về `0`
+     là bịa ra một DIM nằm đúng gốc toạ độ — rồi nó hiện lên như một dòng lệch
+     hàng cần sửa. Cùng loại lỗi với `area: 0` ở bảng đối tượng. */
+  const parsed = normalizeScan({
+    dimensions: [
+      { handle: "A1", layer: "DIM", style: "ACAD", axis: "H", row: 0, measurement: 1200, text: "" },
+      { handle: "B2", axis: "V" },
+      { layer: "DIM" },
+    ],
+  }, "t");
+  assert.equal(parsed.dimensions.length, 2, "dòng thiếu handle bị bỏ");
+  assert.equal(parsed.dimensions[0].row, 0, "0 là toạ độ hợp lệ");
+  assert.ok(Number.isNaN(parsed.dimensions[1].row), "thiếu row thì để NaN lộ ra");
+  assert.ok(Number.isNaN(parsed.dimensions[1].measurement));
+
+  /* Cờ cắt đọc từ BẰNG CHỨNG máy chủ, không cộng tay từ độ dài mảng — mảng đã
+     lọc bỏ dòng thiếu handle nên nó nhỏ hơn số máy chủ thật sự thu được. */
+  assert.equal(parsed.dimensionsTruncated, false);
+  assert.equal(
+    normalizeScan({ evidence: { standardsScan: { dimensionsTruncated: true } } }, "t")
+      .dimensionsTruncated,
+    true,
+  );
+});
+
+test("bounds: đọc được MỌI cách viết máy chủ chấp nhận", () => {
+  /* `mappingBounds()` của engine nhận ba tên cho mỗi cạnh VÀ dạng mảng. Chỉ đọc
+     `minX` là hồ sơ viết cách khác sẽ hiện ô trống, người dùng gõ đè lên rồi
+     tưởng mình vừa đặt mới — trong khi thực ra đang ghi chồng một giới hạn đã có. */
+  assert.deepEqual(
+    readRegionBounds({ minX: 1, minY: 2, maxX: 3, maxY: 4 }),
+    { minX: 1, minY: 2, maxX: 3, maxY: 4 },
+  );
+  assert.deepEqual(
+    readRegionBounds({ xMin: 1, yMin: 2, xMax: 3, yMax: 4 }),
+    { minX: 1, minY: 2, maxX: 3, maxY: 4 },
+  );
+  assert.deepEqual(
+    readRegionBounds({ left: 1, bottom: 2, right: 3, top: 4 }),
+    { minX: 1, minY: 2, maxX: 3, maxY: 4 },
+  );
+  assert.deepEqual(
+    readRegionBounds({ min: [1, 2], max: [3, 4] }),
+    { minX: 1, minY: 2, maxX: 3, maxY: 4 },
+  );
+  /* Khoá chuẩn thắng tên đồng nghĩa — đúng thứ tự `firstValue()` của engine. */
+  assert.equal(readRegionBounds({ minX: 9, xMin: 1 }).minX, 9);
+  /* CHUỖI SỐ vẫn là một giới hạn ĐANG CHẠY. `finiteNumber()` của engine gọi thẳng
+     `Number(value)`, nên `minX: "3"` — thứ ô JSON của panel cũ ghi ra được —
+     thành số thật trong chương trình LISP. Hiện ô trống cho nó là mô tả sai một
+     bộ lọc đang có tác dụng.
+     (Bản test đầu tôi viết khẳng định NGƯỢC lại điều này; đã đối chiếu
+     `standardsEngine.ts:77-81` và sửa.) */
+  assert.equal(readRegionBounds({ minX: "3" }).minX, 3);
+  assert.equal(readAreaBounds({ minArea: "5" }).minArea, 5);
+  /* Thứ KHÔNG ra số thì mới coi như không có. */
+  assert.equal(readRegionBounds({ minX: "abc" }).minX, undefined);
+  assert.equal(readRegionBounds({ minX: null }).minX, undefined);
+  assert.equal(readRegionBounds({ minX: {} }).minX, undefined);
+  assert.deepEqual(readRegionBounds(undefined), {
+    minX: undefined, minY: undefined, maxX: undefined, maxY: undefined,
+  });
+});
+
+test("bounds: đơn vị diện tích chỉ nhận thứ daemon THẬT SỰ quy đổi", () => {
+  /* Daemon so bằng chuỗi đã hạ thấp và chỉ hiểu bốn dạng; thứ khác rơi về đơn vị
+     bản vẽ trong im lặng. Hiện một đơn vị mà máy chủ sẽ bỏ qua là nói dối. */
+  assert.equal(readAreaBounds({ areaUnit: "M2" }).areaUnit, "m2");
+  assert.equal(readAreaBounds({ areaUnit: "cm2" }).areaUnit, "cm2");
+  assert.equal(readAreaBounds({ areaUnit: "acre" }).areaUnit, "drawing-unit2");
+  assert.equal(readAreaBounds({}).areaUnit, "drawing-unit2");
+  assert.equal(readAreaBounds({ minArea: 5, maxArea: 50 }).minArea, 5);
+});
+
+test("bounds dạng MẢNG: sửa một cạnh không được làm mất ba cạnh kia", () => {
+  /* `min`/`max` chỉ được đọc khi không có khoá chuẩn, nên chạm vào một cạnh là
+     phải chuyển NỐT ba cạnh kia sang khoá chuẩn trước khi bỏ mảng. Xoá mảng mà
+     không chép sang là còn lại một hình chữ nhật THIẾU SỐ — và thiếu một số thì
+     `acadstd:map-in-bounds-p` bỏ lọc HOÀN TOÀN. Người dùng sửa một cạnh và vô
+     tình tắt cả bộ lọc, không một lời báo. */
+  const written = writeBounds({ min: [1, 2], max: [3, 4] }, { minX: 10 });
+  assert.deepEqual(written, { minX: 10, minY: 2, maxX: 3, maxY: 4 });
+  assert.ok(!("min" in (written ?? {})), "dạng mảng phải được dọn");
+  assert.ok(!("max" in (written ?? {})));
+
+  /* Bốn số vẫn đủ sau khi sửa — đó mới là điều kiện để bộ lọc còn chạy. */
+  const region = readRegionBounds(written);
+  assert.equal(
+    [region.minX, region.minY, region.maxX, region.maxY]
+      .filter((value) => value !== undefined).length,
+    4,
+  );
+});
+
+test("giới hạn không ra SỐ thì chặn ở nút Lưu", () => {
+  /* Daemon nhận `bounds` là JSON bất kỳ nên `"abc"` lưu êm, rồi `finiteNumber()`
+     trả `undefined` và bộ lọc tắt TRONG IM LẶNG — người dùng thấy một giới hạn
+     trên màn hình mà lượt quét không hề áp. */
+  const mapping = (bounds: unknown) => ({
+    id: "m1", sourceId: "m1", label: "L", kind: "object",
+    /* Phải có ít nhất một mẫu: ánh xạ không mẫu nào rơi vào phép kiểm "khớp MỌI
+       đối tượng" trước, và test sẽ không bao giờ chạm tới phần giới hạn. */
+    layerPatterns: ["A-WALL"], blockPatterns: [], textPatterns: [], entityTypes: [],
+    required: false, bounds,
+  }) as never;
+
+  assert.equal(mappingRowErrors([mapping({ minX: 3 })])[0], null);
+  assert.equal(mappingRowErrors([mapping({ minX: "3" })])[0], null, "chuỗi số vẫn hợp lệ");
+  assert.equal(mappingRowErrors([mapping({ minX: "" })])[0], null, "rỗng = không đặt");
+  assert.equal(mappingRowErrors([mapping(undefined)])[0], null);
+
+  for (const bad of ["abc", "-", "2..5", {}, true]) {
+    assert.match(
+      String(mappingRowErrors([mapping({ maxArea: bad })])[0]),
+      /phải là một số/,
+      `phải chặn: ${JSON.stringify(bad)}`,
+    );
+  }
+});
+
+test("bounds: khoá CHẾT nhận ra được, và ghi thì giữ khoá lạ", () => {
+  /* `width`/`height`/`tolerancePercent`/`unit` có trong hồ sơ MẶC ĐỊNH nhưng
+     không một dòng mã nào đọc. Nhận ra để nói với người dùng, KHÔNG tự xoá. */
+  assert.deepEqual(
+    deadBoundsKeys({ width: 420, height: 297, tolerancePercent: 1, unit: "mm", minX: 0 }),
+    ["width", "height", "tolerancePercent", "unit"],
+  );
+  assert.deepEqual(deadBoundsKeys({ minX: 0 }), []);
+
+  /* Ghi một cạnh thì dọn tên đồng nghĩa và dạng mảng của CHÍNH cạnh đó — để lại
+     là hồ sơ có hai nguồn sự thật cho một cạnh. Nhưng khoá LẠ phải đi qua nguyên
+     vẹn: daemon nhận `bounds` là object bất kỳ, nên giao diện không được quyền
+     xoá thứ nó chưa biết. */
+  const written = writeBounds(
+    { xMin: 1, left: 1, min: [1, 2], max: [3, 4], khoaLa: "giu-lai", minY: 2 },
+    { minX: 10 },
+  );
+  assert.equal(written?.minX, 10);
+  assert.equal(written?.xMin, undefined);
+  assert.equal(written?.left, undefined);
+  assert.equal(written?.min, undefined);
+  assert.equal(written?.khoaLa, "giu-lai");
+  assert.equal(written?.minY, 2);
+
+  /* Xoá hết thì trả `undefined` — "không có giới hạn nào", chứ không phải một
+     object rỗng mà máy chủ vẫn lưu. */
+  assert.equal(writeBounds({ minX: 1 }, { minX: undefined }), undefined);
+  assert.equal(writeBounds({ minX: 1 }, { minX: "" }), undefined);
+});
+
+test("bounds đi TRỌN vòng đọc → sửa → lưu, không rơi khoá nào", () => {
+  /* Vòng này từng làm mất `bounds` một lần rồi: bước chuẩn hoá bỏ nó, và
+     `applyProfileEdits` phải vá lên bản ghi gốc để cứu. Nay nó sửa được nên phải
+     đi trọn vòng — và khoá lạ vẫn phải sống sót. */
+  const raw = {
+    id: "p", name: "M", revision: "h",
+    mappings: [{
+      id: "frame", label: "Khung", kind: "frame",
+      bounds: { minX: 0, minY: 0, maxX: 420, maxY: 297, khoaLa: 7 },
+    }],
+  };
+  const profile = normalizeProfile(raw);
+  assert.deepEqual(profile.mappings[0].bounds, {
+    minX: 0, minY: 0, maxX: 420, maxY: 297, khoaLa: 7,
+  });
+
+  const edited = {
+    ...profile,
+    mappings: [{
+      ...profile.mappings[0],
+      bounds: writeBounds(profile.mappings[0].bounds, { maxX: 594 }),
+    }],
+  };
+  const saved = applyProfileEdits(edited) as Record<string, any>;
+  assert.deepEqual(saved.mappings[0].bounds, {
+    minX: 0, minY: 0, maxX: 594, maxY: 297, khoaLa: 7,
+  });
+
+  /* Xoá hết giới hạn phải XOÁ khoá khỏi bản ghi. Gán `undefined` thì
+     `JSON.stringify` bỏ trường đi và máy chủ giữ nguyên giá trị cũ — người dùng
+     xoá hết ô mà giới hạn vẫn còn. */
+  const cleared = applyProfileEdits({
+    ...profile,
+    mappings: [{ ...profile.mappings[0], bounds: undefined }],
+  }) as Record<string, any>;
+  assert.ok(!("bounds" in cleared.mappings[0]), "phải xoá hẳn khoá, không để undefined");
+});
+
 test("MỘT lý do chặn cho mọi cửa vào lệnh chọn", () => {
   /* Sáu vòng review liên tiếp ra cùng một dạng lỗi: chặn được nút thì hở thẻ xác
      nhận, chặn được `cancelPick` thì hở hiệu ứng huỷ. Ma trận "ba cửa vào × bốn
@@ -1381,6 +1666,7 @@ test("chốt Sửa so bằng ĐỊNH DANH khi có — tên không phân biệt �
   const base = {
     target: "Drawing1.dwg", activeTarget: "Drawing1.dwg",
     selected: 1, driftNote: "", drawingChanged: false, busy: false,
+    dimNote: "",
   };
   const scanned = { scanId: "s1", target: "Drawing1.dwg", documentInstance: "DOC-A" } as never;
 
@@ -1476,6 +1762,7 @@ test("bản vẽ chưa lưu: gửi mã phiên, nhưng SO bằng tiêu đề", ()
   const scan = { scanId: "s1", target: "Drawing1.dwg", documentInstance: "" } as never;
   const base = {
     scan, activeInstance: "", selected: 1, driftNote: "", drawingChanged: false, busy: false,
+    dimNote: "",
   };
   /* Dạng ĐÚNG: cả hai đích ở dạng `targetOf`. */
   assert.equal(
@@ -1546,4 +1833,236 @@ test("đích GỬI ĐI khác đích để SO SÁNH — bản vẽ chưa lưu dù
   // Không có mã phiên (plugin bản cũ) thì cả hai cùng lùi về tiêu đề.
   assert.equal(requestTargetOf({ file: "", title: "Drawing1.dwg" }), "Drawing1.dwg");
   assert.equal(requestTargetOf({}), "");
+});
+
+test("giới hạn vùng: ô nhập nhận giá trị THÔ, không phải giá trị đã phân tích", () => {
+  /* Cho ô nhập ăn giá trị đã qua `Number()` là dựng một vòng khoá chính nó: gõ
+     `-` để bắt đầu một số âm → không phân tích được → giá trị ngoài thành rỗng →
+     ô tự xoá ngay trước phím kế. Số âm chỉ nhập được bằng cách DÁN. */
+  assert.equal(rawRegionBounds({ minX: "-" }).minX, "-", "giữ nguyên thứ đang gõ");
+  assert.equal(readRegionBounds({ minX: "-" }).minX, undefined, "nhưng logic vẫn thấy là không có");
+
+  /* Cùng thứ tự tra của `mappingBounds()` bên engine, kể cả các góc tối:
+     `firstValue()` lấy khoá ĐẦU TIÊN CÓ MẶT chứ không phải khoá đầu tiên ra số. */
+  assert.equal(rawRegionBounds({ minX: "abc", xMin: 5 }).minX, "abc",
+    "engine cũng lấy `minX` rồi tắt lọc — bảng không được vẽ ra một bộ lọc đang chạy");
+  assert.equal(rawRegionBounds({ minX: 9, xMin: 1 }).minX, 9);
+  assert.equal(rawRegionBounds({ left: 3 }).keys.minX, "left", "chỉ đúng khoá trong hồ sơ");
+  assert.equal(rawRegionBounds({ min: [4, 5] }).keys.minX, "min[0]");
+  /* `firstValue(...) ?? min[0]`: `null` ở khoá tên vẫn lùi về dạng mảng. */
+  assert.equal(rawRegionBounds({ minX: null, min: [7, 8] }).minX, 7);
+});
+
+test("giới hạn: chuỗi rỗng là “không đặt”, không phải 0", () => {
+  /* `Number("")` là `0`. Daemon từng đọc đúng như thế ở đường lọc diện tích, nên
+     một `maxArea: ""` bỏ quên có nghĩa "diện tích ≤ 0" — lọc sạch mọi đối tượng
+     trong khi màn hình hiện ô trống. */
+  assert.equal(readAreaBounds({ maxArea: "" }).maxArea, undefined);
+  assert.equal(readAreaBounds({ minArea: "  " }).minArea, undefined);
+  assert.equal(readRegionBounds({ minX: "" }).minX, undefined);
+});
+
+test("đơn vị diện tích: nhận cả cách viết có số mũ", () => {
+  /* `filterObjectsByMappingBounds()` nhận CẢ `m²` lẫn `m2`. Chỉ nhận dạng ASCII
+     là một hồ sơ viết `m²` hiện lên ô chọn thành "đơn vị bản vẽ²", trong khi máy
+     chủ vẫn quy đổi theo mét — người dùng chỉnh ngưỡng trên một tỉ lệ khác hẳn
+     tỉ lệ đang chạy, và không có gì trên màn hình nói ra điều đó. */
+  assert.equal(readAreaBounds({ areaUnit: "m²" }).areaUnit, "m2");
+  assert.equal(readAreaBounds({ areaUnit: "CM²" }).areaUnit, "cm2");
+  assert.equal(readAreaBounds({ areaUnit: "mm²" }).areaUnit, "mm2");
+  // Thứ daemon KHÔNG quy đổi vẫn phải rơi về đơn vị bản vẽ.
+  assert.equal(readAreaBounds({ areaUnit: "ft2" }).areaUnit, "drawing-unit2");
+});
+
+test("nút Lưu chặn giới hạn hỏng ở CẢ tên đồng nghĩa và dạng mảng", () => {
+  /* Phép kiểm cũ chỉ soi sáu khoá chuẩn ở tầng ngoài. Nhưng engine cũng đọc
+     `xMin`/`left` và dạng mảng `min: [ ]`, nên một giá trị hỏng ở đó tắt lọc y
+     hệt — và nút Lưu cho qua trong im lặng. */
+  const rule = (bounds: unknown) => ({
+    id: "m1", sourceId: "m1", label: "Tường", kind: "generic",
+    layerPatterns: ["A-WALL"], blockPatterns: [], textPatterns: [], entityTypes: [],
+    required: false, bounds: bounds as never,
+  });
+  assert.equal(mappingRowErrors([rule({ minX: 1 })])[0], null);
+  assert.match(String(mappingRowErrors([rule({ minX: "abc" })])[0]), /phải là một số/);
+  assert.match(String(mappingRowErrors([rule({ left: "abc" })])[0]), /“left”/,
+    "gọi đúng tên khoá trong hồ sơ, không phải tên chuẩn");
+  assert.match(String(mappingRowErrors([rule({ min: ["abc", 0] })])[0]), /“min\[0\]”/);
+  assert.match(String(mappingRowErrors([rule({ maxArea: "nhiều" })])[0]), /phải là một số/);
+  // Rỗng là "không đặt" — không phải giá trị hỏng.
+  assert.equal(mappingRowErrors([rule({ minX: 1, maxArea: "" })])[0], null);
+});
+
+test("khoảng trắng không được lưu xuống hồ sơ như một giới hạn", () => {
+  /* Giao diện đọc `"  "` là "không đặt", nhưng `Number("  ")` là `0` — nên giữ
+     nó lại là ghi xuống một cạnh mà AutoCAD sẽ lọc bằng **giới hạn 0**, trong
+     khi ô nhập trông y hệt ô trống. Đừng ghi thứ mình đọc ngược với người dùng
+     nó. */
+  assert.equal(writeBounds({ minX: 1 }, { minX: "   " }), undefined,
+    "cạnh chỉ có dấu cách phải bị xoá hẳn, không lưu lại");
+  assert.deepEqual(writeBounds({ minY: 2 }, { minX: "  " }), { minY: 2 });
+  // Số thật vẫn phải lưu, kể cả khi gõ kèm khoảng trắng hai bên.
+  assert.deepEqual(writeBounds({}, { minX: " 5 " }), { minX: " 5 " });
+});
+
+test("giới hạn ngược nhau bị chặn ở nút Lưu", () => {
+  /* Cận dưới > cận trên là một khoảng RỖNG: `acadstd:map-in-bounds-p` đòi cả hai
+     bất đẳng thức, nên không đối tượng nào lọt qua. Lưu êm là hứa một bộ lọc mà
+     kết quả luôn là bảng bóc tách trống, và không dòng nào nói vì sao. */
+  const rule = (bounds: unknown) => ({
+    id: "m1", sourceId: "m1", label: "Tường", kind: "generic",
+    layerPatterns: ["A-WALL"], blockPatterns: [], textPatterns: [], entityTypes: [],
+    required: false, bounds: bounds as never,
+  });
+  assert.match(String(mappingRowErrors([rule({ minX: 10, maxX: 1 })])[0]), /ngược nhau/);
+  assert.match(String(mappingRowErrors([rule({ minY: 10, maxY: 1 })])[0]), /ngược nhau/);
+  assert.match(String(mappingRowErrors([rule({ minArea: 50, maxArea: 5 })])[0]), /ngược nhau/);
+  // Tên đồng nghĩa và dạng mảng cũng phải bị soi, và lỗi gọi đúng khoá trong hồ sơ.
+  assert.match(String(mappingRowErrors([rule({ left: 10, right: 1 })])[0]), /“left”/);
+  assert.match(String(mappingRowErrors([rule({ min: [10, 0], max: [1, 9] })])[0]), /“min\[0\]”/);
+  // Bằng nhau là hợp lệ: một dải rộng 0 vẫn bắt được đối tượng nằm đúng trên đó.
+  assert.equal(mappingRowErrors([rule({ minX: 5, maxX: 5 })])[0], null);
+  assert.equal(mappingRowErrors([rule({ minX: 1, maxX: 10 })])[0], null);
+  // Thiếu một đầu thì không có gì để so.
+  assert.equal(mappingRowErrors([rule({ minX: 10 })])[0], null);
+});
+
+test("chuyển dạng mảng: cạnh đang dựa vào `min[]` không được rơi mất", () => {
+  /* `{minX: null, min: [1, 2]}` có `minX` đang THẬT SỰ bằng `1`: engine làm
+     `firstValue(...) ?? min[0]`, nên `null` rơi xuống dạng mảng. Chỉ chép khi
+     khoá `=== undefined` là để lại `minX: null` sau khi xoá mảng — cạnh đó biến
+     mất, và `acadstd:map-in-bounds-p` tắt lọc HOÀN TOÀN. Đúng cái mà đoạn chuyển
+     dạng này sinh ra để tránh. */
+  const next = writeBounds({ minX: null, min: [1, 2], max: [3, 4] }, { maxY: 9 });
+  assert.deepEqual(next, { minX: 1, minY: 2, maxX: 3, maxY: 9 });
+  assert.equal(readRegionBounds(next).minX, 1, "cạnh X trái phải còn nguyên tác dụng");
+});
+
+test("ô nhập: ô SỐ so bằng giá trị, ô CHỮ so nguyên văn", () => {
+  /* Ô số: `"2."` và `"2"` là một, nạp lại là xoá dấu chấm ngay khi vừa gõ. */
+  assert.equal(shouldSyncField("2.", "2", true), false);
+  assert.equal(shouldSyncField("2", "7", true), true, "giá trị thật đổi thì phải nạp");
+  /* Số âm đang gõ dở KHÔNG được bảo vệ ở đây, và không cần: giá trị đi xuống ô
+     là giá trị THÔ, nên gõ `-` cho ra `shown === "-" === text` và hàm này không
+     đụng tới. Chốt thật nằm ở `rawRegionBounds()`; viết một nhánh nữa ở đây là
+     dựng một chốt thứ hai cho một đường không tồn tại. */
+  assert.equal(shouldSyncField("-", "-", true), false, "giá trị thô đi xuống nguyên vẹn");
+
+  /* Ô chữ: hai chuỗi khác nhau là khác nhau. Bỏ qua chênh lệch ở đây là giữ lại
+     văn bản của hồ sơ CŨ sau khi đã đổi hồ sơ — rồi một lần sửa sẽ ghi giá trị
+     cũ sang hồ sơ mới. */
+  assert.equal(shouldSyncField("2.", "2", false), true);
+  assert.equal(shouldSyncField("2", "2", false), false, "giống hệt thì không đụng");
+});
+
+test("DIM chuẩn: không biết trục hay không biết hàng thì TỪ CHỐI", () => {
+  /* Đây là chỗ duy nhất mà "không biết" có thể hoá thành "đạt": phép so trục chỉ
+     chạy khi `base.axis` có giá trị, nên một dòng quét thiếu trục làm chốt duy
+     nhất còn lại tự tắt — đúng lúc dữ liệu đáng ngờ nhất. */
+  const issue = {
+    id: "dim-row-h", scope: "dim-row", severity: "warning" as const, message: "",
+    // Hai handle: xem chú thích ở test trục — một handle thì dừng sớm hơn.
+    handles: ["A1", "B2"], current: null, expected: null,
+    suggestedAction: { action: "dimspace", axis: "H" }, action: "dimspace",
+  };
+  const row = (axis: string, rowValue: number) => [{
+    handle: "A1", layer: "", style: "", axis, row: rowValue, measurement: 0, text: "",
+  }];
+
+  assert.match(
+    dimspaceBlockedReason({ selected: [issue], dimensions: row("", 0), baseHandle: "A1" }),
+    /không đọc được trục/,
+  );
+  assert.match(
+    dimspaceBlockedReason({
+      selected: [issue], dimensions: row("H", Number.NaN), baseHandle: "A1",
+    }),
+    /toạ độ hàng/,
+  );
+  // `row: 0` là một toạ độ HỢP LỆ — chỉ thiếu mới là không.
+  assert.equal(
+    dimspaceBlockedReason({ selected: [issue], dimensions: row("H", 0), baseHandle: "A1" }),
+    "",
+  );
+});
+
+test("máy chủ gửi `null` cho số không đọc được — không được thành 0", () => {
+  /* `NaN` không phải JSON hợp lệ, nên `JSON.stringify` biến nó thành `null`. Đọc
+     `null` thành `0` là dựng lại đúng cái mà cả chuỗi sửa này vừa dẹp: một DIM
+     nằm ở gốc toạ độ, hiện lên bảng như một dòng lệch hàng cần sửa — và bấm được.
+     Tệ hơn nữa là màn hình cho chọn nó làm chuẩn rồi máy chủ mới từ chối, vì bên
+     đó vẫn thấy `NaN` trong phiên quét. */
+  const scan = normalizeScan({
+    scanId: "s1",
+    dimensions: [
+      { handle: "A1", axis: "H", row: 100, measurement: 2500 },
+      { handle: "B2", axis: "H", row: null, measurement: null },
+    ],
+  }, "/x.dwg");
+  assert.equal(scan.dimensions[0].row, 100);
+  assert.ok(Number.isNaN(scan.dimensions[1].row), "null phải lộ ra là NaN");
+  assert.ok(Number.isNaN(scan.dimensions[1].measurement));
+
+  /* Và chốt phải từ chối đúng dòng đó — hai phía không được nói khác nhau. */
+  const issue = {
+    id: "dim-row-h", scope: "dim-row", severity: "warning" as const, message: "",
+    handles: [], current: null, expected: null,
+    suggestedAction: { action: "dimspace", axis: "H" }, action: "dimspace",
+  };
+  assert.match(
+    dimspaceBlockedReason({
+      selected: [issue], dimensions: scan.dimensions, baseHandle: "B2",
+    }),
+    /toạ độ hàng/,
+  );
+});
+
+test("num(): không có số thì trả undefined, không trả 0", () => {
+  /* Một hàm đọc số DUY NHẤT trong tệp. Ba lỗi của đợt này đều là `Number()` trần
+     biến một giá trị rỗng thành `0` — số hữu hạn, không phân biệt được với số 0
+     người dùng thật sự đặt. */
+  const drawing = normalizeProfile({
+    id: "p", drawing: { insunits: null, precision: "", modelScale: "  " },
+  });
+  assert.equal(drawing.insunits, undefined, "null không phải số 0");
+  assert.equal(drawing.precision, undefined, "chuỗi rỗng không phải số 0");
+  assert.equal(drawing.modelScale, undefined, "toàn khoảng trắng cũng vậy");
+  // Số thật, kể cả số 0 và chuỗi số, vẫn phải đọc được.
+  const real = normalizeProfile({ id: "p", drawing: { insunits: 0, precision: "3" } });
+  assert.equal(real.insunits, 0);
+  assert.equal(real.precision, 3);
+});
+
+test("DIM chuẩn không tự căn theo chính nó", () => {
+  /* Máy chủ lọc `baseHandle` ra khỏi danh sách cần dời, nên chọn đúng cái DIM
+     DUY NHẤT của lô làm mốc là còn lại rỗng — và người dùng ăn 400 SAU KHI đã
+     bấm một nút ghi. */
+  const issue = (handles: string[]) => ({
+    id: "dim-row-h", scope: "dim-row", severity: "warning" as const, message: "",
+    handles, current: null, expected: null,
+    suggestedAction: { action: "dimspace", axis: "H" }, action: "dimspace",
+  });
+  const dims = ["A1", "B2"].map((handle) => ({
+    handle, layer: "", style: "", axis: "H", row: 0, measurement: 0, text: "",
+  }));
+
+  assert.match(
+    dimspaceBlockedReason({ selected: [issue(["A1"])], dimensions: dims, baseHandle: "A1" }),
+    /không còn gì để dời/,
+  );
+  // Còn cái khác để dời thì chạy được — kể cả khi mốc nằm trong chính lô.
+  assert.equal(
+    dimspaceBlockedReason({ selected: [issue(["A1", "B2"])], dimensions: dims, baseHandle: "A1" }),
+    "",
+  );
+  // Mốc NGOÀI lô (một DIM đã đúng hàng) là cách dùng đúng nhất.
+  assert.equal(
+    dimspaceBlockedReason({ selected: [issue(["B2"])], dimensions: dims, baseHandle: "A1" }),
+    "",
+  );
+  // Hoa/thường không được làm lệch phép trừ này.
+  assert.match(
+    dimspaceBlockedReason({ selected: [issue(["a1"])], dimensions: dims, baseHandle: "A1" }),
+    /không còn gì để dời/,
+  );
 });

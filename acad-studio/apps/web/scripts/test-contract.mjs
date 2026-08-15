@@ -89,7 +89,6 @@ function countCodeExcept(pattern, ...allowed) {
 
 const page = sourceAt("app/page.tsx");
 const functions = sourceAt("functions.ts");
-const standards = sourceAt("DrawingStandardsPanel.tsx");
 const preconstruction = sourceAt("PreconstructionPanel.tsx");
 const styles = sourceAt("globals.css");
 
@@ -733,25 +732,21 @@ assert.match(
   "output directories use the folder picker",
 );
 
+/* Ba bất biến đầu của panel legacy (ô JSON `bounds` chưa commit, nút Lưu khoá
+   theo nó, ô danh sách cập nhật draft từng phím) đi theo panel: bản mới không có
+   ô JSON nào — `mappingRowErrors()` + `profileSaveBlockedReason()` thay chỗ, và
+   cả hai là hàm THUẦN nên đã khoá bằng test hành vi ở
+   `test-standards-model.test.ts`, chặt hơn một phép so mã nguồn.
+
+   Bất biến thứ tư thì KHÔNG đi theo — nó nói về một lỗi thật, nên nó CHUYỂN chỗ:
+   handle của một lượt quét chỉ có nghĩa với bản vẽ ở đúng trạng thái lúc quét,
+   nên chốt gửi kèm phải lấy từ CHÍNH lượt đó (`scan.selectGuard`). Đọc mới một
+   lượt `/docs` là ghép handle của lượt này với chốt của lượt khác, và bản vẽ đổi
+   trong quãng đó thì handle trỏ sang đối tượng khác trong khi chốt vẫn hợp lệ. */
 assert.match(
-  standards,
-  /onPendingChange\(nextText !== serialized\);/,
-  "bounds editor tracks uncommitted local JSON",
-);
-assert.match(
-  standards,
-  /!draft\?\.id \|\| !dirty \|\| profileBusy \|\| pendingBounds\.size > 0/,
-  "profile save is disabled while bounds JSON is uncommitted or invalid",
-);
-assert.match(
-  standards,
-  /onChange\(commaList\(nextText\)\);/,
-  "list editor updates the parent draft on each edit",
-);
-assert.match(
-  standards,
-  /const document = asRecord\(current\?\.document\);[\s\S]*?scope: \{ kind: "handles", handles \},[\s\S]*?catalogGuard: \{ instance, revision \}/,
-  "standards scan handle selections are bound to the scanned document revision",
+  sourceAt("app/(shell)/review/page.tsx"),
+  /prepareSelectHandles\(DAEMON_BASE, \{[\s\S]*?handles,[\s\S]*?guard: scan\.selectGuard,/,
+  "review passes the scan's own select guard, not a freshly read one",
 );
 
 /** Một khối lệnh trong file, tra bằng mốc đầu và mốc cuối. */
@@ -856,7 +851,6 @@ assert.match(
  * "AutoCAD chưa chạy". */
 for (const panel of [
   "BlockLibraryPanel.tsx",
-  "DrawingStandardsPanel.tsx",
   "LispLibraryPanel.tsx",
 ]) {
   const source = sourceAt(panel);

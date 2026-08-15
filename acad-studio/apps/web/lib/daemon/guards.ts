@@ -104,6 +104,58 @@ export const guards: Record<string, Guard> = {
     why: "Kết quả quét chỉ sống trong phiên làm việc và bị huỷ sau khi áp dụng.",
     fix: "Quét lại bản vẽ.",
   },
+  /* ---- Căn hàng dimension ---- *
+   * Ba mã này lẽ ra không tới được người dùng: `/review` chặn cả ba trước khi
+   * bấm. Chúng có mặt vì đây là đường ghi MỘT PHA — nếu một lượt nào đó lọt qua
+   * giao diện, thứ nó ghi ra không hoàn tác được từ app, nên máy chủ phải là
+   * chốt thật chứ không phải chốt thứ hai cho vui. */
+  dim_axis_mixed: {
+    title: "Lô căn hàng có cả hai trục",
+    why: "Lệnh căn hàng lấy MỘT dimension làm mốc và căn mọi cái còn lại theo "
+      + "nó, nên nó chỉ căn được các DIM cùng một trục. Lô đang chọn có cả DIM "
+      + "ngang lẫn DIM dọc.",
+    fix: "Bỏ tích một trục, sửa xong rồi làm trục còn lại.",
+  },
+  dim_base_unknown: {
+    title: "DIM chuẩn không thuộc lượt quét này",
+    why: "Handle của DIM chuẩn không có trong kết quả quét đang mở — thường là "
+      + "do nó còn sót lại từ một lượt quét trước, hoặc bảng dimension đã bị cắt "
+      + "mất dòng đó.",
+    fix: "Quét lại rồi chọn DIM chuẩn từ bảng của lượt quét mới.",
+  },
+  dimspace_needs_scan: {
+    title: "Căn hàng dimension phải đi qua lượt quét",
+    why: "Đường cũ nhận handle trần, không gắn với lượt quét nào, nên nó không "
+      + "biết DIM nào thuộc trục nào — mà lệnh căn hàng chỉ căn được các DIM cùng "
+      + "trục. Một lô trộn hai trục sẽ chạy êm rồi để các DIM nằm sai chỗ.",
+    fix: "Mở màn Kiểm tra bản vẽ, quét, rồi chọn DIM chuẩn ngay trong bảng dimension.",
+  },
+  dim_base_axis_unknown: {
+    title: "Không xác định được trục của DIM chuẩn",
+    why: "Lượt quét không đọc được trục của dimension này — thường là plugin bản "
+      + "cũ, hoặc một DIM mà chương trình không suy được góc xoay. Không biết trục "
+      + "thì không kiểm được là nó có căn được lô hay không.",
+    fix: "Chọn một DIM khác làm chuẩn, hoặc build lại plugin AcadBridge rồi quét lại.",
+  },
+  dim_base_row_unknown: {
+    title: "DIM chuẩn không có toạ độ hàng",
+    why: "Lệnh căn hàng dời các dimension THEO toạ độ hàng của mốc. Không đọc được "
+      + "số đó thì mốc không định nghĩa được, mà lệnh thì vẫn chạy.",
+    fix: "Chọn một DIM khác — bảng dimension hiện “—” ở cột Hàng cho những dòng "
+      + "không đo được.",
+  },
+  dim_base_only_candidate: {
+    title: "Không còn DIM nào để căn",
+    why: "Lệnh căn hàng dời các dimension THEO mốc, nên mốc không tự căn theo "
+      + "chính nó. DIM chuẩn đang chọn cũng là DIM duy nhất trong lô.",
+    fix: "Chọn một DIM đã đúng hàng làm chuẩn, hoặc tích thêm phát hiện vào lô.",
+  },
+  dim_base_axis_mismatch: {
+    title: "DIM chuẩn khác trục với lô",
+    why: "DIM chuẩn đang chọn nằm trên trục khác với các phát hiện đã tích, nên "
+      + "căn theo nó sẽ dời các DIM tới những vị trí không liên quan.",
+    fix: "Chọn một DIM chuẩn cùng trục với lô.",
+  },
   drawing_revision_unavailable: {
     title: "Không đọc được revision của bản vẽ",
     why: "Không có revision thì app không đảm bảo được là ghi đúng vào bản vẽ đã xem.",

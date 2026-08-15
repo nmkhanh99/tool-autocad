@@ -544,7 +544,85 @@ function metersPerUnit(insunits: unknown): number | null {
   return factors[Number(insunits)] ?? null;
 }
 
-function filterObjectsByMappingBounds(
+/** Vì sao một lô căn hàng KHÔNG được chạy — hoặc `null` nếu chạy được.
+ *
+ * `acadstd:dimspace` nhận ĐÚNG MỘT handle mốc rồi căn mọi handle còn lại theo
+ * nó, nên nó chỉ căn được các DIM **cùng một trục**. Gộp `dim-row-h` với
+ * `dim-row-v` vào một lô là căn các DIM dọc theo một DIM ngang; chọn mốc ở trục
+ * kia cũng vậy. Cả hai đều chạy êm — AutoCAD không báo lỗi, các DIM chỉ nằm sai
+ * chỗ — trên đường ghi MỘT PHA mà app không hoàn tác được.
+ *
+ * Giao diện đã chặn cả hai (`dimspaceBlockedReason()`). Chốt vẫn phải có ở đây
+ * vì ĐÂY mới là nơi ghi: một khách khác, hoặc một lượt lọt qua giao diện, không
+ * được phép làm hỏng bản vẽ. Hàm thuần và xuất ra để test được — chốt nằm trong
+ * thân handler là chốt không ai kiểm.
+ */
+export function dimspaceRejection(
+  issues: readonly StandardsAuditIssue[],
+  dimensions: readonly StandardsDimension[],
+  baseHandle: string,
+): { error: string; code: string; hint: string } | null {
+  const axes = [...new Set(issues
+    .map((issue) => String(asRecord(issue.suggestedAction).axis ?? "").trim().toUpperCase())
+    .filter(Boolean))];
+  if (axes.length > 1) {
+    return {
+      error: "Lô có DIM lệch hàng ở cả hai trục; lệnh căn hàng chỉ căn được một trục",
+      code: "dim_axis_mixed",
+      hint: "Bỏ tích một trục, sửa xong rồi làm trục còn lại.",
+    };
+  }
+  /* Tra trục của chính DIM chuẩn trong lượt quét ĐÃ LƯU — đó là nguồn duy nhất
+     biết handle này thuộc trục nào. Không tra ra nghĩa là handle còn sót từ lượt
+     trước, hoặc bảng dimension đã bị cắt mất dòng đó. */
+  /* So sau khi CHUẨN HOÁ hoa/thường. `cleanHandles()` viết hoa handle của yêu
+     cầu, còn `parseStandardsScanTsv()` giữ nguyên cách viết đọc được từ bản vẽ —
+     nên một handle chữ thường trong lượt quét sẽ không bao giờ khớp, và người
+     dùng nhận `dim_base_unknown` cho đúng cái DIM họ vừa bấm trong bảng. */
+  const wanted = baseHandle.trim().toUpperCase();
+  const base = dimensions.find((row) => row.handle.trim().toUpperCase() === wanted);
+  if (!base) {
+    return {
+      error: "DIM chuẩn không có trong lượt quét này",
+      code: "dim_base_unknown",
+      hint: "Quét lại rồi chọn DIM chuẩn từ bảng của lượt quét mới.",
+    };
+  }
+  /* KHÔNG BIẾT thì TỪ CHỐI, đừng cho qua. Một dòng quét có `axis` rỗng (bản
+     plugin cũ, hay một DIM mà LISP không suy được góc) làm phép so trục ở dưới
+     bị bỏ qua hoàn toàn — tức chốt duy nhất còn lại tự tắt đúng lúc dữ liệu đáng
+     ngờ nhất. Cùng lỗi với `observedLayerColor()` từng lùi về ACI khi không đọc
+     được rgb: chỗ duy nhất mà "không biết" hoá thành "đạt". */
+  const baseAxis = String(base.axis ?? "").trim().toUpperCase();
+  if (!baseAxis) {
+    return {
+      error: "Không xác định được trục của DIM chuẩn",
+      code: "dim_base_axis_unknown",
+      hint: "Lượt quét không đọc được trục của DIM này. Chọn một DIM khác, "
+        + "hoặc quét lại sau khi build lại plugin AcadBridge.",
+    };
+  }
+  /* Toạ độ hàng cũng vậy: `DIMSPACE` căn THEO chính con số đó. Không có nó thì
+     mốc không định nghĩa được, và lệnh vẫn chạy. */
+  if (!Number.isFinite(base.row)) {
+    return {
+      error: "DIM chuẩn không có toạ độ hàng đọc được",
+      code: "dim_base_row_unknown",
+      hint: "Chọn một DIM khác làm chuẩn — bảng dimension hiện “—” ở cột Hàng "
+        + "cho những dòng không đo được.",
+    };
+  }
+  if (axes.length === 1 && baseAxis !== axes[0]) {
+    return {
+      error: `DIM chuẩn thuộc trục ${baseAxis}, còn lô cần căn trục ${axes[0]}`,
+      code: "dim_base_axis_mismatch",
+      hint: "Chọn một DIM chuẩn cùng trục với các phát hiện đã tích.",
+    };
+  }
+  return null;
+}
+
+export function filterObjectsByMappingBounds(
   profile: DrawingStandardProfile,
   objects: StandardsObject[],
   settings: Record<string, string>,
@@ -553,10 +631,24 @@ function filterObjectsByMappingBounds(
   const mappings = new Map(profile.mappings.map((mapping) => [mapping.id, mapping]));
   return objects.filter((object) => {
     const bounds = asRecord(mappings.get(object.mappingId)?.bounds);
-    const minArea = bounds.minArea == null ? null : Number(bounds.minArea);
-    const maxArea = bounds.maxArea == null ? null : Number(bounds.maxArea);
+    /* Chuỗi RỖNG là "không đặt", không phải `0`. `Number("")` ra `0`, và một
+       `maxArea: ""` bỏ quên trong hồ sơ khi đó có nghĩa "diện tích ≤ 0" — tức
+       lọc sạch mọi đối tượng, trong khi giao diện hiện ô trống và người dùng
+       tìm mãi không ra vì sao bảng bóc tách trống trơn. `finiteNumber()` bên
+       engine đã đọc chuỗi rỗng đúng như vậy từ đầu; chỗ này là bản chép tay
+       lệch ra. */
+    const areaBound = (value: unknown) => {
+      if (value == null) return null;
+      if (typeof value === "string" && value.trim() === "") return null;
+      return Number(value);
+    };
+    const minArea = areaBound(bounds.minArea);
+    const maxArea = areaBound(bounds.maxArea);
     if (!Number.isFinite(minArea) && !Number.isFinite(maxArea)) return true;
-    const unit = String(bounds.areaUnit ?? "drawing-unit2").toLowerCase();
+    /* CẮT khoảng trắng. Giao diện cắt trước khi so, nên `" m2 "` hiện lên là
+       "m²" trong khi chỗ này lại rơi về đơn vị bản vẽ — người dùng đặt ngưỡng
+       theo mét mà máy chủ so theo đơn vị bản vẽ, và không có gì nói ra. */
+    const unit = String(bounds.areaUnit ?? "drawing-unit2").trim().toLowerCase();
     let area = object.area;
     if ((unit === "m2" || unit === "m²") && meterFactor != null) {
       area *= meterFactor * meterFactor;
@@ -1121,9 +1213,20 @@ export function drawingStandardsRouter(
       const dimensionIssues = selected.filter((issue) => actionName(issue) === "dimspace");
       if (dimensionIssues.length) {
         const baseHandle = cleanHandles([req.body?.dimBaseHandle], true)[0]!;
+        const rejection = dimspaceRejection(dimensionIssues, session.dimensions, baseHandle);
+        if (rejection) return res.status(400).json({ ok: false, ...rejection });
         const handles = cleanHandles(dimensionIssues.flatMap((issue) => issue.handles))
           .filter((handle) => handle !== baseHandle);
-        if (!handles.length) throw new Error("Không có DIM cần căn ngoài DIM chuẩn");
+        /* Mốc không tự căn theo chính nó. Mã có kiểu thay vì `throw`: đây là
+           một lý do từ chối RIÊNG, và người dùng cần biết phải làm gì khác. */
+        if (!handles.length) {
+          return res.status(400).json({
+            ok: false,
+            error: "Không có DIM cần căn ngoài DIM chuẩn",
+            code: "dim_base_only_candidate",
+            hint: "Chọn một DIM đã đúng hàng làm chuẩn, hoặc tích thêm phát hiện.",
+          });
+        }
         programs.push(
           `(acadstd:dimspace ${lispString(baseHandle)} ` +
           `${lispHandleList(handles)} ${profile.dimension.rowSpacing})`,
@@ -1184,6 +1287,23 @@ export function drawingStandardsRouter(
           code: "confirmation_required",
           error:
             "Thao tác chọn/chuyển layer phải đi qua prepare → xác nhận → apply",
+        });
+      }
+      /* Đường này KHÔNG căn hàng dimension được nữa.
+         Nó nhận handle trần, không gắn với lượt quét nào, nên nó **không có cách
+         nào biết** handle nào thuộc trục nào — mà `acadstd:dimspace` lấy đúng một
+         mốc và chỉ căn được các DIM cùng trục. Panel cũ gọi vào đây với một ô thả
+         xuống liệt kê DIM của cả hai trục, tức đúng lượt ghi mà `/standards/apply`
+         nay từ chối. Ghi một pha, không hoàn tác được, và sai một cách IM LẶNG:
+         lệnh chạy xong, AutoCAD không báo gì, các DIM chỉ nằm sai chỗ.
+         Chặn hẳn thay vì kiểm nửa vời — dữ liệu để kiểm không tồn tại ở đây. */
+      if (action === "dimspace") {
+        return res.status(409).json({
+          ok: false,
+          code: "dimspace_needs_scan",
+          error: "Căn hàng dimension phải đi qua lượt quét ở màn Kiểm tra bản vẽ",
+          hint: "Mở /review, quét bản vẽ, chọn DIM chuẩn trong bảng dimension rồi sửa. "
+            + "Ở đó app biết trục của từng DIM và chặn được lô trộn hai trục.",
         });
       }
       const handles = cleanHandles(req.body?.handles);

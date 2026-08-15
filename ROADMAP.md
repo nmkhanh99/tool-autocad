@@ -313,8 +313,16 @@ route, như `blocks.module.css` vừa làm.
   ăn 400 lúc lưu. Đã đo trực tiếp trên daemon: `40` → 400, `-3` → 400,
   `"Default"` → 200.
 
-  **Đã rà xong toàn bộ `DrawingStandardsPanel.tsx` (2.411 dòng) — KẾT LUẬN:
-  chưa xoá được (2026-08-12).** Rà từng chức năng, đối chiếu với `/standards` +
+  **ĐÃ XOÁ `DrawingStandardsPanel.tsx` (2.411 dòng) ngày 2026-08-15.** Cả năm
+  mục chặn (2.1 · 1.1 · 2.2 · 1.2 · 2.3) đã xong; chủ dự án quyết định xoá và để
+  nút **Xoá hồ sơ** làm sau. Nút "✓ Chuẩn hóa" ở màn hình cũ thay bằng hai đường
+  dẫn — `/standards/` và `/review/` — vì panel gộp hai việc khác hẳn nhau. Kèm
+  theo: 48 lớp CSS legacy chết được dọn (365 → 319 class đơn).
+
+  **CÒN NỢ sau khi xoá:** không còn đường nào **xoá hồ sơ** trên giao diện.
+  `DELETE /profiles/:id` vẫn có ở daemon (`drawingStandards.ts`); chỉ thiếu nút.
+
+  Bản rà cũ giữ lại làm lịch sử — kết luận lúc đó (2026-08-12) là *chưa xoá được*: Rà từng chức năng, đối chiếu với `/standards` +
   `/review`. Còn **10 khoảng trống**, chia ba nhóm:
 
   **Nhóm 1 — soạn hồ sơ, còn 2 việc** (2 việc khác đã đóng ngay khi rà: hai
@@ -368,8 +376,8 @@ route, như `blocks.module.css` vừa làm.
   | ~~1~~ | **2.1** Bảng đối tượng đã nhận diện — **XONG 2026-08-12** | `features/standards/RecognizedObjects.tsx`. Bẫy đơn vị đã bịt (daemon gửi bản quy đổi, giao diện hiện `areaUnit` chứ không ghim `m²`). Bản vẽ thật dạy thêm: `area: 0` là *chưa đo được*, không phải diện tích bằng không |
   | ~~2~~ | **1.1** Nhập layer từ bản vẽ — **XONG 2026-08-13** | `features/standards/ImportLayers.tsx`. Đối chiếu ba nhóm, mặc định an toàn. Quy đổi group 370 chia thẳng 100 (không dùng ngưỡng đoán như bộ mẫu) và làm tròn 2 chữ số vì `13/100` là `0.13000000000000003` |
   | ~~3~~ | **2.2** Chọn đối tượng trong AutoCAD — **XONG 2026-08-14** | Cây cầu duy nhất từ danh sách phát hiện sang bản vẽ. `ZOOM` **không** port được: nó không tồn tại ở backend (`select` chỉ `acedSSSetFirst`; `h_view_zoom` chỉ là mã dò năng lực). Giao diện chỉ đường dùng `ZOOM → Object` trong AutoCAD |
-  | 4 | **1.2** Sửa `bounds` bằng hai nhóm ô có nhãn, KHÔNG phải ô JSON | Xem bảng ba nghĩa của `bounds` ở trên |
-  | 5 | **2.3** Bảng dimension + DIMSPACE | Mở khoá hành động thứ 5/5; hẹp hơn bốn mục trên |
+  | ~~4~~ | **1.2** Sửa `bounds` bằng hai nhóm ô có nhãn — **XONG 2026-08-15** | Hai nhóm theo tác dụng thật; khoá chết nói ra kèm nút xoá, không tự xoá. Đọc được cả ba cách viết mà engine chấp nhận, ghi thì dọn về một |
+  | ~~5~~ | **2.3** Bảng dimension + DIMSPACE — **XONG 2026-08-15** | Đủ 5/5 hành động sửa. Nút chọn DIM chuẩn nằm TRONG bảng, gộp theo trục vì `DIMSPACE` chỉ căn được các DIM cùng trục |
 
   **Bẫy đơn vị đã bịt khi làm 2.1.** Phản hồi `POST /scan` từng gửi
   `parsed.objects` **thô** — diện tích theo đơn vị bản vẽ, không kèm `areaUnit` —
@@ -391,7 +399,7 @@ route, như `blocks.module.css` vừa làm.
   | # | Kế hoạch đòi | Hiện trạng |
   |---|---|---|
   | 6 | `features/review/scopes.ts` — bảng tra **6 hằng số** thay cho `scopeMatches()` lọc bằng regex tiếng Việt (`/frame\|paper\|scale\|khung\|tỷ lệ\|ty le/`) | thư mục không tồn tại. Sáu hằng số thật: `unit` · `layer` · `dimstyle` · `dim-row` · `frame` · `mapping-required` |
-  | 7 | Nút **Xoá hồ sơ** (`DELETE /profiles/:id`) — kế hoạch ghi rõ đây là "việc thêm mới thật" | daemon có endpoint (`drawingStandards.ts:704`), **không màn nào có nút** |
+  | 7 | Nút **Xoá hồ sơ** (`DELETE /profiles/:id`) — kế hoạch ghi rõ đây là "việc thêm mới thật" | daemon có endpoint (`drawingStandards.ts:704`), **không màn nào có nút**. Sau khi xoá panel cũ (2026-08-15) đây là chức năng DUY NHẤT mất hẳn khỏi giao diện — chủ dự án đã chấp nhận và hoãn lại |
   | — | Bất biến CI **#7**: tập `scope:"…"` trích từ `standardsEngine.ts` = tập hằng số trong `features/review/scopes.ts` | `test-contract.mjs` không assert gì về scope |
 
   Lý do kế hoạch nêu cho việc bỏ regex đáng giữ nguyên văn: *backend đổi một chữ
@@ -509,6 +517,15 @@ rồi khởi động lại AutoCAD.
 ---
 
 ## Technical Debt
+
+- **Không có công cụ bắt lỗi danh sách phụ thuộc của hook.** Hai lỗi cùng dạng đã
+  lọt tới vòng review — `cancelPick` đọc `pickBusy` cũ, `applyPicked` gửi DIM
+  chuẩn cũ — cả hai trên đường ghi không hoàn tác được. `react-hooks/exhaustive-deps`
+  bắt chính xác loại này, nhưng dự án chưa cài eslint và việc thêm một linter là
+  quyết định của chủ dự án, không phải của một lượt sửa review. Chốt tạm thời:
+  không bọc `useCallback` cho hàm gửi lệnh ghi (không component nào dùng `memo`,
+  nên nó không giữ được gì).
+
 
 - **21% web app là prototype không backend.** `PreconstructionPanel` (1.089 dòng
   TSX + 1.118 dòng CSS, **0** lời gọi API) và `DocumentReviewPanel` (1.358 dòng,

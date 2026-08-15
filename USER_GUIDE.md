@@ -363,14 +363,30 @@ tích cả nhóm đang lọc.
 
 #### Có phát hiện app không sửa được
 
-Ô tích của chúng bị khoá kèm lý do. Hai loại:
-
-- **Chỉ để xem** — máy chủ chưa có cách sửa tự động cho loại đó.
-- **Căn hàng dimension** — cần chọn một DIM làm chuẩn để những cái khác căn
-  theo, mà màn hình này chưa hỏi được. Dùng màn hình cũ.
+Ô tích của chúng bị khoá kèm lý do: **chỉ để xem** — máy chủ chưa có cách sửa tự
+động cho loại đó.
 
 Nếu máy chủ vẫn bỏ qua mục nào trong lô bạn gửi, app sẽ nói số lượng sau khi
 ghi — để bạn không tưởng cả lô đã xong.
+
+#### Căn hàng dimension: chọn DIM chuẩn ngay trong bảng
+
+Cuối trang có **bảng dimension của lượt quét**, gộp theo trục. Muốn sửa mục "DIM
+lệch hàng" thì chọn **một DIM làm chuẩn** bằng nút chọn ở đầu dòng. DIM chuẩn
+không bị dời; những cái còn lại căn theo nó, khoảng cách hàng lấy từ hồ sơ.
+
+Hai điều bắt buộc, app khoá nút Sửa và nói rõ nếu chưa đạt:
+
+- **Căn hàng chỉ làm được ở màn này.** Màn hình chuẩn hoá cũ đã bị xoá; nó không
+  biết DIM nào thuộc trục nào nên không chặn được lô trộn hai trục — mà đó là
+  lượt ghi không hoàn tác được.
+- **Mỗi lượt chỉ một trục.** Lệnh căn hàng lấy một mốc duy nhất, nên nó chỉ căn
+  được các DIM cùng trục. Tích cả DIM ngang lẫn DIM dọc là app chặn — bỏ tích một
+  trục, sửa xong rồi làm trục còn lại.
+- **DIM chuẩn phải cùng trục với lô.** Nút chọn ở nhóm khác trục bị khoá sẵn.
+
+Nếu bảng báo **đã bị cắt**, DIM bạn muốn lấy làm chuẩn có thể không nằm trong đó.
+Lượt quét chạm trần số dòng, không phải bản vẽ chỉ có bấy nhiêu dimension.
 
 #### Chỉ quét được bản vẽ đang mở
 
@@ -497,6 +513,29 @@ chặn không cho lưu.
 **Mẫu chữ chỉ có tác dụng với loại `room`.** Ở loại đó, lượt quét lấy từng dòng
 TEXT/MTEXT khớp mẫu rồi tìm đường bao kín chứa nó. Ở mọi loại khác, mẫu chữ nằm
 im — app chặn để bạn không gõ đầy rồi tưởng nó đang lọc.
+
+#### Giới hạn nhận diện của một ánh xạ
+
+Mở bằng nút **Giới hạn** ở mỗi dòng ánh xạ. Hai nhóm, và chúng chạy ở **hai nơi
+khác nhau vào hai thời điểm khác nhau** — cần biết điều này để hiểu vì sao số đối
+tượng lại ra như vậy:
+
+- **Giới hạn vùng** — lọc *trong AutoCAD, lúc quét*. Chỉ nhận đối tượng có **tâm**
+  nằm trong hình chữ nhật, theo đơn vị bản vẽ.
+- **Giới hạn diện tích** — lọc *ở máy chủ, sau lượt quét*.
+
+Ba chỗ dễ sai:
+
+- **Phải đủ cả bốn số vùng mới có tác dụng.** Thiếu một số là chương trình bỏ lọc
+  **hoàn toàn**, không phải lọc một phần — mà nhìn màn hình thì trông y hệt đã cấu
+  hình xong. App đếm và nói rõ khi bạn mới điền 1–3 số.
+- **Ô trống nghĩa là không đặt giới hạn**, không phải giới hạn bằng 0.
+- **Quy đổi đơn vị chỉ chạy khi bản vẽ có `INSUNITS` hiểu được.** Bản vẽ không
+  đơn vị thì máy chủ so thẳng theo đơn vị bản vẽ và không báo gì.
+
+Nếu ánh xạ đang mang các khoá `width`/`height`/`tolerancePercent`/`unit`, app sẽ
+nói chúng **không có tác dụng** — không dòng mã nào đọc tới. Việc so khung với
+khổ giấy lấy số từ mục **Khổ giấy**. App không tự xoá; đó là quyết định của bạn.
 
 #### 20 thiết lập kích thước nâng cao
 

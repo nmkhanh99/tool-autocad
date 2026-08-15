@@ -1,5 +1,325 @@
 # CHANGELOG
 
+## 2026-08-15 — Vòng review 1.2 + 2.3: sáu phát hiện, hai loại chỉ lộ ra khi ghi
+
+Codex ra 2 P1 + 4 P2. Cả sáu đều thật, và bốn trong sáu là **loại không tự lộ
+ra** — lệnh chạy xong, AutoCAD không báo gì, kết quả chỉ sai.
+
+### DIMSPACE: một lô — một trục — một mốc cùng trục
+
+`acadstd:dimspace` nhận **đúng một** handle mốc rồi căn mọi handle còn lại theo
+nó, nên nó chỉ căn được các DIM **cùng trục**. Nhưng máy chủ gộp MỌI phát hiện
+`dimspace` đã chọn vào một lệnh: tích cả `dim-row-h` lẫn `dim-row-v` là căn các
+DIM dọc theo một DIM ngang. Chọn mốc ở trục kia cũng vậy. Cả hai đều chạy êm —
+trên đường ghi MỘT PHA app không hoàn tác được.
+
+Chặn ở **cả hai phía**: `dimspaceBlockedReason()` (web) nói trước khi bấm, còn
+`dimspaceRejection()` (daemon) từ chối trước khi ghi. Chốt phải có ở máy chủ vì
+đó mới là nơi ghi; tách thành hàm thuần vì chốt nằm trong thân handler là chốt
+không ai kiểm được. Bảng dimension khoá luôn nút chọn ở nhóm khác trục — báo lỗi
+sau khi bấm là bắt người dùng tự suy ra vì sao.
+
+### DIM chuẩn cũ vẫn được gửi đi
+
+`applyPicked` bọc `useCallback` mà thiếu `dimBaseHandle` trong danh sách phụ
+thuộc: chọn chuẩn A → huỷ thẻ xác nhận → chọn B → **gửi A**. Đây là lần thứ hai
+trong đúng tệp này (`cancelPick` từng đọc `pickBusy` cũ), nên sửa bằng cách bỏ
+hẳn `useCallback` chứ không thêm một tên vào danh sách: nơi duy nhất dùng nó là
+một arrow dựng mới mỗi lượt render, và **không component nào trong dự án bọc
+`memo`** — nghĩa là nó không giữ được gì, chỉ giữ lại cái bẫy.
+
+### Ô nhập giới hạn không gõ được số âm
+
+`BoundsEditor` cho ô nhập ăn giá trị đã qua `Number()`. Gõ `-` để bắt đầu một số
+âm là không phân tích được → giá trị ngoài thành rỗng → ô tự xoá ngay trước phím
+kế. Nay ô nhận giá trị **thô**; `readRegionBounds()` chỉ còn phục vụ phần logic.
+
+Đi kèm: một hàm tra **duy nhất** (`rawRegionBounds()`) cho cả hiển thị, phép đếm
+và phép kiểm, sao đúng cả các góc tối của `mappingBounds()` bên engine —
+`firstValue()` lấy khoá ĐẦU TIÊN CÓ MẶT chứ không phải khoá đầu tiên đọc ra số,
+nên `{minX: "abc", xMin: 5}` ở engine là **tắt lọc**, không phải dùng `5`.
+
+### Chuỗi rỗng không phải là số 0
+
+`Number("")` là `0`. Đường lọc diện tích của daemon đọc đúng như thế, nên một
+`maxArea: ""` bỏ quên trong hồ sơ có nghĩa "diện tích ≤ 0" — **lọc sạch mọi đối
+tượng** — trong khi giao diện hiện ô trống và người dùng không có manh mối nào.
+`finiteNumber()` bên engine đã đọc chuỗi rỗng đúng từ đầu; chỗ này là bản chép
+tay lệch ra.
+
+### Hai lỗi còn lại
+
+- **Đơn vị `m²`**: daemon nhận cả `m²` lẫn `m2`, ô chọn chỉ nhận ASCII. Hồ sơ
+  viết `m²` hiện lên thành "đơn vị bản vẽ²" trong khi máy chủ vẫn quy đổi theo
+  mét — người dùng chỉnh ngưỡng trên một tỉ lệ khác hẳn tỉ lệ đang chạy.
+- **Nút Lưu bỏ sót tên đồng nghĩa**: phép kiểm chỉ soi sáu khoá chuẩn ở tầng
+  ngoài, trong khi engine cũng đọc `xMin`/`left` và dạng mảng `min: [ ]`. Lỗi
+  báo ra nay gọi **đúng tên khoá trong hồ sơ** — báo "minX" cho hồ sơ viết `left`
+  là chỉ người dùng đi tìm một khoá không tồn tại.
+
+### Vòng review thứ hai: ba lỗi, một cái do chính lượt sửa trên sinh ra
+
+- **Khoảng trắng thành số 0.** Lượt sửa trên dạy giao diện đọc `"  "` là "không
+  đặt", nhưng `finiteNumber()` bên engine vẫn cho ra `0` — nên một cạnh chỉ chứa
+  dấu cách trông là ô trống mà **thật sự đang lọc bằng giới hạn 0**. Trước lượt
+  sửa hai bên còn khớp nhau (cùng đọc ra `0`); tôi tạo ra khoảng lệch này. Vá cả
+  ba nơi: engine coi chuỗi trắng là không đặt, `writeBounds()` không ghi xuống
+  thứ chính nó đọc là trống, và hồ sơ cũ đã lỡ mang giá trị đó vẫn được đọc đúng.
+- **Đơn vị `" m2 "` không quy đổi.** Giao diện cắt khoảng trắng trước khi so, máy
+  chủ thì không — nên nó hiện "m²" trong khi máy chủ so theo đơn vị bản vẽ.
+- **Bảng dimension không theo hệ thiết kế.** Nó dùng `class="table"`, còn
+  `design-system.css` chỉ định nghĩa `table.data` — tức bảng duy nhất trong dự án
+  rơi về mặc định trình duyệt, mất cả căn phải cho cột số. Đúng thứ mà cả đợt
+  migrate này sinh ra để dẹp.
+
+Ba đột biến nữa đã kiểm. Một trong đó lộ ra rằng phần trim đơn vị **chưa có test
+nào phủ** — và bản test đầu tôi viết cho phần khoảng trắng khớp một regex không
+tồn tại trong chương trình phát ra, tức nó xanh mà không chứng minh gì. Đã viết
+lại theo đúng định dạng thật rồi mới kiểm đột biến.
+
+### Vòng review thứ ba: đường ghi CŨ vẫn còn mở
+
+- **`/standards/action` căn hàng không qua chốt nào.** Panel cũ gọi thẳng vào đó
+  với một ô thả xuống liệt kê DIM của **cả hai trục** — tức đúng lượt ghi mà
+  `/standards/apply` vừa học cách từ chối. Đường này nhận handle **trần**, không
+  gắn với lượt quét nào, nên nó **không có cách nào** biết handle nào thuộc trục
+  nào. Chặn hẳn (`dimspace_needs_scan`, 409) thay vì kiểm nửa vời: dữ liệu để
+  kiểm không tồn tại ở đó. Lời từ chối chỉ đường sang màn Kiểm tra bản vẽ — người
+  dùng đang làm một việc hợp lệ, chỉ là ở sai chỗ.
+
+  Đây là dạng gốc của chính lỗi vừa sửa: nó có từ trước, và chỉ lộ ra khi biết
+  rằng **trục là thứ có ý nghĩa**.
+- **Handle chữ thường không tra ra.** `cleanHandles()` viết hoa handle của yêu
+  cầu, `parseStandardsScanTsv()` giữ nguyên cách viết đọc từ bản vẽ — nên người
+  dùng nhận `dim_base_unknown` cho đúng cái DIM họ vừa bấm trong bảng.
+- **Khoảng ngược nhau lưu êm.** `minX > maxX` (hay `minArea > maxArea`) là một
+  khoảng RỖNG: `acadstd:map-in-bounds-p` đòi cả hai bất đẳng thức, nên không đối
+  tượng nào lọt qua và bảng bóc tách trống trơn mà không dòng nào nói vì sao. Nay
+  nút Lưu chặn, gọi đúng tên khoá trong hồ sơ, và `minX == maxX` vẫn hợp lệ.
+
+Lại một lần nữa đột biến lôi ra một lỗ: chốt ở `/action` **không có test nào**
+bắt được cho tới khi thêm một lượt gọi thật vào route với `dispatchLiveJob` biết
+tự ném lỗi — bằng chứng rằng nếu chốt hỏng thì lệnh đã tới được AutoCAD.
+
+### Vòng review thứ tư: hai lỗi trong chính phần vừa viết
+
+- **Cạnh dựa vào `min[]` rơi mất khi chuyển dạng.** Hồ sơ viết `{minX: null,
+  min: [1, 2]}` có `minX` đang **thật sự bằng 1** — engine làm
+  `firstValue(...) ?? min[0]`, nên `null` rơi xuống dạng mảng. Đoạn chuyển dạng
+  chỉ chép khi khoá `=== undefined`, nên nó để lại `minX: null` rồi xoá mảng:
+  cạnh biến mất và giới hạn vùng **tắt hoàn toàn**. Đúng cái mà chính đoạn đó
+  sinh ra để tránh — nó tự sập vào bẫy của mình ở một dạng dữ liệu khác.
+- **Ô CHỮ dùng phép so của ô SỐ.** `shouldSyncField()` bỏ qua cờ `numeric`, nên
+  một trường chữ mang giá trị nhìn như số (`"2."` so với `"2"`) không được nạp
+  lại khi đổi hồ sơ — và một lần sửa sau đó ghi giá trị của hồ sơ **cũ** sang hồ
+  sơ mới. Tách quyết định ra hàm thuần vì đây là chỗ đã hỏng ba lần, và trong
+  component thì không khoá được bằng test.
+
+### Vòng review thứ năm: "không biết" lại hoá thành "đạt"
+
+Hai phát hiện, cùng một hình dạng, và là hình dạng đã gặp ở đợt màu thật —
+`observedLayerColor()` từng lùi về ACI khi không đọc được rgb. Lần này **không vá
+ở hai đầu mà sửa ở nguồn**:
+
+- **Parser bịa `0` cho toạ độ thiếu.** `numberOrZero()` biến một DIM không đọc
+  được hàng thành một DIM nằm đúng gốc toạ độ; `analyzeDimensionRows()` thấy nó
+  lệch hàng và dựng một phát hiện `dim-row` cho **một cái không có thật** — mà
+  nay phát hiện đó bấm SỬA được, tức `DIMSPACE` dời các DIM thật theo một con số
+  bịa. Bộ lọc `Number.isFinite(dimension.row)` trong `analyzeDimensionRows()` vốn
+  viết đúng từ đầu; nó chỉ **chưa bao giờ chạy**, vì tới đó không còn `NaN` nào.
+  Nay parser giữ `NaN`, và bộ lọc ấy sống lại.
+- **Trục rỗng làm chốt tự tắt.** Phép so trục viết `axes.length === 1 && baseAxis
+  && …` — nên một dòng quét thiếu trục làm chốt duy nhất còn lại bị bỏ qua **đúng
+  lúc dữ liệu đáng ngờ nhất**. Nay không biết trục, hoặc không biết toạ độ hàng,
+  đều là TỪ CHỐI, ở cả hai phía. `row: 0` vẫn hợp lệ — chỉ *thiếu* mới là không.
+
+Hai mã lỗi mới: `dim_base_axis_unknown`, `dim_base_row_unknown`.
+
+### Vòng review thứ sáu: gộp về MỘT hàm đọc số
+
+- **`null` của JSON thành `0`.** `NaN` không phải JSON hợp lệ nên máy chủ gửi
+  `null`, và `Number(null)` là `0` — nên `?? NaN` phía web **không bao giờ chạy**.
+  Bảng hiện số 0 bịa, cho chọn DIM đó làm chuẩn, rồi máy chủ mới từ chối bằng
+  `dim_base_row_unknown`: hai đầu nói khác nhau về cùng một dòng.
+
+  Đây là lần **thứ ba** trong đợt này `Number()` trần biến một giá trị rỗng thành
+  `0` (`maxArea: ""` · một cạnh chỉ có dấu cách · `row: null`). Ba lần cùng một
+  hình dạng nghĩa là chỗ hỏng không phải từng chỗ gọi — nên gộp `num()` và
+  `boundNumber()` thành **một** hàm đọc số cho cả tệp, từ chối `null`, chuỗi
+  rỗng, chuỗi trắng và mọi kiểu không phải số/chuỗi. Việc gộp lôi luôn ra các ca
+  chưa ai gặp: `insunits: null` từng hiện là `0`, `area: null` cũng vậy.
+- **`DEVELOPMENT.md` chưa cập nhật.** Đúng theo rule `documentation-maintenance`:
+  hợp đồng dữ liệu mới phải được ghi lại. Đã bổ sung hai mục — `dimensions` của
+  lượt quét kèm bảng năm mã từ chối của `DIMSPACE`, và bốn quy ước đọc `bounds`
+  mà hai phía **buộc** phải giống nhau.
+
+### Vòng review thứ bảy: hai lỗi giao diện
+
+- **Nút chết ở panel cũ.** Chặn `dimspace` ở `/standards/action` biến nút "Căn
+  đều DIMSPACE" của panel cũ thành một nút bấm được mà luôn 409. Bản sửa đầu của
+  tôi **cắt quá tay**: gỡ luôn ô chọn DIM chuẩn, mà ô đó còn nuôi `dimBaseHandle`
+  cho lượt `/standards/apply` — đường ĐÃ CÓ chốt trục. Nay chỉ nút gọi thẳng
+  `/action` bị đóng; ô chọn ở lại, kèm một câu nói rõ nó không nhóm theo trục và
+  chỉ đường sang màn Kiểm tra bản vẽ.
+- **Bảng giới hạn đóng sập khi xoá dòng khác.** `openBounds` neo theo vị trí, nên
+  xoá một ánh xạ phía trên làm chỉ số tụt đi và khối đang mở đóng lại. Nay neo
+  theo `sourceId`. Dòng MỚI vẫn dùng chỉ số: thêm một mã cục bộ vào `MappingRule`
+  để chữa nốt ca đó là mời nó lọt vào thân PUT gửi lên daemon.
+
+### Vòng review thứ tám: mốc không tự căn theo chính nó
+
+Máy chủ lọc `baseHandle` ra khỏi danh sách cần dời, nên chọn đúng cái DIM **duy
+nhất** của lô làm mốc là còn lại rỗng — và người dùng ăn 400 SAU KHI đã bấm một
+nút ghi. Chặn ở giao diện, và đổi `throw` của máy chủ thành mã có kiểu
+(`dim_base_only_candidate`) vì đây là một lý do từ chối riêng, cần một câu chỉ
+đường riêng.
+
+**Không tự chọn hộ một mốc khác.** Mốc quyết định các DIM còn lại dời đi đâu, và
+đó là lượt ghi không hoàn tác được — nút chọn nằm TRONG bảng chính là để người
+dùng tự quyết.
+
+Hai test cũ đỏ theo, và đỏ ĐÚNG: fixture của chúng dùng `handles: []`, mà một lô
+không có handle nào thì đúng là không căn được gì. Sửa fixture, không nới chốt.
+
+### Xoá `DrawingStandardsPanel.tsx` — 2.411 dòng
+
+Mốc kết thúc giai đoạn 6. Panel gộp hai việc khác hẳn nhau vào một hộp thoại:
+soạn hồ sơ quy tắc (không chạm bản vẽ) và quét rồi sửa (ghi MỘT PHA, không hoàn
+tác được). Bản mới tách làm hai route, nên nút "✓ Chuẩn hóa" ở màn hình cũ thay
+bằng **hai** đường dẫn — theo đúng lối đã dùng khi xoá panel Hồ sơ bản vẽ.
+
+**Bất biến thì CHUYỂN chỗ, không bỏ.** `test-contract.mjs` khoá bốn bất biến vào
+mã nguồn panel. Ba cái đầu (ô JSON `bounds` chưa commit, nút Lưu khoá theo nó, ô
+danh sách cập nhật draft) chết theo panel: bản mới không có ô JSON nào, và
+`mappingRowErrors()` + `profileSaveBlockedReason()` thay chỗ bằng **test hành vi**
+trên hàm thuần — chặt hơn một phép so mã nguồn. Cái thứ tư nói về một lỗi thật
+nên nó đi theo sang `/review`: handle của một lượt quét chỉ có nghĩa với bản vẽ ở
+đúng trạng thái lúc quét, nên chốt gửi kèm phải lấy từ **chính lượt đó**.
+
+**CÒN NỢ:** không còn đường nào **xoá hồ sơ** trên giao diện. Endpoint vẫn có;
+chỉ thiếu nút. Chủ dự án đã chấp nhận và hoãn.
+
+### Guardrail mới: CSS phải cân ngoặc
+
+Script dọn CSS của tôi **ăn mất một dấu `}`** của `@keyframes legacy-spin`, và cả
+khối `.standards-confirm-*` — vẫn đang dùng — bị hút vào trong keyframes. Không
+có gì báo: build xanh, `check:css` xanh, 203 test xanh. Trình duyệt không dựng
+trang trắng khi thiếu ngoặc; nó chỉ lặng lẽ nuốt khối kế tiếp.
+
+Bắt được nhờ đọc từng dòng của diff, không nhờ công cụ nào — nên bổ sung công cụ.
+`check:css` nay đếm ngoặc trên cả hai file (sau khi bỏ chú thích và chuỗi, vì một
+dấu ngoặc trong `content: "}"` không phải ngoặc cú pháp). Đã kiểm: bỏ lại đúng
+dấu đóng đó thì script đỏ.
+
+Chi tiết đáng ghi: lúc file còn lệch ngoặc, `check:css` đếm ra **73** class legacy;
+sau khi sửa là **319**. Nó đang đọc một file méo và báo một con số vô nghĩa —
+mà vẫn in dấu ✓.
+
+### Technical
+
+- Ba mã lỗi mới (`dim_axis_mixed`, `dim_base_unknown`, `dim_base_axis_mismatch`)
+  — `check:guards` bắt đúng lúc chúng chưa có thái độ ở UI.
+- **28 đột biến** đều đã kiểm là ĐỎ khi bỏ từng chốt ra, và ĐỎ vì đúng phép
+  khẳng định chứ không phải vì ném lỗi dọc đường.
+- `pnpm verify`: **204 test**, 13 guardrail, exit 0.
+
+## 2026-08-15 — Mục 2.3: bảng dimension và lệnh căn hàng DIMSPACE
+
+Mục cuối của giai đoạn 6. `dimspace` là 1 trong 5 hành động sửa tự động máy chủ
+làm được, và nó bị **khoá** vì đòi `dimBaseHandle` mà màn hình không có chỗ hỏi.
+
+### Bảng dimension — nút chọn nằm TRONG bảng
+
+Máy chủ vẫn trả `dimensions` trong kết quả quét; `/review` từng vứt đi. Nay có
+bảng, và DIM chuẩn chọn bằng **nút chọn ngay tại dòng** — panel cũ đặt nó ở một ô
+thả xuống rời khỏi bảng, tức bắt người dùng đối chiếu một handle trong ô với một
+handle trong bảng. Chọn nhầm DIM chuẩn làm **xô lệch cả hàng** và không hoàn tác
+được từ app, nên nó phải chọn ngay tại dòng đang nhìn. Dòng đang là chuẩn báo
+bằng nền và độ đậm — hệ thiết kế này đơn sắc có chủ ý.
+
+**Gộp theo TRỤC.** `DIMSPACE` căn các DIM cùng trục, nên trộn DIM ngang với DIM
+dọc trong một danh sách phẳng là mời chọn một chuẩn không căn được gì. Trong mỗi
+trục sắp theo toạ độ hàng để cái lệch lộ ra khi liếc.
+
+### Chặn đúng chỗ
+
+`dimspace` **không còn** bị `unsupportedFixReason()` chặn: nó không phải năng lực
+thiếu nữa. "Chưa chọn chuẩn" là trạng thái nhất thời của màn hình, nên nó thuộc
+`applyBlockedReason` — chỗ nói vì sao nút Sửa đang khoá. Thiếu `dimBaseHandle` là
+máy chủ trả **400**, và người dùng chỉ biết sau khi đã bấm một nút ghi **không
+hoàn tác được**.
+
+DIM chuẩn bị **xoá khi lượt quét đổi**: dimension của lượt khác là handle khác,
+giữ lại là gửi một handle thuộc lượt cũ.
+
+### Technical
+
+- `Scan.dimensions` + `dimensionsTruncated`. Cờ cắt đọc từ **bằng chứng** máy chủ
+  (`evidence.standardsScan.dimensionsTruncated`), không cộng tay từ độ dài mảng —
+  mảng đã lọc bỏ dòng thiếu handle nên nó nhỏ hơn số máy chủ thật sự thu được.
+- `row` thiếu thì để `NaN` lộ ra, **không** quy về `0`: `0` là một toạ độ hàng
+  hợp lệ, nên quy về nó là bịa ra một DIM nằm đúng gốc toạ độ — rồi nó hiện lên
+  như một dòng lệch hàng cần sửa. Cùng loại lỗi với `area: 0` ở bảng đối tượng.
+- Danh sách bị cắt thì nói thẳng: **DIM chuẩn bạn cần có thể không nằm trong đây**.
+- `pnpm verify`: **191 test**, 12 guardrail, exit 0.
+
+## 2026-08-15 — Mục 1.2: sửa giới hạn nhận diện bằng hai nhóm ô có nhãn
+
+Panel cũ cho sửa `bounds` bằng một **ô JSON thô**; màn mới giữ được giá trị đó
+qua mỗi lượt lưu nhưng không sửa được. Nay sửa được — và **không** bằng ô JSON.
+
+### Vì sao không bê ô JSON sang
+
+`bounds` là **ba thứ khác nhau nằm chung một tên**, chạy ở hai nơi và hai thời
+điểm:
+
+| Khoá | Ai đọc | Khi nào |
+|---|---|---|
+| `minX minY maxX maxY` | chương trình LISP, trong AutoCAD | trong lượt quét |
+| `minArea maxArea areaUnit` | daemon | **sau** lượt quét |
+| `width height tolerancePercent unit` | **không ai** | — |
+
+Ô JSON cho gõ `{"width": 420}` — thứ trông như một quy tắc mà không dòng mã nào
+đọc tới. Nay là hai nhóm có nhãn **theo tác dụng thật**, và nhóm thứ ba được nói
+ra kèm nút xoá — **không** tự xoá, vì hồ sơ mặc định mang bốn khoá đó ở ánh xạ
+`drawing-frame` và xoá hộ là quyết định của người dùng.
+
+### Ba sự thật đã đối chiếu với nguồn, không lấy từ tài liệu
+
+- **Thiếu một trong bốn số là bỏ lọc HOÀN TOÀN.** `acadstd:map-in-bounds-p` làm
+  `(not (and (numberp minx) …))` rồi `or` ngắn mạch. Giao diện vì thế đếm và nói
+  thẳng "mới có 2/4 số, giới hạn chưa có tác dụng nào" — nửa vời trông y hệt đã
+  cấu hình xong.
+- **Lọc theo TÂM đối tượng**, không theo khung bao.
+- **Quy đổi đơn vị diện tích chỉ chạy khi `INSUNITS` hiểu được.** Bản vẽ không
+  đơn vị thì daemon so thẳng theo đơn vị bản vẽ, không báo gì — nên giao diện nói
+  điều đó ngay khi người dùng chọn đơn vị khác.
+
+### Đọc được MỌI cách viết, ghi thì dọn về một
+
+`mappingBounds()` của engine nhận ba tên cho mỗi cạnh (`minX`/`xMin`/`left`) **và**
+dạng mảng `min[0]`/`max[1]`. Chỉ đọc `minX` là hồ sơ viết cách khác sẽ hiện ô
+trống, người dùng gõ đè lên rồi tưởng vừa đặt mới — trong khi đang ghi chồng một
+giới hạn đã có. Lúc ghi thì dọn tên đồng nghĩa và dạng mảng của **chính cạnh
+đó**, vì để lại là hồ sơ có hai nguồn sự thật cho một cạnh.
+
+Khoá **lạ** đi qua nguyên vẹn: daemon nhận `bounds` là object bất kỳ
+(`sanitizeJson`, không kiểm từng khoá), nên giao diện không được quyền xoá thứ nó
+chưa biết — đúng lỗi đã xảy ra với 20 trường `dimension`.
+
+### Technical
+
+- `MappingRule.bounds` giữ **nguyên dạng thô**; `readRegionBounds` /
+  `readAreaBounds` / `deadBoundsKeys` / `writeBounds` là hàm thuần, khoá bằng test.
+- Xoá hết ô thì **xoá hẳn khoá** khỏi bản ghi. Gán `undefined` thì
+  `JSON.stringify` bỏ trường đi và máy chủ **giữ nguyên giá trị cũ** — người dùng
+  xoá hết mà giới hạn vẫn còn.
+- Khối gập neo theo `sourceId`+vị trí, không theo chỉ số: xoá một dòng phía trên
+  làm chỉ số trượt và khối đang mở sẽ nhảy sang ánh xạ khác.
+- Nút hiện dấu ✓ khi có giới hạn — nằm trong khối gập thì một quy tắc bị thu hẹp
+  trông y hệt một quy tắc không giới hạn.
+- `pnpm verify`: **187 test**, 12 guardrail, exit 0.
+
 ## 2026-08-14 — Mục 2.2: chọn đối tượng trong AutoCAD từ một phát hiện
 
 `/review` trước đây chỉ **in handle ra dạng chữ**. Nay mỗi phát hiện có nút

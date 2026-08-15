@@ -75,7 +75,13 @@ function records(value: unknown): JsonRecord[] {
 }
 
 function finiteNumber(value: unknown): number | undefined {
-  if (value === "" || value === null || value === undefined) return undefined;
+  /* Chuỗi TOÀN KHOẢNG TRẮNG cũng là "không đặt". `Number("  ")` là `0` — một số
+     hữu hạn — nên một cạnh chỉ chứa dấu cách sẽ thành **giới hạn bằng 0** trong
+     chương trình LISP, tức đổi hẳn tập đối tượng lượt quét nhận vào, trong khi ô
+     nhập trông y hệt ô trống. Không chỗ nào trong hồ sơ mà "một dấu cách" có
+     nghĩa là số 0. */
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "string" && value.trim() === "") return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
 }
@@ -198,9 +204,17 @@ export function parseStandardsScanTsv(raw: string): StandardsScan {
         layer: columns[2] || "",
         style: columns[3] || "",
         axis: columns[4] || "",
-        row: numberOrZero(columns[5]),
+        /* Thiếu số thì để `NaN` LỘ RA, không quy về `0`.
+           `0` là một toạ độ hàng HỢP LỆ, nên quy về nó là bịa ra một DIM nằm
+           đúng gốc toạ độ — rồi `analyzeDimensionRows()` thấy nó lệch hàng và
+           dựng một phát hiện `dim-row` cho một cái không có thật, mà nay phát
+           hiện đó BẤM SỬA ĐƯỢC: `DIMSPACE` sẽ dời các DIM thật theo một con số
+           bịa. Bộ lọc `Number.isFinite(dimension.row)` ngay dưới kia vốn đã viết
+           đúng từ đầu — nó chỉ chưa bao giờ chạy, vì tới đây không còn `NaN` nào.
+           `rotation` giữ nguyên `numberOrZero`: không dòng mã nào đọc tới nó. */
+        row: finiteNumber(columns[5]) ?? Number.NaN,
         rotation: numberOrZero(columns[6]),
-        measurement: numberOrZero(columns[7]),
+        measurement: finiteNumber(columns[7]) ?? Number.NaN,
         text: columns.slice(8).join("\t"),
       });
     } else if (columns[0] === "OBJECT" && columns[4]) {

@@ -16,6 +16,8 @@ const {
   documentGuardLisp,
   drawingRevision,
   drawingStandardsRouter,
+  dimspaceRejection,
+  filterObjectsByMappingBounds,
   isIncompleteSnapshotWarning,
 } = await import("../src/drawingStandards.ts");
 const { DEFAULT_PROFILE } = await import("../src/standardsProfile.ts");
@@ -515,3 +517,200 @@ assert.doesNotMatch(routerSource, /verifiedDrawingRevision !== expectedDrawingRe
 assert.match(routerSource, /completeness:\s*\{/);
 
 console.log("✓ drawing standards router: typed actions and routes");
+
+/* ------------------------------------------------------------------ *
+ * Căn hàng dimension: một lô — một trục — một mốc cùng trục
+ * ------------------------------------------------------------------ */
+{
+  const issue = (axis) => ({
+    id: `dim-row-${axis}`, scope: "dim-row", severity: "warning", message: "",
+    handles: ["A1"], current: null, expected: null,
+    suggestedAction: { action: "dimspace", axis },
+  });
+  const dims = [
+    { handle: "A1", layer: "", style: "", axis: "H", row: 0, rotation: 0, measurement: 0, text: "" },
+    { handle: "B2", layer: "", style: "", axis: "V", row: 0, rotation: 0, measurement: 0, text: "" },
+  ];
+
+  assert.equal(dimspaceRejection([issue("H")], dims, "A1"), null, "cung truc thi chay duoc");
+
+  /* Hai truc trong mot lo: `acadstd:dimspace` nhan DUNG MOT moc, nen cac DIM doc
+     se bi can theo mot DIM ngang. Lenh chay em, AutoCAD khong bao gi, va cac DIM
+     chi don gian nam sai cho — tren duong ghi MOT PHA khong hoan tac duoc. */
+  assert.equal(
+    dimspaceRejection([issue("H"), issue("V")], dims, "A1")?.code,
+    "dim_axis_mixed",
+  );
+  assert.equal(
+    dimspaceRejection([issue("H")], dims, "B2")?.code,
+    "dim_base_axis_mismatch",
+    "moc truc doc khong can duoc lo truc ngang",
+  );
+  /* Handle con sot tu mot luot quet truoc, hoac bang dimension da bi cat mat dong
+     do. Gui di la hong GIUA CHUNG — luc ay vai lenh khac trong lo da ghi xong. */
+  assert.equal(
+    dimspaceRejection([issue("H")], dims, "ZZZ")?.code,
+    "dim_base_unknown",
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Gioi han dien tich: chuoi RONG la "khong dat", khong phai 0
+ * ------------------------------------------------------------------ */
+{
+  const withBounds = (bounds) => ({
+    ...DEFAULT_PROFILE,
+    mappings: [{
+      id: "m1", label: "m1", kind: "generic",
+      layerPatterns: ["A-*"], blockPatterns: [], textPatterns: [], entityTypes: [],
+      required: false, bounds,
+    }],
+  });
+  const objects = [
+    { mappingId: "m1", handle: "A1", kind: "generic", layer: "A-WALL", block: "",
+      text: "", area: 12, width: 1, height: 1, x: 0, y: 0 },
+  ];
+  const settings = { INSUNITS: "6" };
+
+  /* `Number("")` la `0`, va `0` la mot so HUU HAN — nen mot `maxArea: ""` bo quen
+     trong ho so tung co nghia "dien tich <= 0", tuc loc sach moi doi tuong. Giao
+     dien hien o trong, va nguoi dung tim mai khong ra vi sao bang boc tach rong
+     tron. `finiteNumber()` ben engine da doc chuoi rong dung nhu vay tu dau. */
+  assert.equal(
+    filterObjectsByMappingBounds(withBounds({ maxArea: "" }), objects, settings).length,
+    1,
+    "maxArea rong = khong dat, khong phai <= 0",
+  );
+  assert.equal(
+    filterObjectsByMappingBounds(withBounds({ minArea: "   " }), objects, settings).length,
+    1,
+    "chuoi toan khoang trang cung vay",
+  );
+  // Gioi han THAT thi van phai loc.
+  assert.equal(
+    filterObjectsByMappingBounds(withBounds({ maxArea: 5 }), objects, settings).length,
+    0,
+  );
+  assert.equal(
+    filterObjectsByMappingBounds(withBounds({ maxArea: "20" }), objects, settings).length,
+    1,
+    "chuoi so van la mot bo loc dang chay",
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Don vi dien tich: khoang trang khong duoc lam hong phep quy doi
+ * ------------------------------------------------------------------ */
+{
+  /* Giao dien CAT khoang trang truoc khi so, nen `" m2 "` hien len la "m²".
+     Cho nay khong cat thi roi ve don vi ban ve — nguoi dung dat nguong theo met
+     ma may chu so theo don vi ban ve, va khong co gi noi ra dieu do. */
+  const profile = (bounds) => ({
+    ...DEFAULT_PROFILE,
+    mappings: [{
+      id: "m1", label: "m1", kind: "generic",
+      layerPatterns: ["A-*"], blockPatterns: [], textPatterns: [], entityTypes: [],
+      required: false, bounds,
+    }],
+  });
+  // INSUNITS 4 = milimet. 1.000.000 mm² = 1 m².
+  const mm = { INSUNITS: "4" };
+  const objects = [
+    { mappingId: "m1", handle: "A1", kind: "generic", layer: "A-WALL", block: "",
+      text: "", area: 1_000_000, width: 1, height: 1, x: 0, y: 0 },
+  ];
+
+  for (const unit of ["m2", " m2 ", "m²", " M² "]) {
+    assert.equal(
+      filterObjectsByMappingBounds(profile({ maxArea: 2, areaUnit: unit }), objects, mm).length,
+      1,
+      `don vi ${JSON.stringify(unit)} phai quy doi duoc: 1 m² <= 2 m²`,
+    );
+  }
+  /* Don vi may chu THAT SU khong hieu thi van phai so theo don vi ban ve —
+     1.000.000 > 2, nen doi tuong bi loai. Day la duong lui dung. */
+  assert.equal(
+    filterObjectsByMappingBounds(profile({ maxArea: 2, areaUnit: "ft2" }), objects, mm).length,
+    0,
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Handle chu thuong van phai tra ra
+ * ------------------------------------------------------------------ */
+{
+  /* `cleanHandles()` viet HOA handle cua yeu cau, con `parseStandardsScanTsv()`
+     giu nguyen cach viet doc duoc tu ban ve. So thang la nguoi dung nhan
+     `dim_base_unknown` cho dung cai DIM ho vua bam trong bang. */
+  const issue = {
+    id: "dim-row-h", scope: "dim-row", severity: "warning", message: "",
+    handles: ["a1"], current: null, expected: null,
+    suggestedAction: { action: "dimspace", axis: "H" },
+  };
+  const lower = [
+    { handle: "a1", layer: "", style: "", axis: "H", row: 0, rotation: 0, measurement: 0, text: "" },
+  ];
+  assert.equal(dimspaceRejection([issue], lower, "A1"), null, "hoa/thuong khong duoc lam lech");
+}
+
+/* ------------------------------------------------------------------ *
+ * Duong CU khong con can hang dimension duoc
+ * ------------------------------------------------------------------ */
+{
+  /* `/action` nhan handle TRAN, khong gan voi luot quet nao, nen no khong co
+     cach nao biet handle nao thuoc truc nao — ma `acadstd:dimspace` lay dung mot
+     moc va chi can duoc cac DIM cung truc. Panel cu goi vao day voi mot o tha
+     xuong liet ke DIM cua CA HAI truc, tuc dung luot ghi ma `/standards/apply`
+     nay tu choi. Ghi mot pha, khong hoan tac duoc, va sai mot cach IM LANG.
+     Chan han thay vi kiem nua voi — du lieu de kiem khong ton tai o day. */
+  const actionRouter = drawingStandardsRouter({
+    ...baseDependencies,
+    dispatchLiveJob: async () => {
+      throw new Error("KHONG duoc dispatch: lenh can hang phai bi chan truoc do");
+    },
+  });
+  const rejected = await invokeRoute(actionRouter, "/action", {
+    target: activeDocument.file,
+    action: "dimspace",
+    handles: ["A1", "B2"],
+    params: { baseHandle: "A1", rowSpacing: 10 },
+  });
+  assert.equal(rejected.status, 409, JSON.stringify(rejected));
+  assert.equal(rejected.payload.code, "dimspace_needs_scan");
+  /* Cau tra loi phai chi duong: nguoi dung dang co lam mot viec HOP LE, chi la
+     o sai cho. Tu choi khong kem loi chi duong la mot ngo cut. */
+  assert.match(String(rejected.payload.hint ?? ""), /review|Kiem tra|Kiểm tra/i);
+}
+
+/* ------------------------------------------------------------------ *
+ * KHONG BIET thi TU CHOI, dung cho qua
+ * ------------------------------------------------------------------ */
+{
+  /* Mot dong quet co `axis` rong lam phep so truc bi BO QUA hoan toan — tuc chot
+     duy nhat con lai tu tat dung luc du lieu dang ngo nhat. Cung loi voi
+     `observedLayerColor()` tung lui ve ACI khi khong doc duoc rgb. */
+  const issue = {
+    id: "dim-row-h", scope: "dim-row", severity: "warning", message: "",
+    handles: ["A1"], current: null, expected: null,
+    suggestedAction: { action: "dimspace", axis: "H" },
+  };
+  const row = (handle, axis, rowValue) => ({
+    handle, layer: "", style: "", axis, row: rowValue,
+    rotation: 0, measurement: 0, text: "",
+  });
+
+  assert.equal(
+    dimspaceRejection([issue], [row("A1", "", 0)], "A1")?.code,
+    "dim_base_axis_unknown",
+    "khong biet truc thi tu choi",
+  );
+  assert.equal(
+    dimspaceRejection([issue], [row("A1", "H", Number.NaN)], "A1")?.code,
+    "dim_base_row_unknown",
+    "khong biet toa do hang thi tu choi: DIMSPACE can THEO chinh so do",
+  );
+  assert.equal(dimspaceRejection([issue], [row("A1", "H", 0)], "A1"), null,
+    "toa do hang bang 0 la HOP LE — chi thieu moi la khong");
+}
+
+console.log("✓ drawing standards: dimspace axis guard + area bounds (rong, don vi)");

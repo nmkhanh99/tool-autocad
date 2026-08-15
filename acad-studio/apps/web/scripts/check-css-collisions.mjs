@@ -183,6 +183,35 @@ assert.equal(
   `custom property va chạm: ${propClashes.join(", ")} — đổi tên phía legacy thành --legacy-*`,
 );
 
+/* ------------------------------------------------------------------ *
+ * Ngoặc phải cân
+ * ------------------------------------------------------------------ *
+ *
+ * Thiếu MỘT dấu `}` không làm hỏng build và không làm trắng trang: trình duyệt
+ * chỉ nuốt luôn khối kế tiếp vào khối đang mở. Lỗi có thật, vừa xảy ra: một
+ * script dọn CSS ăn mất dấu đóng của `@keyframes legacy-spin`, và cả khối
+ * `.standards-confirm-*` — vẫn đang dùng — bị hút vào trong keyframes. Mọi phép
+ * kiểm khác của file này quét VĂN BẢN nên không thấy gì cả.
+ *
+ * Đếm ngoặc là phép kiểm thô, nhưng nó bắt đúng loại hỏng mà một bản vá tay hay
+ * một script sinh ra — và nó không bao giờ báo sai. */
+for (const [label, source] of [["globals.css", legacy], ["design-system.css", design]]) {
+  /* Bỏ chú thích và chuỗi trước khi đếm: một dấu ngoặc trong `content: "}"`
+     hoặc trong lời giải thích không phải là ngoặc của cú pháp. */
+  const stripped = source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "''");
+  const open = (stripped.match(/\{/g) ?? []).length;
+  const close = (stripped.match(/\}/g) ?? []).length;
+  assert.equal(
+    open,
+    close,
+    `${label} lệch ngoặc: ${open} dấu mở, ${close} dấu đóng. Thiếu một dấu đóng `
+      + "thì khối kế tiếp bị hút vào khối đang mở — trang vẫn dựng, chỉ là sai.",
+  );
+}
+
 console.log(
   `✓ css collisions: 0 class + 0 rò rỉ sang legacy + 0 token va chạm ` +
     `(legacy ${legacyClasses.size} class đơn / ${legacyAll.size} tổng, design ${designClasses.size})`,

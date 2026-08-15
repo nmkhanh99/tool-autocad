@@ -994,6 +994,71 @@ Ba trường màu của `dimension` (`textColor`, `dimensionLineColor`,
 `extensionLineColor`) và `acadstd:set-color` của `/review` **vẫn chỉ nhận ACI** —
 DIMCLR\* là biến hệ thống theo chỉ số, và mở rộng chúng không nằm trong mục này.
 
+#### `dimensions` của lượt quét, và chốt của `DIMSPACE`
+
+`POST /scan` trả `dimensions[]` (`handle`, `layer`, `style`, `axis`, `row`,
+`measurement`, `text`) cùng cờ `evidence.standardsScan.dimensionsTruncated`. Đọc
+cờ từ **bằng chứng**, đừng cộng tay từ độ dài mảng: mảng đã lọc bỏ dòng thiếu
+handle nên nó nhỏ hơn số máy chủ thật sự thu được.
+
+**`row` và `measurement` có thể là `NaN`** — nghĩa là lượt quét không đọc được số
+đó. `parseStandardsScanTsv()` **cố tình không** quy về `0`: `0` là một toạ độ hàng
+hợp lệ, nên quy về nó là bịa ra một DIM nằm ở gốc toạ độ, rồi
+`analyzeDimensionRows()` dựng một phát hiện `dim-row` cho một cái không có thật —
+và phát hiện đó **bấm sửa được**. Qua JSON, `NaN` thành `null`; phía web đọc
+`null` lại thành `NaN`. Cả hai đầu phải giữ đúng quy ước này, nếu không màn hình
+cho chọn một DIM mà máy chủ sẽ từ chối.
+
+`POST /apply` với phát hiện `dimspace` đòi thêm `dimBaseHandle` trong body và
+chạy `dimspaceRejection()` **trước khi dispatch**. Bốn lý do từ chối, tất cả là
+400:
+
+| Mã | Khi nào |
+|---|---|
+| `dim_axis_mixed` | lô có phát hiện của **cả hai** trục |
+| `dim_base_unknown` | handle chuẩn không có trong phiên quét |
+| `dim_base_axis_unknown` | dòng quét của handle đó không có `axis` |
+| `dim_base_row_unknown` | `row` của nó là `NaN` |
+| `dim_base_axis_mismatch` | chuẩn khác trục với lô |
+
+Lý do: `acadstd:dimspace` nhận **đúng một** handle mốc rồi căn mọi handle còn lại
+theo nó, nên nó chỉ căn được các DIM **cùng trục** — và nó ghi MỘT PHA. Trộn trục
+hay lấy mốc sai trục vẫn chạy êm; AutoCAD không báo gì, các DIM chỉ nằm sai chỗ.
+So handle **sau khi chuẩn hoá hoa/thường**: `cleanHandles()` viết hoa yêu cầu còn
+parser giữ nguyên cách viết của bản vẽ.
+
+`POST /action` với `action: "dimspace"` trả **409 `dimspace_needs_scan`**. Đường
+đó nhận handle trần, không gắn với phiên quét nào, nên nó không có cách nào biết
+trục — kiểm nửa vời ở đó là tệ hơn không kiểm.
+
+#### `bounds` của ánh xạ: hai bộ lọc, hai nơi, hai thời điểm
+
+| Nhóm | Chạy ở đâu | Khi nào |
+|---|---|---|
+| `minX`/`minY`/`maxX`/`maxY` | trong AutoCAD (`acadstd:map-in-bounds-p`) | lúc quét |
+| `minArea`/`maxArea`/`areaUnit` | daemon (`filterObjectsByMappingBounds`) | sau lượt quét |
+
+Bốn quy ước đọc, phải giống nhau ở cả hai phía nếu không màn hình mô tả một bộ
+lọc khác với bộ lọc đang chạy:
+
+1. **Ba cách viết cho mỗi cạnh** — `minX`/`xMin`/`left`, và dạng mảng
+   `min[0]`/`max[1]`. `mappingBounds()` lấy khoá **đầu tiên có mặt** (không phải
+   khoá đầu tiên đọc ra số), rồi `?? min[0]` mới lùi về mảng khi giá trị đó là
+   `null`. Phía web có đúng một hàm tra theo thứ tự ấy: `rawRegionBounds()`.
+2. **Thiếu MỘT trong bốn cạnh là tắt lọc HOÀN TOÀN**, không phải lọc một phần —
+   `(not (and (numberp minx) …))` ngắn mạch. Lọc theo **tâm** đối tượng.
+3. **`null`, `""`, `"  "` đều là "không đặt"**, không phải `0`. `Number()` trần
+   biến cả ba thành `0`; đó là một số hữu hạn và không phân biệt được với số 0
+   người dùng thật sự đặt. Phía web có đúng một hàm đọc số (`num()`), phía daemon
+   là `finiteNumber()`.
+4. **`areaUnit` nhận cả `m2` lẫn `m²`** (và cm²/mm²), so sau khi `trim()` và hạ
+   thấp. Đơn vị khác rơi về đơn vị bản vẽ **trong im lặng**; quy đổi chỉ chạy khi
+   bản vẽ có `INSUNITS` hiểu được.
+
+`width`/`height`/`tolerancePercent`/`unit` trong `bounds` là **dữ liệu chết** —
+hồ sơ mặc định mang chúng ở ánh xạ `drawing-frame` nhưng không dòng mã nào đọc
+tới; việc so khung với khổ giấy lấy số từ `drawing.paper`.
+
 #### Không có đường xem trước ánh xạ
 
 `drawingStandards.ts` phát đúng bảy route: `GET/POST /profiles`,

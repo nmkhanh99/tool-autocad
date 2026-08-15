@@ -31,7 +31,20 @@ function record(value: unknown): JsonRecord {
 function str(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
+/** Đọc một số, hoặc `undefined` khi **không có số nào ở đó**.
+ *
+ * `Number()` trần biến `null`, `""`, `"  "`, `[]` và `false` thành `0` — một số
+ * hữu hạn, không phân biệt được với số 0 người dùng thật sự đặt. Trong đợt này
+ * riêng cái bẫy đó gây ra BA lỗi: `maxArea: ""` lọc sạch mọi đối tượng, một cạnh
+ * chỉ có dấu cách thành giới hạn 0, và `row: null` (chính là `NaN` của máy chủ
+ * sau khi qua JSON) thành một DIM nằm ở gốc toạ độ.
+ *
+ * Nên chỉ có MỘT hàm đọc số trong tệp này. Ba lần cùng một hình dạng nghĩa là
+ * chỗ hỏng không phải từng chỗ gọi. */
 function num(value: unknown): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== "number" && typeof value !== "string") return undefined;
+  if (typeof value === "string" && value.trim() === "") return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
@@ -71,7 +84,202 @@ export type MappingRule = {
   textPatterns: string[];
   entityTypes: string[];
   required: boolean;
+  /** Giới hạn nhận diện, giữ **nguyên dạng thô**.
+   *
+   * Không mô hình hoá thành các trường phẳng: daemon nhận `bounds` là một object
+   * JSON bất kỳ (`sanitizeJson`, không kiểm từng khoá), nên một hồ sơ có thể mang
+   * khoá mà giao diện chưa biết. Dựng lại từ hình dạng phẳng là **xoá** chúng —
+   * đúng lỗi đã xảy ra với 20 trường `dimension` và hai trường `drawing`.
+   * Các hàm `readRegionBounds`/`readAreaBounds`/`writeBounds` đọc và ghi có chọn
+   * lọc, phần còn lại đi qua nguyên vẹn. */
+  bounds?: JsonRecord;
 };
+
+/** Bốn số của **giới hạn vùng**, đọc từ mọi cách viết mà máy chủ chấp nhận.
+ *
+ * `mappingBounds()` của engine nhận ba tên cho mỗi cạnh (`minX`/`xMin`/`left`…)
+ * **và** dạng mảng `min[0]`/`max[1]`. Chỉ đọc `minX` là một hồ sơ viết theo cách
+ * khác sẽ hiện ra ô trống, rồi người dùng gõ đè lên và tưởng mình vừa đặt mới. */
+export function readRegionBounds(bounds: unknown): {
+  minX?: number; minY?: number; maxX?: number; maxY?: number;
+} {
+  const raw = rawRegionBounds(bounds);
+  return {
+    minX: num(raw.minX),
+    minY: num(raw.minY),
+    maxX: num(raw.maxX),
+    maxY: num(raw.maxY),
+  };
+}
+
+/** Cùng bốn cạnh, nhưng **chưa phân tích** — kèm tên khoá thật đã tra ra.
+ *
+ * Ô nhập phải hiển thị THỨ ĐANG LƯU chứ không phải thứ đã qua `Number()`: nếu
+ * cha trả về giá trị đã phân tích, thì lúc người dùng xoá `-1` để gõ lại, ký tự
+ * `-` đầu tiên phân tích ra `undefined`, giá trị ngoài thành rỗng, và ô tự xoá
+ * ngay trước phím kế — **không gõ được số âm** trừ khi dán.
+ *
+ * Trả cả `key` vì lỗi phải chỉ đúng khoá người dùng sẽ thấy trong hồ sơ: báo
+ * "minX" cho một hồ sơ viết `left` là chỉ sai chỗ. */
+export function rawRegionBounds(bounds: unknown): {
+  minX?: unknown; minY?: unknown; maxX?: unknown; maxY?: unknown;
+  keys: Partial<Record<"minX" | "minY" | "maxX" | "maxY", string>>;
+} {
+  const source = record(bounds);
+  const min = Array.isArray(source.min) ? source.min : [];
+  const max = Array.isArray(source.max) ? source.max : [];
+  const keys: Record<string, string> = {};
+  /* Cùng thứ tự tra của `mappingBounds()` bên engine, kể cả các góc tối của nó.
+     `firstValue()` lấy khoá ĐẦU TIÊN CÓ MẶT, không phải khoá đầu tiên đọc ra số:
+     `{minX: "abc", xMin: 5}` ở engine là **tắt lọc**, không phải dùng `5`. Rồi
+     `?? min[0]` mới lùi về dạng mảng khi giá trị vừa tra là `null`.
+     Một hàm tra DUY NHẤT cho cả hiển thị, phép đếm và phép kiểm: ba bản chép tay
+     sẽ lệch nhau, và bản kiểm lệch là một giới hạn hỏng lọt qua nút Lưu. */
+  const pick = (canonical: string, names: string[], fallback: unknown, fallbackKey: string) => {
+    let chosen: unknown;
+    let chosenKey = "";
+    for (const name of names) {
+      if (source[name] === undefined) continue;
+      chosen = source[name];
+      chosenKey = name;
+      break;
+    }
+    if (chosen === null || chosen === undefined) {
+      if (fallback !== undefined) {
+        keys[canonical] = fallbackKey;
+        return fallback;
+      }
+    }
+    if (chosenKey) keys[canonical] = chosenKey;
+    return chosen;
+  };
+  return {
+    minX: pick("minX", ["minX", "xMin", "left"], min[0], "min[0]"),
+    minY: pick("minY", ["minY", "yMin", "bottom"], min[1], "min[1]"),
+    maxX: pick("maxX", ["maxX", "xMax", "right"], max[0], "max[0]"),
+    maxY: pick("maxY", ["maxY", "yMax", "top"], max[1], "max[1]"),
+    keys,
+  };
+}
+
+/** Đơn vị diện tích daemon THẬT SỰ quy đổi. Mọi giá trị khác = đơn vị bản vẽ. */
+export const AREA_UNITS: readonly { value: string; label: string }[] = [
+  { value: "drawing-unit2", label: "đơn vị bản vẽ²" },
+  { value: "m2", label: "m²" },
+  { value: "cm2", label: "cm²" },
+  { value: "mm2", label: "mm²" },
+];
+
+/** Cách viết khác mà daemon cũng quy đổi, quy về đúng một giá trị của ô chọn.
+ *
+ * `filterObjectsByMappingBounds()` nhận CẢ `m²` lẫn `m2` (và hai đơn vị kia).
+ * Chỉ nhận dạng ASCII là một hồ sơ viết `m²` hiện lên ô chọn thành "đơn vị bản
+ * vẽ²", trong khi máy chủ vẫn đang quy đổi theo mét — người dùng chỉnh ngưỡng
+ * trên một tỉ lệ khác hẳn tỉ lệ đang chạy, và màn hình không hé một lời. */
+const AREA_UNIT_ALIASES: Record<string, string> = {
+  "m²": "m2", "cm²": "cm2", "mm²": "mm2",
+};
+
+/** Hai số và đơn vị của **giới hạn diện tích**. */
+export function readAreaBounds(bounds: unknown): {
+  minArea?: number; maxArea?: number; areaUnit: string;
+} {
+  const source = record(bounds);
+  const raw = String(source.areaUnit ?? "").trim().toLowerCase();
+  const unit = AREA_UNIT_ALIASES[raw] ?? raw;
+  return {
+    /* Cùng lý do như giới hạn vùng: daemon làm `Number(bounds.minArea)`, nên
+       chuỗi số vẫn là một bộ lọc đang chạy. */
+    minArea: num(source.minArea),
+    maxArea: num(source.maxArea),
+    /* Daemon so bằng chuỗi đã hạ thấp và chỉ hiểu bốn dạng; thứ khác rơi về đơn
+       vị bản vẽ. Chuẩn hoá ở đây để ô chọn không bao giờ hiện một giá trị mà
+       máy chủ sẽ lặng lẽ bỏ qua. */
+    areaUnit: AREA_UNITS.some((item) => item.value === unit) ? unit : "drawing-unit2",
+  };
+}
+
+/** Ô nhập có phải nạp lại từ giá trị ngoài không.
+ *
+ * Ô giữ NGUYÊN VĂN thứ đang gõ, nên nó phải phân biệt "giá trị thật đổi" với
+ * "văn bản của tôi vừa được cha phân tích rồi trả về". Với ô SỐ, `"2."` và `"2"`
+ * là cùng một giá trị — nạp lại là xoá dấu chấm ngay khi vừa gõ, và không cách
+ * nào nhập `2.5`. Với ô CHỮ thì không: `"2."` và `"2"` là hai chuỗi khác nhau,
+ * và bỏ qua chênh lệch đó là giữ nguyên văn bản CŨ sau khi đã đổi hồ sơ — rồi
+ * một lần sửa sẽ ghi giá trị của hồ sơ cũ sang hồ sơ mới.
+ *
+ * Tách khỏi component vì đây là chỗ đã hỏng hai lần; trong component thì không
+ * khoá được bằng test.
+ */
+export function shouldSyncField(text: string, shown: string, numeric: boolean): boolean {
+  if (shown === text) return false;
+  if (!numeric) return true;
+  const typed = Number(text);
+  const outer = Number(shown);
+  const same = text.trim() !== "" && shown !== ""
+    && Number.isFinite(typed) && Number.isFinite(outer) && typed === outer;
+  return !same;
+}
+
+/** Khoá `bounds` mà **không ai đọc**, theo đúng thứ tự xuất hiện.
+ *
+ * `width`/`height`/`tolerancePercent`/`unit` có trong hồ sơ mặc định ở ánh xạ
+ * `drawing-frame`, nên gần như hồ sơ nào cũng mang chúng — nhưng không một dòng
+ * mã nào đọc tới. Việc so khung với khổ giấy lấy số từ `drawing.paper`.
+ */
+const DEAD_BOUNDS_KEYS = ["width", "height", "tolerancePercent", "unit"];
+export function deadBoundsKeys(bounds: unknown): string[] {
+  const source = record(bounds);
+  return DEAD_BOUNDS_KEYS.filter((key) => source[key] !== undefined);
+}
+
+/** Ghi đè một nhóm khoá, GIỮ mọi khoá khác.
+ *
+ * `undefined` = xoá khoá đó. Ghi khoá chuẩn thì cũng dọn luôn các tên đồng nghĩa
+ * và dạng mảng: để lại chúng là hồ sơ mang hai nguồn sự thật cho cùng một cạnh,
+ * và người sửa sau sẽ không biết cái nào đang có tác dụng.
+ */
+export function writeBounds(
+  bounds: unknown,
+  patch: Record<string, number | string | undefined>,
+): JsonRecord | undefined {
+  const next: JsonRecord = { ...record(bounds) };
+  const ALIASES: Record<string, string[]> = {
+    minX: ["xMin", "left"], minY: ["yMin", "bottom"],
+    maxX: ["xMax", "right"], maxY: ["yMax", "top"],
+  };
+  for (const [key, value] of Object.entries(patch)) {
+    /* Chuỗi TOÀN KHOẢNG TRẮNG bị xoá như chuỗi rỗng. Giữ lại là ghi xuống hồ sơ
+       một giá trị mà chính giao diện đọc là "không đặt" — rồi `Number("  ")` cho
+       ra `0`, và cạnh đó thành một giới hạn bằng 0 đang chạy thật trong AutoCAD.
+       Không ghi thứ mình đọc ngược với người sẽ dùng nó. */
+    if (value === undefined || (typeof value === "string" && value.trim() === "")) {
+      delete next[key];
+    } else next[key] = value;
+    for (const alias of ALIASES[key] ?? []) delete next[alias];
+  }
+  /* Chạm vào MỘT cạnh thì phải chuyển NỐT ba cạnh kia sang khoá chuẩn trước khi
+     bỏ dạng mảng. Xoá `min`/`max` mà không chép sang là còn lại một hình chữ
+     nhật THIẾU SỐ — và thiếu một số thì `acadstd:map-in-bounds-p` bỏ lọc HOÀN
+     TOÀN. Người dùng sửa một cạnh và vô tình tắt cả bộ lọc, không một lời báo. */
+  if (Object.keys(patch).some((key) => key in ALIASES)) {
+    const before = readRegionBounds(bounds);
+    for (const key of ["minX", "minY", "maxX", "maxY"] as const) {
+      if (key in patch) continue;
+      /* `== null`, KHÔNG `=== undefined`. Một hồ sơ viết `{minX: null, min: [1,2]}`
+         có `minX` đang thật sự bằng `1` — engine làm `firstValue(...) ?? min[0]`,
+         nên `null` rơi xuống dạng mảng. Bỏ qua vì "khoá đã có mặt" là để lại
+         `minX: null` sau khi xoá mảng, tức cạnh đó biến mất và giới hạn vùng
+         TẮT HOÀN TOÀN — đúng cái mà cả đoạn migrate này sinh ra để tránh. */
+      if (next[key] == null && before[key] !== undefined) next[key] = before[key];
+    }
+    delete next.min;
+    delete next.max;
+  }
+  return Object.keys(next).length ? next : undefined;
+}
+
+
 
 /** Ba giá trị bề dày nét mang ý nghĩa thay vì con số. Lưu dạng **chuỗi**.
  *
@@ -258,6 +466,13 @@ export function normalizeProfile(value: unknown): StandardsProfile {
         textPatterns: stringList(mapping.textPatterns),
         entityTypes: stringList(mapping.entityTypes),
         required: mapping.required === true,
+        /* Giữ NGUYÊN DẠNG THÔ. Bước chuẩn hoá này từng bỏ hẳn `bounds`, và
+           `applyProfileEdits` phải cứu nó bằng cách vá lên bản ghi gốc. Nay nó
+           sửa được nên phải đi vào bản nháp — nhưng vẫn ở dạng thô, để khoá nào
+           giao diện chưa biết cũng không bị bước này ăn mất. */
+        ...(record(item).bounds === undefined
+          ? {}
+          : { bounds: record(record(item).bounds) }),
       };
     }),
   };
@@ -328,7 +543,7 @@ export function applyProfileEdits(profile: StandardsProfile): JsonRecord {
           .map(record)
           .find((item) => str(item.id) === mapping.sourceId) ?? {}
         : {};
-      return {
+      const merged: JsonRecord = {
         ...original,
         id: mapping.id,
         label: mapping.label,
@@ -338,7 +553,15 @@ export function applyProfileEdits(profile: StandardsProfile): JsonRecord {
         textPatterns: mapping.textPatterns,
         entityTypes: mapping.entityTypes,
         required: mapping.required,
+        /* `bounds` nay SỬA ĐƯỢC nên phải ghi từ bản nháp, không để `...original`
+           quyết. Nhưng `undefined` là "không có giới hạn nào" chứ không phải
+           "giữ nguyên bản cũ" — nên phải XOÁ khoá khỏi bản ghi, chứ gán
+           `undefined` thì `JSON.stringify` bỏ trường và máy chủ giữ giá trị cũ,
+           tức người dùng xoá hết ô mà giới hạn vẫn còn nguyên. */
+        ...(mapping.bounds === undefined ? {} : { bounds: mapping.bounds }),
       };
+      if (mapping.bounds === undefined) delete (merged as JsonRecord).bounds;
+      return merged;
     }),
   };
 }
@@ -497,6 +720,53 @@ export function mappingRowErrors(mappings: readonly MappingRule[]): (string | nu
       return `Nhãn dài quá ${MAX_LENGTHS.mappingLabel} ký tự.`;
     }
     if (!mapping.kind.trim()) return "Loại không được để trống.";
+
+    /* Giới hạn phải là SỐ. Daemon nhận `bounds` là JSON bất kỳ nên `"abc"` lưu
+       êm, rồi `finiteNumber()` trả `undefined` và bộ lọc **tắt trong im lặng** —
+       người dùng thấy một giới hạn trên màn hình mà lượt quét không hề áp. Chặn
+       ở nút Lưu là chỗ duy nhất còn kịp nói. */
+    /* Kiểm trên giá trị ĐÃ TRA, không trên sáu khoá chuẩn ở tầng ngoài: hồ sơ
+       viết `xMin`/`left` hay dạng mảng `min: [ ]` là chuyện engine chấp nhận, nên
+       một giá trị hỏng ở đó cũng tắt lọc y hệt — mà phép kiểm cũ không nhìn tới
+       và nút Lưu cho qua. */
+    const region = rawRegionBounds(mapping.bounds);
+    const areaSource = record(mapping.bounds);
+    const badBound = ([
+      ["minX", region.minX], ["minY", region.minY],
+      ["maxX", region.maxX], ["maxY", region.maxY],
+      ["minArea", areaSource.minArea], ["maxArea", areaSource.maxArea],
+    ] as const).find(([, value]) => {
+      if (value === undefined || value === null) return false;
+      if (typeof value === "string" && value.trim() === "") return false;
+      if (typeof value !== "number" && typeof value !== "string") return true;
+      return !Number.isFinite(Number(value));
+    });
+    if (badBound) {
+      /* Gọi đúng tên khoá trong hồ sơ. Báo "minX" cho một hồ sơ viết `left` là
+         chỉ người dùng đi tìm một khoá không tồn tại. */
+      const shown = region.keys[badBound[0] as "minX" | "minY" | "maxX" | "maxY"]
+        ?? badBound[0];
+      return `Giới hạn “${shown}” phải là một số — giá trị hiện tại sẽ làm bộ `
+        + "lọc bị bỏ qua mà không báo gì.";
+    }
+
+    /* Cận dưới lớn hơn cận trên là một khoảng RỖNG. `acadstd:map-in-bounds-p`
+       đòi cả hai bất đẳng thức, phép lọc diện tích cũng vậy — nên không đối
+       tượng nào lọt qua được, và bảng bóc tách trống trơn mà không một dòng nào
+       nói vì sao. Đây không phải cấu hình chặt; đây là cấu hình không dùng được. */
+    const parsed = readRegionBounds(mapping.bounds);
+    const area = readAreaBounds(mapping.bounds);
+    const inverted = ([
+      ["X", parsed.minX, parsed.maxX, region.keys.minX ?? "minX", region.keys.maxX ?? "maxX"],
+      ["Y", parsed.minY, parsed.maxY, region.keys.minY ?? "minY", region.keys.maxY ?? "maxY"],
+      ["diện tích", area.minArea, area.maxArea, "minArea", "maxArea"],
+    ] as const).find(([, low, high]) =>
+      low !== undefined && high !== undefined && low > high);
+    if (inverted) {
+      const [axis, low, high, lowKey, highKey] = inverted;
+      return `Giới hạn ${axis} ngược nhau: “${lowKey}” (${low}) lớn hơn “${highKey}” `
+        + `(${high}), nên quy tắc này sẽ không bắt được đối tượng nào.`;
+    }
     /* Ô Loại vừa được mở thành gõ tự do ở lượt này, nên giới hạn 64 ký tự của
        daemon trở nên chạm tới được — dán một đoạn dài là ăn 400. */
     if (mapping.kind.trim().length > MAX_LENGTHS.mappingKind) {
@@ -570,6 +840,11 @@ export type Scan = {
    * sang đối tượng khác trong khi chốt vẫn hợp lệ, và người dùng chọn nhầm thứ họ
    * không nhìn thấy. */
   selectGuard: { instance: string; revision: number } | null;
+  /** Dimension đọc từ lượt quét. Máy chủ vẫn trả về, `/review` từng vứt đi. */
+  dimensions: ScanDimension[];
+  /** Danh sách dimension bị cắt ở `MAX_SCAN_ITEMS`. Một bảng cụt mà trông như đủ
+   * là cách tệ nhất để sai — nhất là khi người dùng chọn DIM chuẩn từ nó. */
+  dimensionsTruncated: boolean;
   /** Không gian AutoCAD đang hiện hành LÚC QUÉT (Model, hoặc tên layout).
    *
    * Lượt quét dùng `ssget "_X"` nên nó gom đối tượng của **mọi** không gian,
@@ -673,13 +948,10 @@ const FIXABLE_ACTIONS: readonly string[] = [
  * bỏ qua** nó và trả về `skippedIssueIds` — người dùng tưởng đã sửa xong.
  */
 export function unsupportedFixReason(issue: Issue): string {
-  if (issue.action === "dimspace") {
-    /* `dimspace` có trong danh sách máy chủ chạy được, nhưng nó đòi
-       `dimBaseHandle` — một DIM làm chuẩn để những cái khác căn theo — mà màn
-       hình chưa có chỗ hỏi. Thiếu là 400. */
-    return "Căn hàng dimension cần chọn một DIM làm chuẩn — màn hình này chưa "
-      + "hỏi được, dùng màn hình cũ.";
-  }
+  /* `dimspace` KHÔNG còn bị chặn ở đây (2026-08-15): bảng dimension đã có chỗ
+     chọn DIM chuẩn, nên `dimBaseHandle` hỏi được. Việc "chưa chọn chuẩn" là một
+     trạng thái nhất thời của màn hình, không phải năng lực thiếu — nó thuộc về
+     `applyBlockedReason`, chỗ nói vì sao nút Sửa đang khoá. */
   if (!FIXABLE_ACTIONS.includes(issue.action)) {
     return "Mục này chỉ để xem — máy chủ chưa có cách sửa tự động.";
   }
@@ -710,6 +982,43 @@ export function normalizeScan(value: unknown, fallbackTarget: string): Scan {
        khối `document` của `drawing-info` không hề có trường `space` (đã đối chiếu
        nguồn plugin), nên bản trước luôn trả rỗng và câu gợi ý không bao giờ hiện. */
     scannedSpace: str(record(record(record(body).current).settings).CTAB),
+    dimensions: (Array.isArray(body.dimensions) ? body.dimensions : [])
+      .map(normalizeScanDimension)
+      .filter((dimension) => dimension.handle),
+    /* Cùng nguồn với `objectsTruncated`: máy chủ đã phát sẵn cờ này ngay cạnh
+       nó. Cộng tay từ độ dài mảng cho ra một đại lượng khác — mảng đã lọc bỏ
+       dòng thiếu handle, nên nó nhỏ hơn số máy chủ thật sự thu được. */
+    dimensionsTruncated:
+      record(record(body.evidence).standardsScan).dimensionsTruncated === true,
+  };
+}
+
+/** Một dòng dimension của lượt quét. */
+export type ScanDimension = {
+  handle: string;
+  layer: string;
+  style: string;
+  /** `H` hoặc `V` — trục mà chương trình LISP suy ra từ góc xoay. */
+  axis: string;
+  /** Toạ độ hàng: X với DIM dọc, Y với DIM ngang. Đây là thứ `DIMSPACE` căn. */
+  row: number;
+  measurement: number;
+  text: string;
+};
+
+function normalizeScanDimension(value: unknown): ScanDimension {
+  const source = record(value);
+  return {
+    handle: str(source.handle),
+    layer: str(source.layer),
+    style: str(source.style),
+    axis: str(source.axis),
+    /* `num()` gọi `Number()` rồi kiểm hữu hạn; `row` thiếu thì để `NaN` lộ ra
+       thay vì hoá `0` — `0` là một toạ độ hàng HỢP LỆ, nên quy về nó là bịa ra
+       một DIM nằm đúng gốc toạ độ. */
+    row: num(source.row) ?? Number.NaN,
+    measurement: num(source.measurement) ?? Number.NaN,
+    text: str(source.text),
   };
 }
 
@@ -953,6 +1262,87 @@ export function profileDriftNote(
 }
 
 /** Vì sao chưa áp dụng được tập đã chọn — hoặc rỗng nếu áp dụng được. */
+/** Trục mà một phát hiện `dimspace` sẽ căn — `H`, `V`, hoặc rỗng.
+ *
+ * Máy chủ dựng MỘT phát hiện cho mỗi trục (`dim-row-h`, `dim-row-v`) và ghi trục
+ * ngay trong `suggestedAction`. */
+export function issueAxis(issue: Issue): string {
+  return String(record(issue.suggestedAction).axis ?? "").trim().toUpperCase();
+}
+
+/** Vì sao lô căn hàng dimension chưa gửi được — hoặc rỗng nếu gửi được.
+ *
+ * `DIMSPACE` căn các DIM **cùng một trục** theo một DIM mốc. Máy chủ gộp MỌI
+ * phát hiện `dimspace` đã chọn vào **một** lệnh với **một** handle chuẩn, nên:
+ *
+ * - Chọn cả hai trục cùng lúc là ném DIM dọc vào một lệnh lấy mốc là DIM ngang.
+ * - Chọn chuẩn ở trục này rồi tích phát hiện của trục kia cũng vậy.
+ *
+ * Cả hai đều là một lượt ghi MỘT PHA không hoàn tác được từ app, và cả hai đều
+ * KHÔNG tự lộ ra: lệnh chạy xong, AutoCAD không báo lỗi, các DIM chỉ đơn giản
+ * nằm sai chỗ. Chặn ở đây là chỗ cuối còn nói được trước khi bấm.
+ */
+export function dimspaceBlockedReason(input: {
+  selected: readonly Issue[];
+  dimensions: readonly ScanDimension[];
+  baseHandle: string;
+}): string {
+  const batch = input.selected.filter((issue) => issue.action === "dimspace");
+  if (!batch.length) return "";
+
+  const axes = [...new Set(batch.map(issueAxis).filter(Boolean))];
+  if (axes.length > 1) {
+    return "Lô đang có DIM lệch hàng ở CẢ hai trục, mà lệnh căn hàng chỉ căn "
+      + "được một trục theo một DIM chuẩn. Bỏ tích một trục, sửa xong rồi làm trục kia.";
+  }
+  if (!input.baseHandle) {
+    return "Trong lô có mục căn hàng dimension. Chọn một DIM làm chuẩn ở bảng "
+      + "dimension bên dưới rồi sửa.";
+  }
+  const wanted = input.baseHandle.trim().toUpperCase();
+  const base = input.dimensions.find((row) => row.handle.trim().toUpperCase() === wanted);
+  /* Chuẩn không có trong lượt quét này: bảng đã bị cắt, hoặc handle còn sót từ
+     một lượt trước. Gửi đi là máy chủ tra không ra rồi hỏng giữa chừng — mà lúc
+     đó vài lệnh khác trong lô đã ghi xong. */
+  if (!base) {
+    return "DIM chuẩn đang chọn không có trong lượt quét này. Chọn lại một DIM "
+      + "trong bảng bên dưới.";
+  }
+  /* KHÔNG BIẾT thì TỪ CHỐI. Một dòng quét có `axis` rỗng làm phép so trục ở dưới
+     bị bỏ qua hoàn toàn — chốt duy nhất còn lại tự tắt đúng lúc dữ liệu đáng ngờ
+     nhất. Máy chủ cũng từ chối; ở đây nói trước để không phải bấm rồi mới biết. */
+  const baseAxis = base.axis.trim().toUpperCase();
+  if (!baseAxis) {
+    return "Lượt quét không đọc được trục của DIM chuẩn đang chọn. Chọn một DIM "
+      + "khác, hoặc quét lại sau khi build lại plugin AcadBridge.";
+  }
+  /* `DIMSPACE` căn THEO toạ độ hàng của mốc. Không có nó thì mốc không định nghĩa
+     được — mà lệnh vẫn chạy. Bảng hiện “—” ở cột Hàng cho đúng những dòng này. */
+  if (!Number.isFinite(base.row)) {
+    return "DIM chuẩn đang chọn không có toạ độ hàng đọc được (cột Hàng hiện “—”). "
+      + "Chọn một DIM khác làm chuẩn.";
+  }
+  if (axes.length === 1 && baseAxis !== axes[0]) {
+    return `DIM chuẩn đang chọn thuộc trục ${baseAxis === "V" ? "dọc" : "ngang"}`
+      + `, còn lô cần căn trục ${axes[0] === "V" ? "dọc" : "ngang"}. `
+      + "Chọn một DIM chuẩn cùng trục với lô.";
+  }
+  /* Mốc không tự căn theo chính nó. Máy chủ lọc `baseHandle` ra khỏi danh sách
+     cần dời, nên chọn đúng cái DIM DUY NHẤT của lô làm mốc là còn lại rỗng — và
+     người dùng ăn 400 sau khi đã bấm một nút ghi. Không tự chọn hộ một mốc khác:
+     mốc quyết định các DIM khác dời đi đâu, và đó là lượt ghi không hoàn tác
+     được — nút chọn nằm TRONG bảng chính là để người dùng tự quyết. */
+  const movable = new Set(batch
+    .flatMap((issue) => issue.handles)
+    .map((handle) => handle.trim().toUpperCase()));
+  movable.delete(wanted);
+  if (!movable.size) {
+    return "DIM chuẩn đang chọn cũng là DIM duy nhất cần căn trong lô, nên không "
+      + "còn gì để dời. Chọn một DIM đã đúng hàng làm chuẩn, hoặc tích thêm phát hiện.";
+  }
+  return "";
+}
+
 export function applyBlockedReason(input: {
   scan: Scan | null;
   /** Bản vẽ AutoCAD ĐANG hoạt động, **dạng `targetOf()`**. */
@@ -972,6 +1362,9 @@ export function applyBlockedReason(input: {
    * khớp, và nút sửa không bao giờ bật. */
   target: string;
   selected: number;
+  /** Vì sao lô căn hàng dimension chưa gửi được — từ `dimspaceBlockedReason()`.
+   * Rỗng = lô không có `dimspace`, hoặc đã đủ điều kiện. */
+  dimNote: string;
   driftNote: string;
   drawingChanged: boolean;
   busy: boolean;
@@ -1001,6 +1394,7 @@ export function applyBlockedReason(input: {
     return "AutoCAD đang mở một bản vẽ khác. Chuyển về đúng bản vẽ đã quét, "
       + "hoặc quét lại bản vẽ đang mở.";
   }
+  if (input.dimNote) return input.dimNote;
   if (input.driftNote) return input.driftNote;
   if (input.drawingChanged) {
     return "Bản vẽ đã thay đổi sau lượt quét này. Quét lại trước khi sửa.";

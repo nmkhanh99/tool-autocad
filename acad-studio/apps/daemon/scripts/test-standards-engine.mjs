@@ -288,3 +288,78 @@ assert.deepEqual(
 );
 
 console.log("✓ standards engine: builder, parser, DIM rows and audit");
+
+/* ------------------------------------------------------------------ *
+ * Gioi han vung: chuoi TOAN KHOANG TRANG khong duoc thanh 0
+ * ------------------------------------------------------------------ */
+{
+  /* `Number("  ")` la `0` — mot so HUU HAN. Nen mot canh chi chua dau cach se
+     thanh gioi han bang 0 trong chuong trinh LISP, tuc doi han tap doi tuong
+     luot quet nhan vao, trong khi o nhap trong y het o trong. */
+  const boundsLine = (bounds) => {
+    const program = buildStandardsScanLisp(
+      {
+        id: "p", revision: "r", version: 1,
+        drawing: {}, layers: [], dimension: {},
+        mappings: [{
+          id: "m1", label: "m1", kind: "generic",
+          layerPatterns: ["A-*"], blockPatterns: [], textPatterns: [], entityTypes: [],
+          required: false, bounds,
+        }],
+      },
+      "/tmp/out.tsv",
+    );
+    const line = program.split("\n").find((row) => row.includes('"m1"'));
+    assert.ok(line, "khong tim thay dong anh xa trong chuong trinh");
+    // Bon so cuoi dong la minX minY maxX maxY.
+    return line.trim().replace(/\)$/, "").split(/\s+/).slice(-4).join(" ");
+  };
+
+  assert.equal(
+    boundsLine({ minX: 0, minY: 0, maxX: 10, maxY: 10 }),
+    "0 0 10 10",
+    "gioi han that phai di nguyen vao chuong trinh",
+  );
+  assert.equal(
+    boundsLine({ minX: "  ", minY: 0, maxX: 10, maxY: 10 }),
+    "nil 0 10 10",
+    "canh toan khoang trang phai la nil, KHONG phai 0",
+  );
+  assert.equal(
+    boundsLine({ minX: "", minY: 0, maxX: 10, maxY: 10 }),
+    "nil 0 10 10",
+    "chuoi rong cung vay",
+  );
+}
+
+console.log("✓ standards engine: khoang trang khong phai so 0");
+
+/* ------------------------------------------------------------------ *
+ * DIM thieu toa do: giu NaN, dung bia so 0
+ * ------------------------------------------------------------------ */
+{
+  /* `0` la mot toa do hang HOP LE, nen quy thieu-truong ve `0` la bia ra mot DIM
+     nam dung goc toa do. `analyzeDimensionRows()` roi thay no lech hang va dung
+     mot phat hien `dim-row` cho mot cai KHONG CO THAT — ma nay phat hien do bam
+     SUA duoc: DIMSPACE se doi cac DIM that theo mot con so bia. */
+  const parsed = parseStandardsScanTsv([
+    "DIM\tA1\tDIM-L\tStd\tH\t100\t0\t2500\t",
+    "DIM\tB2\tDIM-L\tStd\tH\t\t0\t\t",
+  ].join("\n"));
+  assert.equal(parsed.dimensions.length, 2);
+  assert.equal(parsed.dimensions[0].row, 100);
+  assert.ok(Number.isNaN(parsed.dimensions[1].row), "thieu toa do hang phai la NaN");
+  assert.ok(Number.isNaN(parsed.dimensions[1].measurement), "thieu so do phai la NaN");
+
+  /* Bo loc `Number.isFinite(dimension.row)` trong `analyzeDimensionRows()` vien
+     dung tu dau — no chi chua bao gio chay, vi toi day khong con `NaN` nao. */
+  const analyses = analyzeDimensionRows(parsed.dimensions, 100, 1);
+  for (const analysis of analyses) {
+    for (const candidate of analysis.candidates) {
+      assert.notEqual(candidate.handle, "B2", "DIM khong doc duoc hang khong duoc vao phat hien");
+    }
+    assert.notEqual(analysis.anchor.handle, "B2", "va cang khong duoc lam moc");
+  }
+}
+
+console.log("✓ standards engine: DIM thieu toa do khong bi bia thanh 0");

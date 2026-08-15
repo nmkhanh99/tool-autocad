@@ -12,7 +12,6 @@ import { useAcadEvents } from "../features/acad-connection/events";
 import { newMessageId, patchById } from "../features/assistant/messages";
 import { fetchDocs } from "../lib/daemon/docs";
 import { DAEMON_BASE } from "../lib/daemon/endpoints";
-import DrawingStandardsPanel from "./DrawingStandardsPanel";
 import BlockLibraryPanel from "./BlockLibraryPanel";
 import LispLibraryPanel from "./LispLibraryPanel";
 import DocumentReviewPanel, { type ReviewWorkspaceView } from "./DocumentReviewPanel";
@@ -179,9 +178,6 @@ export default function Page() {
   const [docList, setDocList] = useState<{ title: string; file: string; active: boolean }[] | null>(null);
   const [docsAlive, setDocsAlive] = useState<boolean | null>(null);
   const [acadLive, setAcadLive] = useState<{ activeDoc: string; last: string } | null>(null);
-  const [standardsOpen, setStandardsOpen] = useState(false);
-  const [standardsTarget, setStandardsTarget] = useState("");
-  const [standardsRefreshToken, setStandardsRefreshToken] = useState(0);
   const [blockLibraryOpen, setBlockLibraryOpen] = useState(false);
   const [lispLibraryOpen, setLispLibraryOpen] = useState(false);
   const [lispLibraryRefreshToken, setLispLibraryRefreshToken] = useState(0);
@@ -282,11 +278,6 @@ export default function Page() {
     if (event.type.startsWith("doc")) {
       loadDocs();
       loadDrawDocs();
-      setStandardsTarget(event.activeDoc);
-      setStandardsRefreshToken((token) => token + 1);
-    }
-    if (event.type === "drawingModified" || event.type === "pluginLoaded") {
-      setStandardsRefreshToken((token) => token + 1);
     }
     if (event.type === "drawingModified" && autoBomRef.current) refreshBom();   // BOM tự cập nhật khi vẽ
   });
@@ -1259,12 +1250,18 @@ export default function Page() {
             title="Đọc toàn bộ thông tin của bản vẽ đang active trong AutoCAD">
             ▦ Hồ sơ bản vẽ
           </a>
-          <button className="pillbtn" onClick={() => {
-            setStandardsTarget(drawTarget);
-            setStandardsOpen(true);
-          }} title="Cấu hình, quét và điều chỉnh bản vẽ theo mẫu quy chuẩn">
-            ✓ Chuẩn hóa
-          </button>
+          {/* Panel "Chuẩn hóa" đã xoá. Nó gộp HAI việc khác hẳn nhau vào một hộp
+              thoại — soạn hồ sơ quy tắc (không chạm bản vẽ) và quét rồi sửa (ghi
+              MỘT PHA, không hoàn tác được) — nên bản mới tách làm hai route. Dẫn
+              đi thay vì mở lại một bản sao; xem mục Hồ sơ bản vẽ ngay trên. */}
+          <a className="pillbtn" href="/standards/"
+            title="Soạn hồ sơ quy chuẩn: layer, ánh xạ đối tượng, kích thước">
+            ✓ Hồ sơ quy chuẩn
+          </a>
+          <a className="pillbtn" href="/review/"
+            title="Quét bản vẽ theo hồ sơ rồi sửa các phát hiện đã chọn">
+            ◎ Kiểm tra bản vẽ
+          </a>
           <button className="pillbtn" onClick={() => setBlockLibraryOpen(true)}
             title="Quản lý, tạo, chèn và đồng bộ block với AutoCAD">
             ◫ Thư viện block
@@ -1631,15 +1628,6 @@ export default function Page() {
           </div>
         </div>
       )}
-
-      <DrawingStandardsPanel
-        open={standardsOpen}
-        daemon={DAEMON}
-        initialTarget={standardsTarget || drawTarget}
-        refreshToken={standardsRefreshToken}
-        onClose={() => setStandardsOpen(false)}
-        onOpenAutoCAD={() => openAutoCAD(undefined, { newFile: true })}
-      />
 
       <BlockLibraryPanel
         open={blockLibraryOpen}

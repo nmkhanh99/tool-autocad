@@ -40,6 +40,8 @@ import { DAEMON_BASE, endpoints } from "../../../lib/daemon/endpoints";
 import { DaemonError, daemonFailureText, daemonRecord } from "../../../lib/daemon/client";
 import {
   applyBlockedReason,
+  dimspaceBlockedReason,
+  issueAxis,
   applySummary,
   filterIssues,
   normalizeProfile,
@@ -58,6 +60,7 @@ import {
   type StandardsProfile,
 } from "../../../features/standards/model";
 import { RecognizedObjects } from "../../../features/standards/RecognizedObjects";
+import { DimensionTable } from "../../../features/standards/DimensionTable";
 
 const SEVERITIES: readonly (Severity | "all")[] = ["all", "error", "warning", "info"];
 
@@ -111,6 +114,9 @@ export default function ReviewPage() {
   const [pickOp, setPickOp] = useState<{ op: StagedOp; count: number; label: string } | null>(null);
   const [pickBusy, setPickBusy] = useState(false);
   const [pickError, setPickError] = useState("");
+  /* DIM chuẩn cho lệnh căn hàng. Thuộc về LƯỢT QUÉT — dimension của lượt khác là
+     handle khác — nên phải xoá khi lượt quét đổi. */
+  const [dimBaseHandle, setDimBaseHandle] = useState("");
   /* Gương của `pickOp` cho hiệu ứng ở trên. Đưa `pickOp` vào deps là hiệu ứng
      chạy lại ngay khi vừa đặt nó, và `pickScanId` lúc đó đã bằng `scanId` hiện
      tại nên không huỷ nhầm — nhưng phụ thuộc thừa vào một giá trị đổi liên tục
@@ -384,6 +390,11 @@ export default function ReviewPage() {
          Giữ lại là bảng chi tiết của lượt MỚI hiện một lỗi do lượt TRƯỚC sinh ra. */
       setPickError("");
     }
+    if (scanIdRef.current !== id) {
+      /* Dimension của lượt quét khác là handle khác. Giữ lại là gửi một handle
+         thuộc lượt cũ và máy chủ từ chối — hoặc tệ hơn, trúng một DIM khác. */
+      setDimBaseHandle("");
+    }
     scanIdRef.current = id;
   }, [scan?.scanId]);
 
@@ -416,10 +427,23 @@ export default function ReviewPage() {
   const scanBlocked = scanBlockedReason({
     target, activeTarget: activeFile, profileId, docsAlive, busy: scanBusy,
   });
+  /* Lô có mục căn hàng thì phải có DIM chuẩn, và chuẩn phải CÙNG TRỤC với lô.
+     Thiếu chuẩn là máy chủ trả 400; sai trục thì tệ hơn — lệnh chạy êm và các
+     DIM nằm sai chỗ. Cả hai chỉ lộ ra sau một nút ghi KHÔNG hoàn tác được. */
+  const dimAxes = [...new Set(pickedIssues
+    .filter((issue) => issue.action === "dimspace")
+    .map(issueAxis)
+    .filter(Boolean))];
+  const dimNote = dimspaceBlockedReason({
+    selected: pickedIssues,
+    dimensions: scan?.dimensions ?? [],
+    baseHandle: dimBaseHandle,
+  });
   const applyBlocked = applyBlockedReason({
     scan, target: compareTarget, activeTarget: activeCompare,
     activeInstance: (docs.find((doc) => doc.active)?.instance || "").trim(),
     selected: picked.size,
+    dimNote,
     driftNote, drawingChanged,
     /* `scanBusy` cũng là "bận": bấm Quét lại không xoá lô đã tích, nên nếu
        không tính nó thì thẻ xác nhận vẫn gửi được lô CŨ trong lúc lượt quét mới
@@ -482,7 +506,16 @@ export default function ReviewPage() {
     }
   }, [scanBlocked, target, profileId, loadProfiles]);
 
-  const applyPicked = useCallback(async () => {
+  /* KHÔNG `useCallback`. Hàm này đọc năm mẩu trạng thái và gửi một lượt ghi
+     KHÔNG hoàn tác được; bọc `useCallback` là dựng một bản chụp trạng thái tại
+     lượt render dựng nó, rồi phải chép tay danh sách phụ thuộc cho khớp. Thiếu
+     một tên là gửi giá trị CŨ — và đây là lần thứ hai trong đúng tệp này:
+     `cancelPick` từng đọc `pickBusy` cũ, rồi `applyPicked` gửi DIM chuẩn của
+     lượt chọn TRƯỚC (chọn A → huỷ thẻ → chọn B → gửi A).
+     Nơi duy nhất dùng nó là `onConfirm={() => …}` — một arrow mới mỗi lượt
+     render, và không component nào trong dự án bọc `memo`. Nên `useCallback` ở
+     đây không giữ được gì cả; nó chỉ giữ lại cái bẫy. */
+  const applyPicked = async () => {
     if (applyBlocked || !scan) return;
     setApplyBusy(true);
     setScanError("");
@@ -491,7 +524,15 @@ export default function ReviewPage() {
         await fetch(endpoints.standardsApply(DAEMON_BASE), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ scanId: scan.scanId, issueIds: [...picked] }),
+          body: JSON.stringify({
+            scanId: scan.scanId,
+            issueIds: [...picked],
+            /* Chỉ gửi khi lô THẬT SỰ cần. Gửi thừa thì vô hại hôm nay, nhưng nó
+               nói với máy chủ một điều không đúng về ý định của lô. */
+            ...(pickedIssues.some((issue) => issue.action === "dimspace")
+              ? { dimBaseHandle }
+              : {}),
+          }),
         }),
       );
       setConfirmOpen(false);
@@ -530,7 +571,7 @@ export default function ReviewPage() {
     } finally {
       setApplyBusy(false);
     }
-  }, [applyBlocked, scan, picked, loadProfiles]);
+  };
 
   const toggle = (id: string) => setPicked((prev) => {
     const next = new Set(prev);
@@ -864,6 +905,14 @@ export default function ReviewPage() {
                 trang chỉ NHẮC; bảng thì vẫn phải thôi bịa. */}
             <RecognizedObjects scan={scan} mappings={profile?.mappings ?? []}
               mappingsStale={!!driftNote} />
+
+            <DimensionTable scan={scan} baseHandle={dimBaseHandle}
+              /* Trục của lô đang chọn. Hai phát hiện `dimspace` cùng lúc thì để
+                 rỗng: lúc đó KHÔNG trục nào hợp lệ, và `applyBlocked` nói vì
+                 sao — khoá cả bảng ở đây chỉ làm màn hình câm. */
+              neededAxis={dimAxes.length === 1 ? dimAxes[0] : ""}
+              disabled={applyBusy || scanBusy}
+              onPickBase={setDimBaseHandle} />
           </>
         ) : null}
       </div>
