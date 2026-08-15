@@ -215,6 +215,39 @@ assert.match(
   "auto-BOM phải dựng thẻ mới khi thẻ cũ không còn trong hội thoại hiện tại",
 );
 
+/* ── Bất biến #7: bảng nhóm phát hiện = tập `scope` máy chủ thật sự phát ────
+ *
+ * Panel cũ lọc nhóm bằng regex tiếng Việt trên chính chuỗi `scope`, và cách đó
+ * hỏng theo kiểu tệ nhất: máy chủ đổi một chữ là phát hiện biến mất khỏi màn
+ * hình mà không báo gì. Bảng tra không tự chặn được chuyện đó — phép so HAI
+ * CHIỀU dưới đây mới chặn.
+ *
+ * Chiều A (máy chủ → bảng): thêm nhóm mà quên thêm nhãn. Giao diện không giấu
+ * phát hiện — `scopeChips()` dựng chip cho nhóm lạ — nhưng người dùng sẽ đọc một
+ * tên máy móc, nên vẫn phải đỏ.
+ * Chiều B (bảng → máy chủ): một hằng số máy chủ không còn phát là một chip vĩnh
+ * viễn bằng 0 và một bộ lọc luôn rỗng. Nhãn chết còn tệ hơn không có nhãn. */
+{
+  const engine = readFileSync(
+    join(webDir, "../daemon/src/standardsEngine.ts"), "utf8");
+  const emitted = new Set(
+    [...engine.matchAll(/scope: "([^"]+)"/g)].map((match) => match[1]));
+  const table = new Set(
+    [...sourceAt("features/review/scopes.ts").matchAll(/^\s+id: "([^"]+)",$/gm)]
+      .map((match) => match[1]));
+
+  assert.ok(emitted.size >= 6, `chỉ trích được ${emitted.size} scope từ standardsEngine.ts`
+    + " — regex trích không còn khớp mã nguồn, và một phép so trên tập rỗng thì luôn xanh");
+  const missing = [...emitted].filter((id) => !table.has(id)).sort();
+  const dead = [...table].filter((id) => !emitted.has(id)).sort();
+  assert.deepEqual(
+    { missing, dead },
+    { missing: [], dead: [] },
+    `features/review/scopes.ts lệch với standardsEngine.ts — `
+      + `thiếu nhãn: [${missing}] · nhãn chết: [${dead}]`,
+  );
+}
+
 /* Quyết định D6: nếu UI hiển thị trạng thái đã lưu / chưa lưu thì `/docs`
  * PHẢI trả `dbmod`, và plugin PHẢI phát trường đó. Ba nơi phải khớp nhau —
  * lệch một nơi là chấm xanh nói dối trên một bản vẽ chưa lưu. */

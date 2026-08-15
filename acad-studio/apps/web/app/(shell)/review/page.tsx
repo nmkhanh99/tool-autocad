@@ -59,6 +59,12 @@ import {
   type Severity,
   type StandardsProfile,
 } from "../../../features/standards/model";
+import {
+  chipKey,
+  filterByScope,
+  scopeChips,
+  scopeLabel,
+} from "../../../features/review/scopes";
 import { RecognizedObjects } from "../../../features/standards/RecognizedObjects";
 import { DimensionTable } from "../../../features/standards/DimensionTable";
 
@@ -101,6 +107,11 @@ export default function ReviewPage() {
   const scanDirtyRef = useRef(false);
 
   const [severity, setSeverity] = useState<Severity | "all">("all");
+  /* Nhóm phát hiện đang lọc, hoặc `all`. Giữ nguyên khi đổi lượt quét: người dùng
+     lọc "Hàng dim" rồi quét lại là muốn xem lại đúng nhóm đó. Nhóm biến mất khỏi
+     lượt mới thì chip của nó về 0 và bảng rỗng — nói đúng sự thật, khác hẳn với
+     việc tự nhảy về "Tất cả" rồi bày một danh sách người dùng không yêu cầu. */
+  const [scope, setScope] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [detailId, setDetailId] = useState("");
@@ -417,10 +428,15 @@ export default function ReviewPage() {
   const driftNote = profileDriftNote(scan, profile);
   const issues = scan?.issues ?? [];
   const counts = severityCounts(issues);
+  /* Ghép hai bộ lọc ở ĐÂY chứ không nhét nhóm vào `filterIssues()`:
+     `filterIssues` sống ở `features/standards/`, và `check:boundaries` cấm feature
+     import chéo feature. Ghép ở trang là chỗ duy nhất biết cả hai mà không phá
+     ranh giới. */
   const visible = useMemo(
-    () => filterIssues(issues, severity, query),
-    [issues, severity, query],
+    () => filterByScope(filterIssues(issues, severity, query), scope),
+    [issues, severity, query, scope],
   );
+  const chips = useMemo(() => scopeChips(issues), [issues]);
   const pickedIssues = issues.filter((issue) => picked.has(issue.id));
   const detail = issues.find((issue) => issue.id === detailId) ?? null;
 
@@ -763,6 +779,29 @@ export default function ReviewPage() {
                     placeholder="Tìm theo mã phát hiện hoặc mô tả"
                     aria-label="Tìm phát hiện" />
                 </div>
+                {/* Lọc theo NHÓM. Sáu nhóm đã biết hiện kể cả khi đếm 0 — số 0 là
+                    một câu trả lời ("không có vấn đề layer nào"), không phải chỗ
+                    trống. Nhóm máy chủ phát mà bảng chưa biết cũng có chip riêng,
+                    nên tổng các chip luôn bằng "Tất cả": một phát hiện KHÔNG BAO
+                    GIỜ biến mất chỉ vì giao diện chưa có nhãn cho nó. Đó đúng là
+                    cách hỏng của bộ lọc regex ở panel cũ. */}
+                {/* `display: flex` khai TẠI ĐÂY. Hệ thiết kế chỉ cho `.actions`
+                    thành flex dưới `.panel > header`, còn hàng này nằm trong THÂN
+                    panel — nên `flexWrap` sẽ bị bỏ qua và bảy chip tràn thành một
+                    dòng dài, đẩy các bộ lọc cuối ra ngoài màn hình hẹp. */}
+                <div className="actions" style={{
+                  display: "flex", flexWrap: "wrap",
+                  gap: "var(--s2)", marginTop: "var(--s2)",
+                }}>
+                  {chips.map((chip) => (
+                    <Button key={chipKey(chip)}
+                      onClick={() => setScope(chip.scope)}
+                      aria-pressed={scope === chip.scope}
+                      title={chip.hint}>
+                      {chip.label} {chip.count}
+                    </Button>
+                  ))}
+                </div>
               </div>
 
               <div className="tablewrap">
@@ -807,7 +846,10 @@ export default function ReviewPage() {
                             aria-label={`Chọn ${issue.id}`} />
                         </td>
                         <td><Tag>{severityLabel(issue.severity)}</Tag></td>
-                        <td className="mono">{issue.scope}</td>
+                        {/* Nhãn tiếng Việt, nhưng vẫn giữ chuỗi thô ở `title`:
+                            người dùng đọc nhãn, còn khi đi hỏi thì cần đúng tên
+                            máy chủ phát ra. Nhóm ngoài bảng hiện thẳng tên thô. */}
+                        <td title={issue.scope}>{scopeLabel(issue.scope)}</td>
                         <td>{issue.message}</td>
                         <td className="n mono">{issue.handles.length || "—"}</td>
                         <td className="hint">{unsupportedFixReason(issue)}</td>

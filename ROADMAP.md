@@ -398,9 +398,9 @@ route, như `blocks.module.css` vừa làm.
 
   | # | Kế hoạch đòi | Hiện trạng |
   |---|---|---|
-  | 6 | `features/review/scopes.ts` — bảng tra **6 hằng số** thay cho `scopeMatches()` lọc bằng regex tiếng Việt (`/frame\|paper\|scale\|khung\|tỷ lệ\|ty le/`) | thư mục không tồn tại. Sáu hằng số thật: `unit` · `layer` · `dimstyle` · `dim-row` · `frame` · `mapping-required` |
+  | ~~6~~ | `features/review/scopes.ts` — bảng tra **6 hằng số** thay cho `scopeMatches()` lọc bằng regex tiếng Việt | **XONG 2026-08-16.** Sáu mã đã đo từ `standardsEngine.ts`: `unit` · `layer` · `dimstyle` · `dim-row` · `frame` · `mapping-required`. Kèm bộ lọc theo nhóm ở `/review` — bảng không có người dùng thì là hằng số chết |
   | 7 | Nút **Xoá hồ sơ** (`DELETE /profiles/:id`) — kế hoạch ghi rõ đây là "việc thêm mới thật" | daemon có endpoint (`drawingStandards.ts:704`), **không màn nào có nút**. Sau khi xoá panel cũ (2026-08-15) đây là chức năng DUY NHẤT mất hẳn khỏi giao diện — chủ dự án đã chấp nhận và hoãn lại |
-  | — | Bất biến CI **#7**: tập `scope:"…"` trích từ `standardsEngine.ts` = tập hằng số trong `features/review/scopes.ts` | `test-contract.mjs` không assert gì về scope |
+  | ~~—~~ | Bất biến CI **#7**: tập `scope:"…"` trích từ `standardsEngine.ts` = tập hằng số trong `features/review/scopes.ts` | **XONG 2026-08-16.** So hai chiều, cộng một phép chặn ca "regex trích hỏng → so trên tập rỗng thì luôn xanh" |
 
   Lý do kế hoạch nêu cho việc bỏ regex đáng giữ nguyên văn: *backend đổi một chữ
   là issue biến mất im lặng*. `/review` hiện lọc theo mức độ + từ khoá nên không

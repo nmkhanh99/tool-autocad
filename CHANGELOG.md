@@ -1,5 +1,83 @@
 # CHANGELOG
 
+## 2026-08-16 — Mục 6: bảng nhóm phát hiện, và bất biến khoá nó vào máy chủ
+
+Mục áp chót của kế hoạch. `scopeMatches()` — bộ lọc regex tiếng Việt
+(`/frame|paper|scale|khung|tỷ lệ|ty le/`) — đã chết theo panel legacy hôm qua,
+nên phần còn lại là dựng cái thay nó **và** khoá nó lại.
+
+### Vì sao bảng, và vì sao bảng thôi thì chưa đủ
+
+Regex hỏng theo kiểu tệ nhất: máy chủ đổi một chữ trong tên nhóm là phát hiện
+**biến mất khỏi màn hình mà không báo gì**. Không lỗi đỏ, không danh sách rỗng —
+chỉ là vài dòng không còn ở đó, trong đúng màn hình người ta dùng để tìm chỗ sai
+của bản vẽ.
+
+Bảng tra tự nó **không** sửa được chuyện đó; nó chỉ làm chuyện đó **kiểm được**.
+Nên mục này gồm ba phần chứ không một:
+
+1. `features/review/scopes.ts` — sáu nhóm, mỗi nhóm một nhãn tiếng Việt và một
+   câu nói nó soi cái gì. Sáu mã đã **đo từ `standardsEngine.ts`**, không chép
+   theo kế hoạch: `unit` · `layer` · `dimstyle` · `dim-row` · `frame` ·
+   `mapping-required`.
+2. Bộ lọc theo nhóm ở `/review` — bảng không có người dùng thì là hằng số chết.
+3. **Bất biến #7** ở `test-contract.mjs`, so **hai chiều**: máy chủ thêm nhóm mà
+   quên nhãn → đỏ; bảng còn nhãn máy chủ không phát → cũng đỏ, vì nhãn chết là
+   một chip vĩnh viễn bằng 0.
+
+### Nhóm LẠ không được làm phát hiện biến mất
+
+Thay regex bằng một danh sách **cho phép** là dựng lại đúng lỗi vừa dẹp, chỉ khác
+cơ chế. Nên phép lọc so **bằng nhau**, không tra bảng: một `scope` ngoài bảng vẫn
+có chip riêng mang chính tên thô của nó, vẫn lọc được, và vẫn nằm trong danh sách.
+Nhãn là tên thô chứ không phải "Khác" — gộp lại thì giấu mất việc bảng đã lạc
+hậu, mà người dùng cần đọc đúng chuỗi để đi hỏi.
+
+Chuyện này **có thật** chứ không phải giả định: `normalizeIssue()` có đường lùi
+riêng, `scope` rỗng → `"drawing"`, một giá trị không nhóm nào của engine phát ra.
+
+Hệ quả nhìn thấy được: **tổng các chip nhóm luôn bằng chip "Tất cả"**. Lệch hai
+con số đó là mất phát hiện — người dùng thấy ngay mà không cần đọc mã.
+
+### Vòng review: ba lỗi, và một lỗi do chính lúc kiểm gây ra
+
+- **Tôi tự xoá mất bất biến #7.** Trong lúc kiểm đột biến, tôi khôi phục
+  `test-contract.mjs` bằng `git checkout --` thay vì bằng bản sao — mà file đó
+  **chưa commit**, nên lệnh đó đưa nó về HEAD và cuốn theo bất biến vừa viết.
+  Không test nào đỏ. Đúng cái mục này sinh ra để chặn, xảy ra với chính nó.
+
+  Đã trả lại, và thêm một phép kiểm **chéo từ tệp khác**: một guardrail không tự
+  kiểm được sự tồn tại của chính nó, nhưng một tệp khác thì kiểm được.
+- **Chuỗi `"all"` làm cờ "không lọc" là sai.** Mọi giá trị chuỗi đều có thể là một
+  `scope` thật — kể cả `"all"`, kể cả chuỗi RỖNG. Lấy chuỗi làm cờ biến đúng
+  những nhóm đó thành thứ không lọc được: bấm chip của chúng lại ra toàn bộ danh
+  sách. Nay cờ là `null`, thứ không đụng được vào bất kỳ tên nhóm nào.
+
+  Chuỗi rỗng không phải giả định: `str(value, "drawing")` trả **nguyên chuỗi
+  rỗng** chứ không rơi về mặc định, vì `typeof "" === "string"`. Bình luận trong
+  test đầu của tôi nói ngược điều này — đã sửa theo thứ đo được.
+- **Hàng chip không xuống dòng.** Hệ thiết kế chỉ cho `.actions` thành flex dưới
+  `.panel > header`; hàng này nằm trong THÂN panel nên `flexWrap` bị bỏ qua, và
+  bảy chip tràn thành một dòng đẩy các bộ lọc cuối ra ngoài màn hình hẹp.
+
+### Technical
+
+- `scopes.ts` **không** import `Issue`: `check:boundaries` cấm feature import chéo
+  feature, và bảng này thật sự chỉ đọc `scope`. Kiểu cấu trúc tối thiểu
+  (`{ scope: string }`) vừa tuân ranh giới vừa mô tả đúng phần phụ thuộc thật.
+  Vì lý do đó hai bộ lọc ghép ở **trang**, không nhét nhóm vào `filterIssues()`
+  của `features/standards/`.
+- Đổi nhóm KHÔNG bị xoá khi quét lại: lọc "Hàng dim" rồi quét lại là muốn xem lại
+  đúng nhóm đó. Nhóm biến mất khỏi lượt mới thì chip về 0 và bảng rỗng — nói đúng
+  sự thật, khác hẳn việc tự nhảy về "Tất cả" rồi bày một danh sách không ai hỏi.
+- Cột Phạm vi hiện nhãn tiếng Việt, `title` giữ chuỗi thô.
+- **10 đột biến.** Ba cái đầu (hai chiều của bất biến, cộng ca regex trích hỏng làm
+  phép so tự xanh trên tập rỗng) đỏ ngay. Ba cái sau **đi qua sạch** ở lượt đầu —
+  lọc bỏ nhóm lạ, chip bỏ qua nhóm lạ, nhãn hoá "Khác" — tức đúng ba hành vi mà cả
+  mục này sinh ra để bảo vệ thì **không test nào phủ**. Thêm
+  `test-review-scopes.test.ts` rồi cả ba mới đỏ.
+- `pnpm verify`: **211 test**, 13 guardrail, exit 0.
+
 ## 2026-08-15 — Vòng review 1.2 + 2.3: sáu phát hiện, hai loại chỉ lộ ra khi ghi
 
 Codex ra 2 P1 + 4 P2. Cả sáu đều thật, và bốn trong sáu là **loại không tự lộ
