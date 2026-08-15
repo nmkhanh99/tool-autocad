@@ -286,7 +286,12 @@
 
 (defun acadstd:write-settings (stream / variable)
   (foreach variable
-    '("INSUNITS" "LUNITS" "LUPREC" "AUNITS" "AUPREC" "MEASUREMENT"
+    ;; CTAB = ten khong gian HIEN HANH luc quet (Model hoac ten layout).
+    ;; Luot quet dung `ssget "_X"` nen no gom doi tuong cua MOI khong gian, con
+    ;; lenh chon chi chon duoc trong khong gian hien hanh. Khong ghi lai CTAB thi
+    ;; giao dien khong noi duoc nguoi dung phai chuyen ve dau khi lenh chon bi tu
+    ;; choi. Cung mot phep `getvar` chi doc nhu moi bien khac.
+    '("CTAB" "INSUNITS" "LUNITS" "LUPREC" "AUNITS" "AUPREC" "MEASUREMENT"
       "DIMSTYLE" "DIMDEC" "DIMLFAC" "DIMSCALE" "DIMATFIT" "DIMTAD"
       "DIMJUST" "DIMANNO" "DIMTXT" "DIMTXSTY" "DIMCLRT" "DIMCLRD"
       "DIMCLRE" "DIMEXE" "DIMEXO" "DIMGAP" "DIMTMOVE" "DIMTOFL"

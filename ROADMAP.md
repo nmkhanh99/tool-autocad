@@ -367,7 +367,7 @@ route, như `blocks.module.css` vừa làm.
   |---|---|---|
   | ~~1~~ | **2.1** Bảng đối tượng đã nhận diện — **XONG 2026-08-12** | `features/standards/RecognizedObjects.tsx`. Bẫy đơn vị đã bịt (daemon gửi bản quy đổi, giao diện hiện `areaUnit` chứ không ghim `m²`). Bản vẽ thật dạy thêm: `area: 0` là *chưa đo được*, không phải diện tích bằng không |
   | ~~2~~ | **1.1** Nhập layer từ bản vẽ — **XONG 2026-08-13** | `features/standards/ImportLayers.tsx`. Đối chiếu ba nhóm, mặc định an toàn. Quy đổi group 370 chia thẳng 100 (không dùng ngưỡng đoán như bộ mẫu) và làm tròn 2 chữ số vì `13/100` là `0.13000000000000003` |
-  | 3 | **2.2** Chọn + zoom đối tượng trong AutoCAD | Cây cầu duy nhất từ danh sách phát hiện sang bản vẽ |
+  | ~~3~~ | **2.2** Chọn đối tượng trong AutoCAD — **XONG 2026-08-14** | Cây cầu duy nhất từ danh sách phát hiện sang bản vẽ. `ZOOM` **không** port được: nó không tồn tại ở backend (`select` chỉ `acedSSSetFirst`; `h_view_zoom` chỉ là mã dò năng lực). Giao diện chỉ đường dùng `ZOOM → Object` trong AutoCAD |
   | 4 | **1.2** Sửa `bounds` bằng hai nhóm ô có nhãn, KHÔNG phải ô JSON | Xem bảng ba nghĩa của `bounds` ở trên |
   | 5 | **2.3** Bảng dimension + DIMSPACE | Mở khoá hành động thứ 5/5; hẹp hơn bốn mục trên |
 
@@ -549,6 +549,17 @@ rồi khởi động lại AutoCAD.
   có handler thì đó là 2 nút luôn báo lỗi.
 - ~~**Script test mang đường dẫn tuyệt đối của một máy cụ thể.**~~ **Xong
   2026-08-14** — chín file (không phải bảy), nay dùng `mkdtempSync(tmpdir())`.
+- **Lượt quét không ghi KHÔNG GIAN của từng đối tượng.** `acadstd:scan` dùng
+  `ssget "_X"` (mọi không gian) nhưng dòng kết quả không có group 410, trong khi
+  lệnh chọn chỉ chọn được đối tượng thuộc không gian hiện hành. Hệ quả: một phát
+  hiện thuộc layout khác bấm "Chọn trong AutoCAD" sẽ bị từ chối. Hiện giao diện
+  nói rõ giới hạn và hiện không gian lúc quét; sửa đủ cần LISP ghi thêm cột, rồi
+  parser → model → giao diện đọc nó (bốn tầng).
+- **Thao tác chọn không bị huỷ khi rời trang.** `/review` không có dọn dẹp lúc
+  unmount, nên một thao tác đã chuẩn bị (hoặc đang chuẩn bị) sẽ nằm lại trong
+  hàng chờ của daemon tới khi hết TTL 5 phút. Không mất dữ liệu — thao tác chọn
+  không ghi gì, và máy chủ vẫn chốt bằng `instance`+`revision` — nhưng nó chiếm
+  một chỗ trong hàng chờ và hiện ra ở màn Thay đổi như một lệnh treo.
 - **Không có lint/format.** Ba ranh giới thư mục kiểm bằng script riêng.
 - **Chat vẫn thiếu test cho luồng gửi/nhận.** Đã có 7 test cho việc sửa message
   theo ID và 8 test cho bus sự kiện, nhưng `send()` và luồng stream SSE của

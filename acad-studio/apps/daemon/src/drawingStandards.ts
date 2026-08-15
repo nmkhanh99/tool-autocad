@@ -958,15 +958,29 @@ export function drawingStandardsRouter(
            `target` là `file || title`, mà hai bản vẽ chưa lưu trùng tiêu đề cho
            ra cùng một giá trị — giao diện so bằng nó sẽ bật nút Sửa cho bản vẽ
            SAI, rồi máy chủ từ chối bằng `drawing_not_active`. Chốt phía client
-           chỉ có nghĩa khi nó so được đúng thứ máy chủ sẽ so. */
-        documentInstance: document.instance || "",
+           chỉ có nghĩa khi nó so được đúng thứ máy chủ sẽ so.
+
+           Lấy từ ảnh chụp SAU lượt quét, cùng nguồn với `current.document` —
+           tức cùng nguồn với chốt mà giao diện dùng để chọn đối tượng. Lấy hai
+           trường từ hai ảnh chụp khác nhau là tự tạo mâu thuẫn: giao diện tra bản
+           vẽ bằng `documentInstance` (bản trước) rồi gửi chốt của bản sau, và một
+           yêu cầu hợp lệ bị từ chối. */
+        documentInstance: String(asRecord(verifiedSnapshot.document).instance || ""),
         profileId: profile.id,
         profileRevision: profile.revision,
         profileVersion: profile.version,
         scannedAt,
         current: {
           settings: parsed.settings,
-          document: snapshot.document,
+          /* Ảnh chụp SAU lượt quét, không phải trước.
+             Chính lượt quét làm bộ đếm revision nhúc nhích — `ssget "_X"` quét
+             toàn bộ bản vẽ khiến nó +8 dù không sửa gì (đo thật: 16 → 24, xem
+             chú thích ở phép so sự kiện bên trên). Báo về bản TRƯỚC là mọi thứ
+             dùng `current.document` làm chốt sẽ so với một revision đã cũ ngay
+             từ lúc sinh ra: `/selection/prepare` thấy lệch và trả `drawing_stale`,
+             nên nút "Chọn trong AutoCAD" không bao giờ chuẩn bị được.
+             Bản SAU mới là trạng thái mà các handle của lượt quét mô tả. */
+          document: verifiedSnapshot.document,
         },
         evidence: {
           source: snapshot.source,

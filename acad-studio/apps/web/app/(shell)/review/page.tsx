@@ -27,6 +27,11 @@ import { AppShell } from "../../../components/shell/AppShell";
 import { Button } from "../../../components/ui/Button";
 import { Tag } from "../../../components/ui/Tag";
 import { ConfirmSheet } from "../../../components/ui/ConfirmSheet";
+import { prepareSelectHandles } from "../../../features/staged-ops/selectHandles";
+import {
+  applyStagedOp, rejectStagedOp, stagedErrorText,
+} from "../../../features/staged-ops/prepareApplyReject";
+import type { StagedOp } from "../../../features/staged-ops/types";
 import { Icon } from "../../../components/ui/icons";
 import { WriteButton } from "../../../components/ui/WriteButton";
 import { fetchDocs, type AcadDocument } from "../../../lib/daemon/docs";
@@ -39,6 +44,7 @@ import {
   filterIssues,
   normalizeProfile,
   normalizeScan,
+  pickBlockedReason,
   profileDriftNote,
   scanBlockedReason,
   severityCounts,
@@ -59,6 +65,19 @@ function shown(value: unknown): string {
   if (value == null) return "—";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+/** Lỗi nói rằng BẢN VẼ đã đổi, tức handle của lượt quét chết hẳn.
+ *
+ * Hẹp hơn `isStale()` một cách có chủ ý. Tập đó còn gồm `selection_stale` /
+ * `scope_stale` / `destination_stale` — những lỗi về **bộ chọn hiện hành**, thứ
+ * người dùng đổi chỉ bằng cách bấm vào một đối tượng khác trong AutoCAD. Dùng cả
+ * tập để đánh dấu lượt quét đã cũ là bắt quét lại toàn bộ vì một nguyên nhân
+ * hoàn toàn vô hại, trong khi lượt quét vẫn còn đúng nguyên.
+ */
+const DRAWING_MOVED = new Set(["document_stale", "drawing_stale", "target_mismatch"]);
+function drawingMoved(failure: unknown): boolean {
+  return failure instanceof DaemonError && DRAWING_MOVED.has(failure.code);
 }
 
 export default function ReviewPage() {
@@ -85,6 +104,28 @@ export default function ReviewPage() {
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
+  /* Chọn đối tượng trong AutoCAD — cầu nối duy nhất từ danh sách phát hiện sang
+     bản vẽ. Đi qua HAI PHA như mọi lệnh chạm vào AutoCAD, dù chọn KHÔNG ghi gì:
+     backend bắt vậy, và người dùng đang nhìn một ảnh chụp nên "chọn cái gì" vẫn
+     là câu đáng xác nhận. */
+  const [pickOp, setPickOp] = useState<{ op: StagedOp; count: number; label: string } | null>(null);
+  const [pickBusy, setPickBusy] = useState(false);
+  const [pickError, setPickError] = useState("");
+  /* Gương của `pickOp` cho hiệu ứng ở trên. Đưa `pickOp` vào deps là hiệu ứng
+     chạy lại ngay khi vừa đặt nó, và `pickScanId` lúc đó đã bằng `scanId` hiện
+     tại nên không huỷ nhầm — nhưng phụ thuộc thừa vào một giá trị đổi liên tục
+     là mời một lỗi khó thấy về sau. */
+  /* `scanId` của lượt quét ĐANG hiển thị. Dùng ở hai chỗ: chặn một thao tác
+     chuẩn bị xong muộn sau khi đã có lượt quét mới, và huỷ thao tác đang chờ khi
+     lượt quét đổi. Neo theo `scanId` chứ không theo tham chiếu `scan` — mọi lượt
+     nạp lại hồ sơ đều tạo tham chiếu mới. */
+  const scanIdRef = useRef("");
+  const pickOpRef = useRef<{ op: StagedOp; count: number; label: string } | null>(null);
+  /* Gương của `pickBusy` cho hiệu ứng huỷ-theo-`scanId`: hiệu ứng đó neo vào
+     `scan?.scanId` nên không được phép có `pickBusy` trong deps. */
+  const pickBusyRef = useRef(false);
+  useEffect(() => { pickOpRef.current = pickOp; }, [pickOp]);
+  useEffect(() => { pickBusyRef.current = pickBusy; }, [pickBusy]);
   const [applyNote, setApplyNote] = useState("");
 
   const docsSequence = useRef(0);
@@ -211,6 +252,155 @@ export default function ReviewPage() {
       return activeFile;
     });
   }, [activeFile, docs]);
+
+  /* Chuẩn bị lệnh chọn. Chốt lấy từ CHÍNH lượt quét đã sinh ra handle, không đọc
+     mới — xem `prepareSelectHandles`. */
+  /* MỘT lý do chặn, dùng cho MỌI cửa vào: nút, thẻ xác nhận, và cả hai hàm xử
+     lý. Trước đây mỗi cửa tự kiểm lấy và sáu vòng review liên tiếp đều ra cùng
+     một dạng lỗi — chặn cửa này thì hở cửa kia. */
+  const pickBlocked = pickBlockedReason({
+    scan, scanBusy, drawingChanged, docsAlive,
+    activeInstance: (docs.find((doc) => doc.active)?.instance || "").trim(),
+  });
+
+  const pickSequence = useRef(0);
+  const pickHandles = useCallback(async (handles: readonly string[], label: string) => {
+    if (pickBusy || pickOp || !scan || pickBlocked) return;
+    const ticket = ++pickSequence.current;
+    const scanId = scan.scanId;
+    /* Vé của lượt QUÉT, không phải của `scanId`. Bấm "Quét lại" giữa lúc đang
+       chuẩn bị thì `scanId` CHƯA đổi (lượt mới chưa về), nên kiểm theo `scanId`
+       không bắt được — kết quả chuẩn bị về muộn vẫn mở thẻ ra giữa lúc đang quét. */
+    const scanTicket = scanSequence.current;
+    /* "Kết quả này còn thuộc về lượt đang xem không?" — dùng cho CẢ nhánh thành
+       công lẫn nhánh lỗi. Trước đây chỉ nhánh thành công kiểm đủ ba vế, còn
+       `catch` chỉ kiểm vé của chính nó: một lỗi `drawing_stale` về muộn từ lượt
+       quét CŨ sẽ đánh dấu lượt quét MỚI là đã đổi và khoá nút chọn. */
+    const stillCurrent = () =>
+      ticket === pickSequence.current
+      && scanIdRef.current === scanId
+      && scanSequence.current === scanTicket;
+    /* Tra bằng MÃ PHIÊN trước, tiêu đề chỉ là đường lùi.
+       `targetOf()` cho ra tiêu đề với bản vẽ chưa lưu, mà hai bản vẽ như vậy
+       trùng tiêu đề thì `find` trả về cái ĐẦU TIÊN — có thể là bản khác. Khi đó
+       `sendTarget()` gửi mã phiên của bản sai, trong khi handle và chốt thuộc
+       `scan.documentInstance`, và máy chủ từ chối một yêu cầu vốn hợp lệ. Lượt
+       quét đã biết chính xác nó quét bản nào; dùng đúng thứ đó. */
+    const scannedDoc =
+      (scan.documentInstance
+        && docs.find((doc) => (doc.instance || "") === scan.documentInstance))
+      || docs.find((doc) => targetOf(doc) === scan.target);
+    const pickTarget = scannedDoc ? sendTarget(scannedDoc) : scan.target;
+    setPickBusy(true);
+    setPickError("");
+    try {
+      const op = await prepareSelectHandles(DAEMON_BASE, {
+        /* Đích đi qua `sendTarget()`, KHÔNG lấy thẳng `documentInstance`.
+           `documentInstance` chỉ chứng minh bản vẽ CÓ mã phiên, không chứng minh
+           plugin đang chạy NHẬN mã phiên làm đích — bản cũ trả `not_found`. Đây
+           đúng là chỗ đã sai ba vòng ở loạt mã phiên: suy năng lực từ sự có mặt
+           của dữ liệu. `sendTarget()` đọc cờ `targetsInstance` do plugin công bố.
+           Không tìm thấy bản vẽ trong danh sách thì lùi về `scan.target` — kém
+           chính xác hơn, nhưng vẫn là thứ đang chạy được. */
+        target: pickTarget,
+        handles,
+        guard: scan.selectGuard,
+      });
+      /* Lượt quét đổi TRONG LÚC chờ máy chủ: thao tác vừa chuẩn bị mô tả bản vẽ
+         của lượt cũ. Hiệu ứng huỷ-theo-scanId ở dưới không cứu được vì lúc đó
+         `pickOpRef` còn rỗng. Vứt nó đi, và huỷ ở máy chủ luôn. */
+      if (!stillCurrent()) {
+        /* Huỷ ở máy chủ, nhưng KHÔNG viết gì lên màn hình. Lượt quét đang hiển
+           thị không còn là lượt đã yêu cầu thao tác này, và hiệu ứng đổi
+           `scanId` có thể vừa xoá thông báo cũ xong — viết vào đây là dựng lại
+           một câu nói về lượt quét mà người dùng không còn nhìn thấy. Kết quả về
+           muộn thì im lặng biến mất, đó mới là hành vi đúng. */
+        void rejectStagedOp(DAEMON_BASE, op).catch(() => {});
+        return;
+      }
+      setPickOp({ op, count: handles.length, label });
+    } catch (failure) {
+      if (stillCurrent()) {
+        setPickError(stagedErrorText(failure));
+        /* Lỗi "đã cũ" nghĩa là chốt và handle của lượt quét này CHẾT HẲN — bản vẽ
+           đã đổi, hoặc đã đóng rồi mở lại. Chỉ hiện lỗi là để nút còn bấm được,
+           và mỗi lần bấm lại lặp đúng lỗi đó: một ngõ cụt lặp vô hạn. Đánh dấu
+           lượt quét đã cũ để nút tắt và người dùng biết phải quét lại. */
+        if (drawingMoved(failure)) setDrawingChanged(true);
+      }
+    } finally {
+      /* Vô điều kiện: guard ở đầu hàm (`pickBusy || pickOp`) đã chặn hai lượt
+         chồng nhau, nên chỉ có đúng một lượt đang bay và nó phải trả `pickBusy`
+         về. Kiểm vé ở đây tạo một nhánh không bao giờ chạy mà lại có thể để
+         `pickBusy` kẹt `true` vĩnh viễn nếu guard kia đổi. */
+      setPickBusy(false);
+    }
+  }, [pickBusy, pickOp, scan, docs, pickBlocked]);
+
+  const applyPick = useCallback(async () => {
+    if (!pickOp || pickBusy || pickBlocked) return;
+    setPickBusy(true);
+    setPickError("");
+    try {
+      await applyStagedOp(DAEMON_BASE, pickOp.op);
+      setPickOp(null);
+    } catch (failure) {
+      /* Thao tác là MỘT LẦN: máy chủ đã nhận rồi đánh dấu hỏng/đã dùng. Giữ thẻ
+         mở là mời bấm lại vào một id đã chết — lần hai chỉ nhận
+         `operation_not_pending`, một lỗi không nói được gì. Đóng thẻ để người
+         dùng chuẩn bị lại từ đầu. */
+      setPickOp(null);
+      setPickError(stagedErrorText(failure));
+      /* Cùng lý do như ở bước chuẩn bị: lượt áp hỏng vì "đã cũ" thì chuẩn bị lại
+         cũng hỏng y hệt. */
+      if (drawingMoved(failure)) setDrawingChanged(true);
+    } finally {
+      setPickBusy(false);
+    }
+  }, [pickOp, pickBusy]);
+
+  /* Lượt quét MỚI làm thao tác đã chuẩn bị thành vô nghĩa: handle của nó thuộc
+     lượt cũ. Máy chủ sẽ từ chối vì chốt lệch, nhưng để thẻ mở là mời người dùng
+     bấm vào một ngõ cụt. Huỷ ở máy chủ rồi nói lý do.
+     Neo theo `scan.scanId`, không theo `scan`: mọi lượt đọc lại hồ sơ đều tạo
+     một tham chiếu mới, và huỷ theo tham chiếu sẽ giết thao tác đang chờ mỗi lần
+     danh sách hồ sơ nạp lại. */
+  useEffect(() => {
+    const id = scan?.scanId ?? "";
+    /* KHÔNG huỷ khi đang áp. Đây đúng cái race vừa sửa cho `cancelPick`, chỉ
+       khác nguồn kích hoạt: một lượt quét về giữa lúc `applyPick` đang chạy sẽ
+       gửi lệnh huỷ song song với lệnh áp. Bỏ qua là an toàn — `applyPick` tự xoá
+       `pickOp` khi xong, dù thành công hay hỏng. */
+    if (scanIdRef.current && scanIdRef.current !== id && pickOpRef.current
+      && !pickBusyRef.current) {
+      void rejectStagedOp(DAEMON_BASE, pickOpRef.current.op).catch(() => {});
+      setPickOp(null);
+      setPickError(
+        "Đã có lượt quét mới, nên lệnh chọn vừa chuẩn bị bị huỷ. Chọn lại từ "
+        + "phát hiện của lượt quét mới.",
+      );
+    } else if (scanIdRef.current && scanIdRef.current !== id) {
+      /* Lượt quét đổi mà không có thao tác nào đang chờ: vẫn phải xoá lỗi cũ.
+         Giữ lại là bảng chi tiết của lượt MỚI hiện một lỗi do lượt TRƯỚC sinh ra. */
+      setPickError("");
+    }
+    scanIdRef.current = id;
+  }, [scan?.scanId]);
+
+  const cancelPick = useCallback(() => {
+    /* `busy` chỉ khoá nút ở chân thẻ; `Modal` vẫn gọi `onClose` khi bấm Esc hay
+       nền. Không chặn ở đây thì một phím Esc giữa lúc đang áp sẽ gửi lệnh huỷ
+       chạy song song với lệnh áp, và cái nào tới trước thì thắng. */
+    if (!pickOp || pickBusy) return;
+    /* Huỷ ở MÁY CHỦ luôn, đừng chỉ đóng thẻ. Thao tác đã chuẩn bị nằm trong hàng
+       chờ của daemon; bỏ nó lại đó là để một lệnh treo mà người dùng tưởng đã
+       huỷ. */
+    void rejectStagedOp(DAEMON_BASE, pickOp.op).catch(() => {});
+    setPickOp(null);
+    /* `pickBusy` PHẢI nằm trong deps. Thiếu nó thì phép chặn ở trên đọc giá trị
+       của lượt dựng closure trước đó — tức luôn thấy `false` trong lúc đang áp,
+       và cả cái chốt vừa viết thành vô hiệu. */
+  }, [pickOp, pickBusy]);
 
   const profile = profiles.find((item) => item.id === profileId) ?? null;
   const driftNote = profileDriftNote(scan, profile);
@@ -621,6 +811,47 @@ export default function ReviewPage() {
                 ) : (
                   <p className="hint">Bấm một dòng ở bảng trên để xem chi tiết.</p>
                 )}
+                {detail?.handles.length ? (
+                  <div style={{ marginTop: "var(--s3)", display: "grid", gap: "var(--s2)" }}>
+                    <div>
+                      <Button
+                        onClick={() => void pickHandles(
+                          detail.handles,
+                          `${detail.handles.length} đối tượng của “${detail.message}”`,
+                        )}
+                        /* Không có chốt thì KHÔNG cho bấm. Lượt quét thiếu định
+                           danh bản vẽ nghĩa là không chứng minh được handle còn
+                           trỏ đúng chỗ — máy chủ sẽ từ chối, và mở nút ra chỉ
+                           đưa người dùng tới một lỗi khó hiểu. */
+                        /* `scanBusy` cũng là "đang bận": một lượt quét mới đang
+                           chạy thì `scan` trên màn hình vẫn là lượt CŨ, và chuẩn
+                           bị từ nó là chuẩn bị theo một trạng thái sắp bị thay.
+                           Vé hoàn thành chỉ chặn được sau khi `scanId` đã đổi. */
+                        disabled={pickBusy || !!pickOp || !!pickBlocked}>
+                        {pickBusy ? "Đang chuẩn bị…" : "Chọn trong AutoCAD"}
+                      </Button>
+                    </div>
+                    {pickBlocked ? (
+                      <p className="hint" style={{ margin: 0 }}>{pickBlocked}</p>
+                    ) : (
+                      <p className="hint" style={{ margin: 0 }}>
+                        Chọn <b>không sửa</b> gì trong bản vẽ — nó chỉ đặt bộ chọn
+                        của AutoCAD. Đối tượng nằm ngoài màn hình thì dùng lệnh
+                        <span className="mono"> ZOOM</span> →
+                        <span className="mono"> Object</span> trong AutoCAD để nhìn thấy.
+                        {" "}Lượt quét gom đối tượng của <b>mọi</b> không gian, còn
+                        lệnh chọn chỉ chọn được trong không gian đang mở
+                        {scan?.scannedSpace ? (
+                          <> — lúc quét là <b>{scan.scannedSpace}</b></>
+                        ) : null}
+                        . Phát hiện thuộc layout khác sẽ bị từ chối — và đổi tab
+                        cũng làm bộ đếm phiên bản nhảy, nên sau khi chuyển tab bạn
+                        cần <b>quét lại</b> rồi mới chọn được.
+                      </p>
+                    )}
+                    {pickError ? <p className="hint" style={{ margin: 0 }}>{pickError}</p> : null}
+                  </div>
+                ) : null}
               </div>
             </section>
 
@@ -663,6 +894,40 @@ export default function ReviewPage() {
               <li>… và {pickedIssues.length - 8} mục nữa.</li>
             ) : null}
           </ul>
+        </ConfirmSheet>
+      ) : null}
+
+      {pickOp && scan ? (
+        <ConfirmSheet
+          title="Chọn đối tượng trong AutoCAD"
+          /* `selection`, không phải `staged`. `staged` hiện lời dặn về lệnh GHI
+             không hoàn tác được và về `UNDO` — trái ngược với việc đang làm, vì
+             chọn không sửa gì và `UNDO` không có gì để hoàn tác. `selection` là
+             mode dựng riêng cho việc đổi bộ chọn, và nó nói đúng thứ người dùng
+             cần biết: bấm Esc trong AutoCAD là bỏ chọn. */
+          mode="selection"
+          /* Đích của THAO TÁC ĐÃ CHUẨN BỊ, không phải `scan.target`.
+             Hai bản vẽ chưa lưu trùng tiêu đề cho ra cùng `scan.target`, nên hiện
+             nó ra là người dùng không xác minh được lệnh sẽ chạy trên bản vẽ nào
+             — mà xác minh chính là việc của thẻ này. */
+          target={pickOp.op.target || scan.target}
+          summary={`${pickOp.count} đối tượng · ${pickOp.label}`}
+          confirmLabel="Chọn trong AutoCAD"
+          busy={pickBusy}
+          /* Lượt quét hoá cũ TRONG LÚC thẻ đang mở — `drawingModified` bắn chẳng
+             hạn. Nút bên dưới đã tắt, nhưng thẻ này thì không: người dùng vẫn
+             bấm được, nhận `drawing_stale`, rồi thẻ mới đóng. Chặn ngay và nói
+             lý do. */
+          blocked={pickBlocked}
+          onConfirm={() => void applyPick()}
+          onCancel={cancelPick}
+        >
+          <p className="hint" style={{ margin: 0 }}>
+            Lệnh này <b>không sửa</b> gì trong bản vẽ — nó đặt bộ chọn của AutoCAD,
+            và <span className="mono">UNDO</span> không có gì để hoàn tác. Nếu bản
+            vẽ đã đổi kể từ lượt quét, máy chủ sẽ <b>từ chối</b> thay vì chọn nhầm;
+            lúc đó hãy quét lại.
+          </p>
         </ConfirmSheet>
       ) : null}
     </AppShell>

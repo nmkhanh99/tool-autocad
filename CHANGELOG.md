@@ -1,5 +1,177 @@
 # CHANGELOG
 
+## 2026-08-14 — Mục 2.2: chọn đối tượng trong AutoCAD từ một phát hiện
+
+`/review` trước đây chỉ **in handle ra dạng chữ**. Nay mỗi phát hiện có nút
+**Chọn trong AutoCAD**, đi qua đúng luồng hai pha có sẵn
+(`prepareSelectHandles` → thẻ xác nhận → `applyStagedOp`).
+
+### Chốt lấy từ CHÍNH lượt quét
+
+`selectGuard` đọc từ `current.document` của lượt quét — đợt đọc đã sinh ra các
+handle. Đọc mới một lượt `/docs` là ghép handle của lượt này với chốt của lượt
+khác: bản vẽ đổi trong quãng đó thì handle trỏ sang đối tượng khác **trong khi
+chốt vẫn hợp lệ**, và người dùng chọn nhầm thứ họ không nhìn thấy.
+
+Kiểm **kiểu**, không `Number(...)`: `Number(null)` là `0`, mà `0` là revision hợp
+lệ (bản vẽ vừa mở chưa sửa gì) — nên một lượt quét thiếu trường sẽ đi tiếp với
+chốt `0`, máy chủ so thấy lệch rồi từ chối, và người dùng nhận một lỗi không giải
+thích được thay vì câu "lượt quét này không chọn được, hãy quét lại". Thiếu chốt
+thì nút **tắt** kèm lý do, chứ không mở ra rồi để máy chủ từ chối. Test phủ 12
+ca; đã xác nhận đỏ khi quay về `Number()`.
+
+### Huỷ là huỷ ở MÁY CHỦ
+
+Bấm Huỷ gọi `rejectStagedOp`, không chỉ đóng thẻ. Thao tác đã chuẩn bị nằm trong
+hàng chờ của daemon; bỏ nó lại đó là để một lệnh treo mà người dùng tưởng đã huỷ.
+
+### Fixed — Codex review: bảy điểm, trong đó một cái làm nút KHÔNG BAO GIỜ chạy
+
+- **[P1] Chốt mang revision TRƯỚC lượt quét.** `/standards/scan` báo
+  `current.document` = ảnh chụp **trước**, trong khi chính lượt quét làm bộ đếm
+  nhúc nhích — `ssget "_X"` quét toàn bộ bản vẽ khiến nó **+8** dù không sửa gì
+  (đo thật 16 → 24, đã ghi trong chú thích của phép so sự kiện). Nên chốt lệch
+  ngay từ lúc sinh ra, `/selection/prepare` trả `drawing_stale`, và nút không bao
+  giờ chuẩn bị được. Nay báo ảnh chụp **sau** — trạng thái mà các handle mô tả.
+- **[P1] Kết quả chuẩn bị về MUỘN được nhận vô điều kiện.** Đổi hồ sơ hay quét
+  lại giữa lúc chờ là thao tác của lượt cũ bị gắn vào lượt mới. Hiệu ứng
+  huỷ-theo-`scanId` không cứu được vì lúc đó `pickOpRef` còn rỗng. Nay có vé, và
+  vé hỏng thì huỷ ở máy chủ.
+- **[P2] Gửi `scan.target` là vứt mất định danh.** Nó là `file || title`, mà hai
+  bản vẽ chưa lưu trùng tiêu đề cho ra cùng chuỗi đó — `/selection/prepare` trả
+  `target_ambiguous` dù lượt quét biết chính xác nó quét bản vẽ nào. Nay gửi
+  `documentInstance` khi có.
+- **[P2] Áp hỏng vẫn giữ thẻ mở.** Thao tác là **một lần**; bấm lại chỉ nhận
+  `operation_not_pending`. Nay đóng thẻ để người dùng chuẩn bị lại.
+- **[P2] Esc/bấm nền giữa lúc đang áp.** `busy` chỉ khoá nút ở chân thẻ, `Modal`
+  vẫn gọi `onClose` — lệnh huỷ chạy song song với lệnh áp. Nay chặn.
+- **[P2] Dùng nhầm `mode="staged"`.** Nó hiện lời dặn về lệnh ghi không hoàn tác
+  và về `UNDO` — trái ngược với việc đang làm. `ConfirmSheet` có sẵn
+  `mode="selection"` dựng riêng cho việc đổi bộ chọn.
+- **[P2] Không gian.** Lượt quét dùng `ssget "_X"` nên gom đối tượng của **mọi**
+  không gian, còn lệnh chọn chỉ chọn được trong không gian hiện hành. Sửa đủ cần
+  lượt quét ghi group 410 cho từng đối tượng — chạm bốn tầng. Nay giao diện nói
+  rõ giới hạn và hiện **không gian lúc quét** để người dùng biết chuyển về đâu.
+
+### Fixed — Codex review vòng hai của mục này
+
+- **[P2] `cancelPick` thiếu `pickBusy` trong deps** — nên chính cái chốt tôi vừa
+  viết ở vòng trước đọc giá trị của closure cũ và **luôn thấy `false`** trong lúc
+  đang áp. Phép thay thế ở lượt sửa trước không áp được vì mã đã đổi; tôi không
+  kiểm lại sau khi thay.
+- **[P2] Nút vẫn bật trong lúc quét lại.** `scan` trên màn hình còn là lượt cũ
+  khi `scanBusy` bật, nên chuẩn bị từ nó là chuẩn bị theo trạng thái sắp bị thay.
+- **[P2] Lấy thẳng `documentInstance` là suy năng lực từ sự có mặt của dữ liệu.**
+  Nó chỉ chứng minh bản vẽ CÓ mã phiên, không chứng minh plugin đang chạy NHẬN mã
+  phiên làm đích. Đây đúng là chỗ đã sai ba vòng ở loạt mã phiên. Nay đi qua
+  `sendTarget()`, thứ đọc cờ `targetsInstance` do plugin công bố.
+- **[P2] `scannedSpace` luôn rỗng.** Tôi đọc `current.document.space`, nhưng khối
+  `document` của `drawing-info` **không hề có** trường đó (đã đối chiếu nguồn
+  plugin), và lượt quét cũng không đọc `CTAB`. Nay LISP ghi thêm `CTAB` — cùng
+  một phép `getvar` chỉ đọc như mọi biến khác — và model đọc từ
+  `current.settings.CTAB`.
+
+### Fixed — Codex review vòng ba: tra bản vẽ bằng mã phiên, không bằng tiêu đề
+
+`docs.find(targetOf(doc) === scan.target)` khớp theo **tiêu đề** với bản vẽ chưa
+lưu, mà hai bản vẽ như vậy trùng tiêu đề thì `find` trả về cái **đầu tiên** — có
+thể là bản khác. `sendTarget()` khi đó gửi mã phiên của bản **sai**, trong khi
+handle và chốt thuộc `scan.documentInstance`, nên máy chủ từ chối một yêu cầu vốn
+hợp lệ. Chốt vẫn bảo vệ đúng (không chọn nhầm bản vẽ), nhưng thao tác đúng lại bị
+chặn. Lượt quét đã biết chính xác nó quét bản nào — tra bằng đúng thứ đó.
+
+### Fixed — Codex review vòng bốn + tự soát cả khối
+
+- **[P2] Lỗi "đã cũ" để lại một ngõ cụt lặp vô hạn.** `document_stale` /
+  `drawing_stale` / `selection_stale` nghĩa là chốt và handle của lượt quét **chết
+  hẳn**; chỉ hiện lỗi là để nút còn bấm được, và mỗi lần bấm lặp đúng lỗi đó. Nay
+  dùng `isStale()` có sẵn để đánh dấu lượt quét đã cũ — nút tắt kèm câu chỉ đường
+  quét lại. Nối vào `drawingChanged` sẵn có thay vì dựng cờ mới.
+
+**Tự soát cả khối** (sau bốn vòng mà vòng nào cũng ra lỗi trong chính bản sửa
+trước), bằng script liệt kê deps của từng `useCallback`/`useEffect` thay vì đọc
+bằng mắt. Ra thêm hai thứ Codex chưa nêu:
+
+- Hiệu ứng huỷ-theo-`scanId` **không kiểm `pickBusy`** — một lượt quét về giữa lúc
+  đang áp sẽ gửi lệnh huỷ song song với lệnh áp. Đúng cái race vừa sửa cho
+  `cancelPick`, chỉ khác nguồn kích hoạt.
+- `finally` của `pickHandles` kiểm vé trước khi trả `pickBusy` về `false`. Guard
+  ở đầu hàm đã chặn hai lượt chồng nhau nên nhánh đó **không bao giờ chạy** —
+  nhưng nếu guard kia đổi, nó để `pickBusy` kẹt `true` vĩnh viễn và nút chết luôn.
+
+### Fixed — Codex review vòng năm: chính bản sửa "stale" vừa thêm
+
+- **[P2] `isStale()` quá rộng cho việc này.** Tập đó gồm cả `selection_stale` /
+  `scope_stale` / `destination_stale` — lỗi về **bộ chọn hiện hành**, thứ người
+  dùng đổi chỉ bằng cách bấm vào một đối tượng khác trong AutoCAD. Dùng cả tập để
+  đánh dấu lượt quét đã cũ là bắt **quét lại toàn bộ** vì một nguyên nhân vô hại,
+  trong khi lượt quét vẫn còn đúng nguyên. Nay chỉ ba mã thật sự nói "bản vẽ đã
+  đổi": `document_stale`, `drawing_stale`, `target_mismatch`.
+- **[P2] Thẻ đang mở không bị chặn khi lượt quét hoá cũ.** `drawingModified` bắn
+  giữa lúc thẻ mở thì nút bên dưới tắt, nhưng thẻ vẫn bấm được — người dùng nhận
+  `drawing_stale` rồi thẻ mới đóng. Nay truyền `blocked` để chặn ngay và nói lý
+  do, dùng đúng prop mà luồng sửa đã dùng.
+
+### Fixed — Codex review vòng sáu
+
+- **[P2] Nhánh `catch` thiếu đúng phép kiểm mà nhánh thành công đã có.** Một lỗi
+  `drawing_stale` về **muộn** từ lượt quét CŨ sẽ đánh dấu lượt quét MỚI là đã đổi
+  rồi khoá nút chọn. Nay cả hai nhánh dùng chung một hàm `stillCurrent()` — kiểm
+  đủ ba vế: vé của chính lượt chuẩn bị, `scanId`, và vé của lượt quét.
+- **[P2] Hai trường định danh lấy từ HAI ảnh chụp khác nhau.** Khi đổi
+  `current.document` sang ảnh chụp sau lượt quét, tôi để `documentInstance` ở
+  ảnh chụp trước. Giao diện tra bản vẽ bằng trường này rồi gửi chốt của bản kia —
+  một yêu cầu hợp lệ bị từ chối. Nay cùng một nguồn.
+- **[P3] Lỗi chọn của lượt quét cũ còn hiện ở lượt mới.** Nay xoá khi lượt quét
+  đổi, kể cả khi không có thao tác nào đang chờ.
+
+### Fixed — Codex review vòng bảy
+
+**[P2] Kết quả chuẩn bị về muộn vẫn viết thông báo lên lượt quét mới.** Nó huỷ
+thao tác đúng rồi, nhưng còn dựng lại câu "Đã có lượt quét mới…" dưới một lượt
+quét mà câu đó không nói về — và hiệu ứng đổi `scanId` có thể vừa xoá thông báo
+cũ xong. Nay kết quả về muộn **im lặng** biến mất.
+
+### Fixed — Codex review vòng tám: thiếu một đầu vào của chốt
+
+**[P2] Không so bản vẽ đã quét với bản vẽ đang mở.** `/selection/prepare` đòi
+đích phải đang hoạt động; không chặn ở giao diện thì người dùng chuyển tab, bấm
+Chọn, nhận `target_not_active`, rồi tự đoán ra mình cần quay lại tab cũ. Nay
+`pickBlockedReason` nhận thêm `activeInstance` và so bằng **định danh** — nhưng
+chỉ khi biết cả hai vế, vì chặn oan cũng là một kiểu sai và máy chủ vẫn là chốt
+cuối.
+
+Đây là loại phát hiện cho thấy việc gom về một hàm thuần ở vòng sáu là đúng: chỗ
+sửa nằm gọn trong một hàm, thêm một đầu vào và một lý do, và khoá được bằng test
+ngay — thay vì phải rà lại bốn cửa vào như trước.
+
+### Fixed — Codex review vòng chín (vòng cuối của mục này)
+
+- **[P2] Thẻ xác nhận hiện `scan.target` thay vì đích thật.** Hai bản vẽ chưa lưu
+  trùng tiêu đề cho ra cùng chuỗi đó, nên người dùng **không xác minh được** lệnh
+  sẽ chạy trên bản vẽ nào — mà xác minh chính là việc của thẻ này. Nay hiện đích
+  của thao tác đã chuẩn bị.
+- **[P2] Câu gợi ý của tôi mời người dùng vào một thao tác sẽ hỏng.** Nó bảo
+  "chuyển về đúng tab rồi thử lại", nhưng đổi tab làm bộ đếm phiên bản nhảy
+  (đã đo: 0 → 121) nên lượt chọn sau đó chết bằng `drawing_stale`. Không phân biệt
+  được "nhảy do đổi tab" với "nhảy do sửa thật", nên nay câu chữ nói đúng sự thật:
+  chuyển tab xong phải **quét lại**.
+- **[P2] Plugin mất kết nối vẫn để nút sáng.** Một lượt đọc danh sách hỏng thì
+  **giữ lại** danh sách cũ (đúng), nên mã phiên cũ vẫn khớp nếu chỉ nhìn nội
+  dung. Nay `pickBlockedReason` nhìn cả cờ sống.
+
+### ZOOM: chưa có, và giao diện nói thẳng
+
+ROADMAP ghi mục này là "**chọn + zoom**", nhưng zoom **không tồn tại ở đâu cả**:
+lệnh `select` gốc chỉ `acedSSSetFirst` + `acedUpdateDisplay`, còn
+`mepraw.cpp::h_view_zoom` chỉ là mã **dò năng lực** (kiểm `acgsGetCurrentAcGsView`
+có trả view không), không hề zoom. Giao diện vì thế chỉ dõng dạc phần làm được,
+và chỉ đường cho phần chưa có: dùng `ZOOM` → `Object` trong AutoCAD.
+
+Nhãn thẻ xác nhận là `staged` chứ không `immediate` — lệnh này ĐÃ được chuẩn bị ở
+máy chủ và có id để huỷ, khác hẳn `/standards/apply` vốn bắn thẳng. Dùng nhầm
+nhãn là hứa sai về bước rút lui.
+
 ## 2026-08-14 — Đọc bảng layer theo trang: nhóm xoá không còn bị ẩn
 
 Mục nợ kỹ thuật cuối. Nâng trần chỉ đẩy giới hạn đi xa hơn — đọc theo **trang**

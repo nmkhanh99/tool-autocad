@@ -562,6 +562,21 @@ export type Scan = {
   /** Mã phiên của bản vẽ đã quét. Rỗng = máy chủ/plugin không cấp, và phép so
    * lùi về `target` — thứ không phân biệt được hai bản vẽ chưa lưu trùng tiêu đề. */
   documentInstance: string;
+  /** Chốt để CHỌN đối tượng theo handle, hoặc `null` nếu lượt quét không kèm.
+   *
+   * Phải lấy từ `current.document` của **chính lượt quét này** — đợt đọc đã sinh
+   * ra các handle. Ghép handle của lượt này với chốt đọc mới ở lượt khác là mở ra
+   * đúng khoảng thời gian giữa hai lượt: bản vẽ đổi trong quãng đó thì handle trỏ
+   * sang đối tượng khác trong khi chốt vẫn hợp lệ, và người dùng chọn nhầm thứ họ
+   * không nhìn thấy. */
+  selectGuard: { instance: string; revision: number } | null;
+  /** Không gian AutoCAD đang hiện hành LÚC QUÉT (Model, hoặc tên layout).
+   *
+   * Lượt quét dùng `ssget "_X"` nên nó gom đối tượng của **mọi** không gian,
+   * trong khi lệnh chọn chỉ chọn được đối tượng thuộc không gian **hiện hành**.
+   * Một phát hiện thuộc layout khác vì thế sẽ bị từ chối lúc chuẩn bị — an toàn,
+   * nhưng người dùng cần biết phải chuyển về đâu. Rỗng = không đọc được. */
+  scannedSpace: string;
   profileId: string;
   /** Phiên bản hồ sơ LÚC QUÉT — hash, không phải số. Đây là thứ máy chủ so khi
    * áp dụng, và lệch là 409. */
@@ -690,7 +705,30 @@ export function normalizeScan(value: unknown, fallbackTarget: string): Scan {
        lượng khác — xem chú thích ở `Scan.objectsTruncated`. */
     objectsTruncated: record(record(body.evidence).standardsScan).objectsTruncated === true,
     maxObjects: num(record(record(body.evidence).standardsScan).maxObjects) ?? 0,
+    selectGuard: readSelectGuard(body),
+    /* Không gian đọc từ `current.settings.CTAB`, KHÔNG từ `current.document`:
+       khối `document` của `drawing-info` không hề có trường `space` (đã đối chiếu
+       nguồn plugin), nên bản trước luôn trả rỗng và câu gợi ý không bao giờ hiện. */
+    scannedSpace: str(record(record(record(body).current).settings).CTAB),
   };
+}
+
+/** Chốt chọn lấy từ `current.document` của lượt quét, hoặc `null`.
+ *
+ * Kiểm KIỂU chứ không `Number(...)`: `Number(null)` là `0`, và `0` là một
+ * revision **hợp lệ** — nên một lượt quét thiếu trường sẽ đi tiếp với chốt `0`,
+ * máy chủ so thấy lệch rồi từ chối, và người dùng nhận một lỗi không giải thích
+ * được thay vì câu "lượt quét này không chọn được, hãy quét lại".
+ */
+function readSelectGuard(body: unknown): Scan["selectGuard"] {
+  const document = record(record(record(body).current).document);
+  const instance = document.instance;
+  const revision = document.revision;
+  if (typeof instance !== "string" || !instance.trim()) return null;
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) {
+    return null;
+  }
+  return { instance: instance.trim(), revision };
 }
 
 function normalizeMappedObject(value: unknown): MappedObject {
@@ -802,6 +840,60 @@ export function filterIssues(
 /* ------------------------------------------------------------------ *
  * Lý do chặn
  * ------------------------------------------------------------------ */
+
+/** Vì sao chưa CHỌN đối tượng được — hoặc rỗng nếu chọn được.
+ *
+ * Một định nghĩa cho **mọi** cửa vào: nút, thẻ xác nhận, và cả hai hàm xử lý.
+ * Trước đây mỗi cửa tự kiểm lấy, và sáu vòng review liên tiếp đều ra cùng một
+ * dạng lỗi — chặn được cửa này thì hở cửa kia (nút tắt nhưng thẻ vẫn bấm được;
+ * `cancelPick` chặn nhưng hiệu ứng huỷ-theo-scanId thì không). Ma trận
+ * "ba cửa vào × bốn nguồn vô hiệu" không giữ đúng bằng tay được.
+ *
+ * KHÔNG gồm trạng thái bận nhất thời (`pickBusy`) và cũng không gồm "đang có
+ * một thao tác chờ xác nhận": hai thứ đó là chuyện của riêng từng cửa — thẻ xác
+ * nhận sinh ra chính là để xác nhận thao tác đang chờ.
+ */
+export function pickBlockedReason(input: {
+  scan: Scan | null;
+  /** Một lượt quét MỚI đang chạy. Lượt cũ còn trên màn hình nhưng sắp bị thay,
+   * nên mọi thứ chuẩn bị theo nó đều đang đua với nó. */
+  scanBusy: boolean;
+  /** Bản vẽ đã đổi kể từ lượt quét — handle không còn chỉ đúng đối tượng. */
+  drawingChanged: boolean;
+  /** Mã phiên của bản vẽ AutoCAD ĐANG hoạt động. Rỗng = không biết.
+   *
+   * `/selection/prepare` đòi bản vẽ đích phải đang hoạt động. Không so ở đây thì
+   * người dùng chuyển sang tab khác rồi bấm Chọn, nhận `target_not_active`, và
+   * phải tự đoán ra là mình cần quay về tab cũ. */
+  activeInstance: string;
+  /** Danh sách bản vẽ còn SỐNG không. `false` = plugin không phản hồi.
+   *
+   * Tách khỏi nội dung danh sách: một lượt đọc hỏng giữ lại danh sách cũ (đúng),
+   * nhưng nếu chỉ nhìn nội dung thì mã phiên cũ vẫn khớp và nút vẫn sáng — rồi
+   * yêu cầu chết với một lỗi kết nối thô thay vì câu chỉ đường của trang. */
+  docsAlive: boolean;
+}): string {
+  if (!input.scan?.scanId) return "Chưa có lượt quét nào.";
+  if (!input.docsAlive) return "Plugin AcadBridge chưa phản hồi.";
+  if (input.scanBusy) return "Đang quét lại; chọn lại sau khi có kết quả mới.";
+  if (input.drawingChanged) {
+    return "Bản vẽ đã đổi kể từ lượt quét, nên handle của lượt này không còn chỉ "
+      + "đúng đối tượng. Quét lại rồi chọn.";
+  }
+  /* So bằng ĐỊNH DANH, và chỉ khi biết cả hai. Không biết bản vẽ nào đang hoạt
+     động thì không kết luận — chặn oan cũng là một kiểu sai, và máy chủ vẫn là
+     chốt cuối. */
+  const scanned = input.scan.documentInstance;
+  if (scanned && input.activeInstance && scanned !== input.activeInstance) {
+    return "Bản vẽ đã quét không còn là bản vẽ đang mở trong AutoCAD. Chuyển về "
+      + "đúng tab rồi chọn.";
+  }
+  if (!input.scan.selectGuard) {
+    return "Lượt quét này không kèm định danh bản vẽ nên không chọn an toàn được. "
+      + "Quét lại rồi thử.";
+  }
+  return "";
+}
 
 /** Vì sao chưa quét được — hoặc rỗng nếu quét được. */
 export function scanBlockedReason(input: {

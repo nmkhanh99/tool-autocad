@@ -18,6 +18,7 @@ import {
   normalizeIssue,
   normalizeProfile,
   normalizeScan,
+  pickBlockedReason,
   profileDriftNote,
   scanBlockedReason,
   severityCounts,
@@ -57,6 +58,8 @@ const scan = (over: Partial<Scan> = {}): Scan => ({
   scanId: "scan_1",
   target: "/x.dwg",
   documentInstance: "",
+  selectGuard: null,
+  scannedSpace: "",
   profileId: "p1",
   profileRevision: "hash-a",
   profileVersion: 0,
@@ -1269,6 +1272,105 @@ test("màu phải ĐỌC ĐƯỢC, không chỉ có mặt — `?? 7` là đườ
   });
   assert.deepEqual(read.layers.map((l) => l.name), ["GIU-LAI"]);
   assert.equal(read.skipped, 4);
+});
+
+test("MỘT lý do chặn cho mọi cửa vào lệnh chọn", () => {
+  /* Sáu vòng review liên tiếp ra cùng một dạng lỗi: chặn được nút thì hở thẻ xác
+     nhận, chặn được `cancelPick` thì hở hiệu ứng huỷ. Ma trận "ba cửa vào × bốn
+     nguồn vô hiệu" không giữ đúng bằng tay được — nên nó thành MỘT hàm thuần,
+     và đây là chỗ khoá nó lại. */
+  const withGuard = scan({ selectGuard: { instance: "I1", revision: 3 } });
+  const base = {
+    scan: withGuard, scanBusy: false, drawingChanged: false, activeInstance: "",
+    docsAlive: true,
+  };
+
+  assert.equal(pickBlockedReason(base), "", "đủ điều kiện thì không chặn");
+
+  assert.match(pickBlockedReason({ ...base, scan: null }), /Chưa có lượt quét/);
+  /* Đang quét lại: lượt CŨ còn trên màn hình nhưng sắp bị thay. */
+  assert.match(pickBlockedReason({ ...base, scanBusy: true }), /Đang quét lại/);
+  assert.match(pickBlockedReason({ ...base, drawingChanged: true }), /Bản vẽ đã đổi/);
+  assert.match(
+    pickBlockedReason({ ...base, scan: scan({ selectGuard: null }) }),
+    /không kèm định danh/,
+  );
+
+  /* Thứ tự ưu tiên: "chưa có lượt quét" phải nói trước mọi thứ khác, vì các lý do
+     kia đều giả định đang có một lượt quét để nói về. */
+  assert.match(
+    pickBlockedReason({
+      scan: null, scanBusy: true, drawingChanged: true, activeInstance: "",
+      docsAlive: true,
+    }),
+    /Chưa có lượt quét/,
+  );
+
+  /* Plugin mất kết nối: một lượt đọc hỏng GIỮ LẠI danh sách cũ (đúng), nên mã
+     phiên cũ vẫn khớp và nút vẫn sáng nếu chỉ nhìn nội dung. Phải nhìn cờ sống. */
+  assert.match(pickBlockedReason({ ...base, docsAlive: false }), /chưa phản hồi/);
+
+  /* Bản vẽ đã quét không còn là bản vẽ đang mở: `/selection/prepare` đòi đích
+     phải đang hoạt động, nên không chặn ở đây là để người dùng nhận
+     `target_not_active` rồi tự đoán ra mình cần quay lại tab cũ. */
+  const scanned = scan({
+    documentInstance: "I1", selectGuard: { instance: "I1", revision: 3 },
+  });
+  assert.match(
+    pickBlockedReason({ ...base, scan: scanned, activeInstance: "I2" }),
+    /không còn là bản vẽ đang mở/,
+  );
+  assert.equal(pickBlockedReason({ ...base, scan: scanned, activeInstance: "I1" }), "");
+  /* KHÔNG biết bản vẽ nào đang hoạt động thì không kết luận — chặn oan cũng là
+     một kiểu sai, và máy chủ vẫn là chốt cuối. */
+  assert.equal(pickBlockedReason({ ...base, scan: scanned, activeInstance: "" }), "");
+  /* Lượt quét không kèm định danh thì cũng không so được. */
+  assert.equal(
+    pickBlockedReason({ ...base, scan: withGuard, activeInstance: "I2" }),
+    "",
+  );
+
+  /* KHÔNG gồm trạng thái bận nhất thời hay "đang có thao tác chờ": hai thứ đó là
+     chuyện riêng của từng cửa — thẻ xác nhận sinh ra chính là để xác nhận thao
+     tác đang chờ, nên gộp vào đây sẽ tự chặn chính nó. */
+  assert.equal(pickBlockedReason(base), "");
+});
+
+test("chốt CHỌN lấy từ chính lượt quét, và kiểm KIỂU chứ không Number()", () => {
+  /* Handle của lượt quét chỉ có nghĩa với bản vẽ ở đúng trạng thái lúc quét. Chốt
+     vì thế phải lấy từ `current.document` của CHÍNH lượt đó — đọc mới một lượt
+     `/docs` là ghép handle của lượt này với chốt của lượt khác, và bản vẽ đổi
+     trong quãng đó thì handle trỏ sang đối tượng khác mà chốt vẫn hợp lệ. */
+  const guardOf = (current: unknown) => normalizeScan({ current }, "t").selectGuard;
+  assert.deepEqual(
+    guardOf({ document: { instance: "I1", revision: 7 } }),
+    { instance: "I1", revision: 7 },
+  );
+  /* `revision: 0` là HỢP LỆ — bản vẽ vừa mở chưa sửa gì. */
+  assert.deepEqual(
+    guardOf({ document: { instance: "I1", revision: 0 } }),
+    { instance: "I1", revision: 0 },
+  );
+
+  /* Thiếu hoặc sai kiểu -> `null`, tức nút Chọn tắt kèm lời giải thích.
+     KHÔNG dùng `Number(...)`: `Number(null)` là `0`, mà `0` là revision hợp lệ —
+     nên một lượt quét thiếu trường sẽ đi tiếp với chốt `0`, máy chủ so thấy lệch
+     rồi từ chối, và người dùng nhận một lỗi không giải thích được thay vì câu
+     "lượt quét này không chọn được, hãy quét lại". */
+  for (const bad of [
+    undefined, {}, { document: {} },
+    { document: { instance: "I1" } },
+    { document: { revision: 7 } },
+    { document: { instance: "", revision: 7 } },
+    { document: { instance: "   ", revision: 7 } },
+    { document: { instance: "I1", revision: null } },
+    { document: { instance: "I1", revision: "7" } },
+    { document: { instance: "I1", revision: -1 } },
+    { document: { instance: "I1", revision: 1.5 } },
+    { document: { instance: {}, revision: 7 } },
+  ]) {
+    assert.equal(guardOf(bad), null, `phải trả null: ${JSON.stringify(bad)}`);
+  }
 });
 
 test("chốt Sửa so bằng ĐỊNH DANH khi có — tên không phân biệt được bản vẽ chưa lưu", () => {
