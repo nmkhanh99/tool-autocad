@@ -99,6 +99,19 @@ export const guards: Record<string, Guard> = {
     why: "Kết quả quét dựa trên phiên bản hồ sơ cũ nên không còn dùng được.",
     fix: "Quét lại bản vẽ với hồ sơ hiện tại.",
   },
+  if_match_required: {
+    title: "Thiếu mã phiên bản để xoá an toàn",
+    why: "Lệnh xoá phải kèm mã phiên bản của đúng bản hồ sơ bạn đang xem. Không "
+      + "có nó thì máy chủ không kiểm được là ai đó vừa sửa hồ sơ ở nơi khác, và "
+      + "lượt xoá sẽ ghi đè lên một bản bạn chưa từng thấy.",
+    fix: "Tải lại danh sách hồ sơ rồi xoá lại.",
+  },
+  profile_not_found: {
+    title: "Hồ sơ quy chuẩn không còn tồn tại",
+    why: "Hồ sơ này vừa bị xoá — thường là ở màn Hồ sơ tiêu chuẩn, có thể trong "
+      + "một tab khác. Lượt quét cũ vẫn còn trên màn hình nhưng không sửa được nữa.",
+    fix: "Chọn một hồ sơ khác rồi quét lại.",
+  },
   scan_expired: {
     title: "Phiên quét đã hết hạn",
     why: "Kết quả quét chỉ sống trong phiên làm việc và bị huỷ sau khi áp dụng.",

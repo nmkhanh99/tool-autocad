@@ -1240,8 +1240,22 @@ export function scanBlockedReason(input: {
 export function profileDriftNote(
   scan: Scan | null,
   profile: StandardsProfile | null,
+  /** Danh sách hồ sơ có đọc được không. `false` = lượt đọc hỏng, và khi đó
+   * "không tìm thấy hồ sơ" nghĩa là KHÔNG BIẾT chứ không phải đã mất. */
+  profilesKnown = false,
 ): string {
-  if (!scan || !profile) return "";
+  if (!scan) return "";
+  /* Hồ sơ của lượt quét đã BIẾN MẤT — thường là vừa bị xoá ở màn Hồ sơ tiêu
+     chuẩn, có thể ở một tab khác. Trả rỗng ở đây là để nút Sửa sáng nguyên rồi
+     ăn 409 lặp đi lặp lại, và người dùng không có manh mối nào.
+     Chỉ kết luận khi danh sách ĐỌC ĐƯỢC: một lượt đọc hỏng cũng cho ra `null`,
+     và chặn vì "không biết" thì khoá mất nút sửa mà không có đường gỡ. */
+  if (!profile) {
+    return profilesKnown
+      ? "Hồ sơ quy chuẩn đã dùng cho lượt quét này không còn tồn tại — có thể "
+        + "vừa bị xoá. Chọn một hồ sơ khác rồi quét lại."
+      : "";
+  }
   if (scan.profileId !== profile.id) {
     return "Hồ sơ đang chọn không phải hồ sơ đã dùng để quét. Quét lại trước khi sửa.";
   }
@@ -1343,6 +1357,33 @@ export function dimspaceBlockedReason(input: {
   return "";
 }
 
+/** Lời từ chối của máy chủ có còn đúng không — hoặc rỗng nếu nó đã hết hiệu lực.
+ *
+ * Máy chủ từ chối một lượt sửa vì hồ sơ đổi; ta nhớ lại để nút Sửa không bật lên
+ * cho một lượt gửi vô ích (xem `scanRejected`). Nhưng lời từ chối đó **hết hiệu
+ * lực** khi hồ sơ quay về đúng nội dung lúc quét: `revision` là hash NỘI DUNG,
+ * nên hoàn nguyên một lần sửa cho ra đúng hash cũ, và máy chủ sẽ nhận lượt sửa
+ * trở lại. Giữ lời từ chối khi đó là bắt quét lại một cách vô ích.
+ *
+ * So CẢ `id` chứ không chỉ `revision`: hai hồ sơ có nội dung giống hệt nhau mang
+ * **cùng một** hash — đó là tính năng, không phải trùng lặp — nên chỉ so hash sẽ
+ * xoá lời từ chối vì một hồ sơ khác tình cờ giống nội dung.
+ */
+export function rejectionNote(input: {
+  scan: Scan | null;
+  /** Hồ sơ đang chọn, đã tra từ danh sách mới nhất. */
+  profile: StandardsProfile | null;
+  rejected: { scanId: string; note: string } | null;
+}): string {
+  const { scan, profile, rejected } = input;
+  if (!scan || !rejected || rejected.scanId !== scan.scanId) return "";
+  const restored = !!profile
+    && profile.id === scan.profileId
+    && !!profile.revision
+    && profile.revision === scan.profileRevision;
+  return restored ? "" : rejected.note;
+}
+
 export function applyBlockedReason(input: {
   scan: Scan | null;
   /** Bản vẽ AutoCAD ĐANG hoạt động, **dạng `targetOf()`**. */
@@ -1441,6 +1482,46 @@ export function applySummary(issues: readonly Issue[]): string {
  * đó SAI, và người dùng chỉ phát hiện ra bằng một lỗi 400 sau khi đã gõ xong cả
  * form.
  */
+/** Vì sao chưa XOÁ được hồ sơ — hoặc rỗng nếu xoá được.
+ *
+ * Một chỗ duy nhất cho mọi cửa vào (nút và thẻ xác nhận), đúng lối đã dùng ở
+ * `pickBlockedReason()`: mỗi cửa tự kiểm lấy là mỗi cửa hở một kiểu, và ở đây
+ * cửa hở dẫn tới một lượt xoá không lấy lại được.
+ *
+ * KHÔNG chặn khi hồ sơ đang là cái cuối cùng: màn hình vẫn tạo được hồ sơ mới
+ * khi danh sách rỗng (`createProfile()` chạy không cần `draft`), nên chặn ở đây
+ * là cấm một việc hợp lệ. Thẻ xác nhận nói rõ hệ quả thay vì cấm.
+ *
+ * KHÔNG chặn theo trạng thái AutoCAD: hồ sơ nằm trên đĩa của app.
+ */
+export function profileDeleteBlockedReason(input: {
+  /** Hồ sơ đang chọn, hoặc `null` khi chưa chọn cái nào. */
+  selected: StandardsProfile | null;
+  busy: boolean;
+}): string {
+  if (!input.selected) return "Chưa chọn hồ sơ nào để xoá.";
+  if (input.busy) return "Đang xử lý một thao tác khác — đợi nó xong đã.";
+  /* Không có `revision` thì không xoá. Nó là token `If-Match`, và gửi rỗng làm
+     máy chủ BỎ QUA phép so tranh chấp — tức xoá một bản mình chưa từng thấy, ai
+     đó vừa sửa ở nơi khác cũng mất. Đây là đường không lấy lại được, nên "không
+     biết" phải là TỪ CHỐI chứ không phải "cứ làm". */
+  if (!input.selected.revision.trim()) {
+    return "Chưa đọc được mã phiên bản của hồ sơ này, nên không kiểm được là nó "
+      + "có vừa bị sửa ở nơi khác không. Tải lại danh sách rồi thử lại.";
+  }
+  return "";
+}
+
+/** Câu mô tả thứ sắp mất, cho thẻ xác nhận.
+ *
+ * Nói bằng thứ người dùng ĐẾM ĐƯỢC (số layer, số ánh xạ) chứ không chỉ tên: tên
+ * hai hồ sơ có thể na ná nhau, còn "31 layer" thì không nhầm được.
+ */
+export function profileDeleteSummary(profile: StandardsProfile): string {
+  const parts = [`${profile.layers.length} layer`, `${profile.mappings.length} ánh xạ`];
+  return `Xoá hẳn hồ sơ “${profile.name}” (${parts.join(" · ")}).`;
+}
+
 export function profileSaveBlockedReason(
   profile: StandardsProfile,
   /** Hồ sơ **đã lưu**, để biết KIỂU của từng trường kích thước nâng cao. Bỏ

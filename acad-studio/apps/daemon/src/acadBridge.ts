@@ -1055,11 +1055,22 @@ export async function dispatchLiveJob(
   lisp: string,
   target: string | undefined,
   wait: number,
-  options: { readOnly?: boolean } = {},
+  options: {
+    readOnly?: boolean;
+    /** Chốt cuối, chạy **SAU** khi đã giành được khoá job và **TRƯỚC** khi ghi
+     * gì xuống cầu nối. Ném lỗi ở đây là huỷ lượt gửi.
+     *
+     * Cần vì `acquireLiveJobLock()` ở ngay dưới là một lượt **CHỜ**: AutoCAD chỉ
+     * chạy một job một lúc, nên khi máy đang bận, mọi thứ nơi gọi đã kiểm trước
+     * đó đều là ảnh chụp cũ tính bằng giây. Với lệnh GHI không hoàn tác được,
+     * quãng đó đủ để hồ sơ quy chuẩn bị xoá hoặc bị sửa ở một tab khác. */
+    beforeDispatch?: () => void;
+  } = {},
 ) {
   const release = await acquireLiveJobLock();
   let backgroundOwnsRelease = false;
   try {
+    options.beforeDispatch?.();
     const jobId = randomUUID().slice(0, 8);
     ensureBridgeDirs();
     writeFileSync(join(getBridgeDir(), "job_target.txt"), target ? String(target) : "", "utf8");

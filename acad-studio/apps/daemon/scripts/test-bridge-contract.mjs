@@ -1259,6 +1259,53 @@ const ctrlSrc = readFileSync(join(__dirname, "../src/acadControl.ts"), "utf8");
 assert(!ctrlSrc.includes('join(homedir(), "MEP-Bridge")'), "acadControl no hard default MEP-Bridge path");
 assert(ctrlSrc.includes("resolveBridgeDir"), "acadControl uses resolveBridgeDir");
 
+/* ------------------------------------------------------------------ *
+ * `beforeDispatch`: chot chay SAU khi gianh duoc khoa job
+ * ------------------------------------------------------------------ *
+ *
+ * `acquireLiveJobLock()` la mot luot CHO: AutoCAD chi chay mot job mot luc, nen
+ * khi may dang ban thi moi thu noi goi da kiem truoc do deu la anh chup cu tinh
+ * bang giay. Voi lenh GHI khong hoan tac duoc, quang do du de ho so quy chuan bi
+ * xoa o mot tab khac. Hook nay la cho duy nhat con chan duoc.
+ *
+ * Kiem HANH VI chu khong kiem van ban: neu ai do bo dong goi hook, phep so nguon
+ * van xanh trong khi chot da chet. */
+{
+  const jobLsp = contract.jobLspPath(contract.resolveBridgeDir());
+  if (existsSync(jobLsp)) rmSync(jobLsp);
+
+  let thrown = null;
+  try {
+    await bridge.dispatchLiveJob("(princ)", undefined, 200, {
+      beforeDispatch: () => { throw new Error("chot-tu-choi"); },
+    });
+  } catch (error) { thrown = error; }
+
+  assert(thrown?.message === "chot-tu-choi", "beforeDispatch nem loi thi lenh phai bi huy");
+  assert(!existsSync(jobLsp), "va KHONG duoc ghi job.lsp — huy phai la huy truoc khi ghi");
+
+  /* Va khi hook khong nem thi luot gui van chay binh thuong: mot chot chan het
+     moi thu cung la mot chot hong. */
+  let ran = false;
+  await bridge.dispatchLiveJob("(princ)", undefined, 200, {
+    beforeDispatch: () => { ran = true; },
+  });
+  assert(ran, "hook phai duoc goi o luot gui binh thuong");
+
+  /* THU TU: hook phai chay SAU `acquireLiveJobLock()`. Phep do hanh vi o tren
+     khong phan biet duoc — goi truoc khoa thi ca hai khang dinh kia van xanh,
+     trong khi chot mat het y nghia: no lai kiem truoc luot cho, dung cai cua so
+     ma no sinh ra de bit. */
+  const lockLine = acadBridgeSrc.indexOf("const release = await acquireLiveJobLock();");
+  const hookLine = acadBridgeSrc.indexOf("options.beforeDispatch?.();");
+  assert(lockLine > 0 && hookLine > 0, "khong tim thay khoa job hoac hook");
+  assert(
+    hookLine > lockLine,
+    "beforeDispatch phai chay SAU khi gianh duoc khoa job, khong phai truoc",
+  );
+  assert(existsSync(jobLsp), "va luot gui binh thuong van phai ghi job.lsp");
+}
+
 writeFileSync(LOG, lines.join("\n") + "\n", "utf8");
 log("\nWrote " + LOG);
 if (failed) {

@@ -30,12 +30,15 @@ import Link from "next/link";
 import { AppShell } from "../../../components/shell/AppShell";
 import { Button } from "../../../components/ui/Button";
 import { Tag } from "../../../components/ui/Tag";
+import { ConfirmSheet } from "../../../components/ui/ConfirmSheet";
 import { DAEMON_BASE, endpoints } from "../../../lib/daemon/endpoints";
-import { daemonFailureText, daemonRecord } from "../../../lib/daemon/client";
+import { DaemonError, daemonFailureText, daemonRecord } from "../../../lib/daemon/client";
 import {
   LINEAR_FORMATS,
   applyProfileEdits,
   normalizeProfile,
+  profileDeleteBlockedReason,
+  profileDeleteSummary,
   profileSaveBlockedReason,
   readAciPalette,
   type AciPalette,
@@ -122,6 +125,13 @@ export default function StandardsPage() {
   const [draft, setDraft] = useState<StandardsProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  /* Lỗi của lượt xoá phải hiện TRONG thẻ. `error` ở tầng trang nằm SAU thẻ, nên
+     một lượt 409 sẽ trông như "bấm xong không có gì xảy ra": thẻ đứng im, nút
+     vẫn bấm được, và câu giải thích thì bị chính thẻ che mất. */
+  const [deleteError, setDeleteError] = useState("");
+  /* Vé cho lượt nạp hồ sơ — xem `loadProfiles`. */
+  const profilesSequence = useRef(0);
   const [error, setError] = useState("");
   const [savedNote, setSavedNote] = useState("");
   /* Màn này KHÔNG gắn với bản vẽ nào — nó chỉ sửa một hồ sơ trong daemon. Danh
@@ -147,10 +157,17 @@ export default function StandardsPage() {
    *  chết — người dùng thấy "đã lưu" rồi ăn xung đột không hiểu từ đâu. */
   const loadProfiles = useCallback(async (preferId?: string, throwOnFailure = false) => {
     setError("");
+    /* Vé. Nút "Thử lại" và lượt nạp lúc gắn KHÔNG đặt `busy`, nên một lượt nạp
+       vẫn đang bay khi người dùng bấm Xoá — và nó về SAU lượt xoá, gọi
+       `setProfiles` với ảnh chụp TRƯỚC khi xoá. Hồ sơ vừa xoá hiện lại trên bảng
+       như chưa có gì xảy ra, bấm vào là mở bản nháp của thứ không còn tồn tại.
+       Cùng lối với `/review`, và với `docsSequence` đã có sẵn ở đó. */
+    const ticket = ++profilesSequence.current;
     try {
       const body = await daemonRecord(
         await fetch(endpoints.standardsProfiles(DAEMON_BASE), { cache: "no-store" }),
       );
+      if (ticket !== profilesSequence.current) return;
       const list = Array.isArray(body.profiles) ? body.profiles.map(normalizeProfile) : [];
       setProfiles(list);
       setSelectedId((current) => {
@@ -158,10 +175,13 @@ export default function StandardsPage() {
         return list.some((item) => item.id === wanted) ? wanted : list[0]?.id ?? "";
       });
     } catch (failure) {
-      setError(daemonFailureText(failure));
+      /* Lỗi của một lượt đã bị thay thế thì đừng viết lên màn hình: nó mô tả một
+         yêu cầu không còn ai chờ. Nhưng VẪN ném tiếp khi nơi gọi đòi, vì nó đang
+         `await` chính lượt này. */
+      if (ticket === profilesSequence.current) setError(daemonFailureText(failure));
       if (throwOnFailure) throw failure;
     } finally {
-      setLoading(false);
+      if (ticket === profilesSequence.current) setLoading(false);
     }
   }, []);
 
@@ -343,6 +363,73 @@ export default function StandardsPage() {
     }
   }, [busy, draft, loadProfiles]);
 
+  const deleteBlocked = profileDeleteBlockedReason({ selected, busy });
+
+  /* Xoá theo `selected` — bản ĐÃ LƯU của máy chủ — chứ không theo `draft`.
+     `draft` mang cả thay đổi đang gõ dở, và `revision` của nó không phải thứ máy
+     chủ đang giữ; gửi nó trong `If-Match` là tự tạo ra một xung đột giả. */
+  const removeProfile = async () => {
+    if (deleteBlocked || !selected) return;
+    setBusy(true);
+    setError("");
+    setDeleteError("");
+    try {
+      const response = await fetch(
+        endpoints.standardsProfile(DAEMON_BASE, selected.id),
+        {
+          method: "DELETE",
+          /* `If-Match` là chốt DUY NHẤT chặn việc xoá một bản mình chưa từng
+             thấy: ai đó sửa hồ sơ ở tab khác thì máy chủ trả 409 thay vì xoá êm
+             bản mới. Không gửi thì `deleteProfile()` bỏ qua phép so hoàn toàn. */
+          headers: { "If-Match": selected.revision },
+        },
+      );
+      await daemonRecord(response);
+      setDeleteOpen(false);
+      const name = selected.name;
+      /* Chọn hồ sơ khác TRƯỚC khi nạp lại, và chọn theo VỊ TRÍ cũ: nạp lại với
+         id vừa xoá sẽ rơi về hồ sơ đầu danh sách, tức nhảy đi một chỗ người dùng
+         không yêu cầu. */
+      const index = profiles.findIndex((item) => item.id === selected.id);
+      const next = profiles[index + 1] ?? profiles[index - 1] ?? null;
+      setSelectedId(next?.id ?? "");
+      /* Bỏ hồ sơ khỏi danh sách NGAY, đừng đợi lượt nạp lại nói hộ. `loadProfiles`
+         nuốt lỗi mạng và giữ nguyên danh sách cũ, nên một lượt nạp hỏng sau khi
+         DELETE đã thành công sẽ để hồ sơ vừa xoá nằm lại trên bảng — bấm vào là
+         mở một bản nháp của thứ không còn tồn tại. Máy chủ đã xác nhận xoá; đó
+         mới là sự thật. */
+      /* Vô hiệu mọi lượt nạp đang bay TRƯỚC khi sửa danh sách: một lượt nạp bắt
+         đầu trước lượt xoá mang ảnh chụp còn hồ sơ này, và nó về sau thì hồ sơ
+         vừa xoá hiện lại. */
+      profilesSequence.current += 1;
+      setProfiles((prev) => prev.filter((item) => item.id !== selected.id));
+      await loadProfiles(next?.id ?? "");
+      setSavedNote(`Đã xoá “${name}”.`);
+    } catch (failure) {
+      /* 404 nghĩa là hồ sơ ĐÃ không còn — ai đó vừa xoá ở tab khác. Kết quả người
+         dùng muốn đã đạt, nên báo lỗi là sai: nó để lại dòng hồ sơ trên bảng, và
+         đóng-mở thẻ rồi bấm lại chỉ gửi đúng yêu cầu đó thêm một lần nữa. DELETE
+         vốn idempotent; xử như đã xong. */
+      const gone = failure instanceof DaemonError
+        && (failure.status === 404 || failure.code === "profile_not_found");
+      if (gone) {
+        setDeleteOpen(false);
+        profilesSequence.current += 1;
+        setProfiles((prev) => prev.filter((item) => item.id !== selected.id));
+        setSelectedId((current) => (current === selected.id ? "" : current));
+        await loadProfiles();
+        setSavedNote(`“${selected.name}” đã bị xoá ở nơi khác.`);
+      } else {
+        /* Còn lại thì giữ thẻ MỞ và báo ngay trong đó. Hay gặp nhất là 409 — ai
+           đó vừa SỬA hồ sơ ở nơi khác — và người dùng cần đọc được điều đó ở
+           đúng chỗ họ đang nhìn. */
+        setDeleteError(daemonFailureText(failure));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <AppShell
       screen="standards"
@@ -362,6 +449,11 @@ export default function StandardsPage() {
             title={dirty ? "Lưu hoặc bỏ thay đổi trước khi nhân bản." : undefined}
           >
             {draft ? "Nhân bản" : "Hồ sơ mới"}
+          </Button>
+          <Button onClick={() => { setDeleteError(""); setDeleteOpen(true); }}
+            disabled={!!deleteBlocked}
+            title={deleteBlocked || "Xoá hẳn hồ sơ đang chọn. Không lấy lại được."}>
+            Xoá hồ sơ
           </Button>
           <Button variant="primary" onClick={() => void save()}
             disabled={!dirty || busy || !!saveBlocked}
@@ -550,6 +642,51 @@ export default function StandardsPage() {
             setSavedNote(summary);
           }}
         />
+      ) : null}
+
+      {deleteOpen && selected ? (
+        <ConfirmSheet
+          title="Xoá hồ sơ quy chuẩn"
+          /* `data`, KHÔNG phải `immediate`. Xoá hồ sơ không chạm bản vẽ nào, nên
+             câu "gõ UNDO trong AutoCAD" của các chế độ kia là SAI ở đây — và một
+             cảnh báo sai làm hỏng đúng thứ nó tồn tại để bảo vệ. */
+          mode="data"
+          summary={profileDeleteSummary(selected)}
+          confirmLabel="Xoá hồ sơ"
+          busy={busy}
+          blocked={deleteBlocked}
+          onConfirm={() => void removeProfile()}
+          onCancel={() => { setDeleteError(""); setDeleteOpen(false); }}
+        >
+          <div className="stack" style={{ gap: "var(--s2)" }}>
+            {deleteError ? (
+              <div className="callout" data-kind="stop">
+                <span className="lbl">Chưa xoá được</span>
+                <p>{deleteError}</p>
+              </div>
+            ) : null}
+            {dirty ? (
+              <p className="hint">
+                Hồ sơ này đang có <b>thay đổi chưa lưu</b>. Chúng mất luôn cùng
+                bản đã lưu.
+              </p>
+            ) : null}
+            {/* Lượt quét sống ở MÁY CHỦ và gắn với `profileRevision`, nên màn
+                hình này không thấy được có ai đang mở lượt quét nào. Nói ra khả
+                năng đó thay vì im lặng — người dùng là người biết họ có đang mở
+                màn Kiểm tra hay không. */}
+            <p className="hint">
+              Lượt quét nào đang mở theo hồ sơ này ở màn <b>Kiểm tra bản vẽ</b> sẽ
+              không sửa được nữa; phải quét lại bằng một hồ sơ khác.
+            </p>
+            {profiles.length === 1 ? (
+              <p className="hint">
+                Đây là hồ sơ <b>cuối cùng</b>. Xoá xong thì chưa quét được bản vẽ
+                nào cho tới khi bạn bấm <b>Hồ sơ mới</b>.
+              </p>
+            ) : null}
+          </div>
+        </ConfirmSheet>
       ) : null}
     </AppShell>
   );

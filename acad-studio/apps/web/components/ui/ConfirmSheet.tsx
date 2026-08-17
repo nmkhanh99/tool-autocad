@@ -45,7 +45,17 @@ export type ConfirmMode =
    * được", "gõ UNDO trong AutoCAD", ô tích "tôi hiểu thao tác này không hoàn
    * tác được" — đều SAI ở đây. Một cảnh báo sai làm hỏng đúng thứ nó tồn tại để
    * bảo vệ: lần sau người dùng đọc lướt cả những cảnh báo đúng. */
-  | "selection";
+  | "selection"
+  /** Xoá **dữ liệu của app**, không chạm bản vẽ nào: hồ sơ quy tắc, mục thư
+   * viện. Không hoàn tác được — nhưng vì một lý do KHÁC, và đó là lý do nó phải
+   * là một chế độ riêng:
+   *
+   * - "Gõ `UNDO` trong AutoCAD" là SAI. AutoCAD không biết gì về dữ liệu này;
+   *   `UNDO` không có gì để hoàn tác.
+   * - Nút xác nhận **không** phải `WriteButton`. Nút đó khoá khi AutoCAD chưa
+   *   chạy, mà xoá một hồ sơ nằm trên đĩa của app thì không cần AutoCAD — dùng
+   *   nhầm là tính năng chết hẳn mỗi khi người dùng đóng AutoCAD. */
+  | "data";
 
 export function ConfirmSheet({
   title,
@@ -81,7 +91,14 @@ export function ConfirmSheet({
     <Modal
       title={title}
       sub={summary}
-      onClose={onCancel}
+      /* KHÔNG cho huỷ khi đang gửi. `busy` chỉ làm mờ nút ở chân thẻ; `Modal`
+         vẫn gọi `onClose` khi bấm Esc hay nền. Bấm xác nhận rồi bấm Esc là thẻ
+         biến mất trong lúc yêu cầu còn đang bay — rồi một lượt hỏng chỉ ghi vào
+         chỗ hiển thị của chính thẻ đó, tức HỎNG TRONG IM LẶNG trên một thao tác
+         không hoàn tác được.
+         Chốt nằm ở ĐÂY chứ không ở từng nơi gọi: `/review` đã phải tự vá đúng
+         cái này một lần cho thẻ chọn đối tượng, và cửa thứ hai thì không ai nhớ. */
+      onClose={() => { if (!busy) onCancel(); }}
       footer={
         <>
           <label className="check" style={{ marginRight: "auto" }}>
@@ -97,14 +114,28 @@ export function ConfirmSheet({
             </span>
           </label>
           <Button onClick={onCancel} disabled={busy}>Bỏ qua</Button>
-          <WriteButton
-            variant="primary"
-            disabled={!acked || busy || !!blocked}
-            title={blocked || undefined}
-            onClick={onConfirm}
-          >
-            {busy ? (mode === "selection" ? "Đang chọn…" : "Đang ghi…") : confirmLabel}
-          </WriteButton>
+          {/* `data` KHÔNG dùng `WriteButton`: nút đó khoá theo trạng thái AutoCAD,
+              mà xoá dữ liệu của app thì không cần AutoCAD chạy. Dùng nhầm là
+              tính năng chết hẳn mỗi khi người dùng đóng AutoCAD. */}
+          {mode === "data" ? (
+            <Button
+              variant="primary"
+              disabled={!acked || busy || !!blocked}
+              title={blocked || undefined}
+              onClick={onConfirm}
+            >
+              {busy ? "Đang xoá…" : confirmLabel}
+            </Button>
+          ) : (
+            <WriteButton
+              variant="primary"
+              disabled={!acked || busy || !!blocked}
+              title={blocked || undefined}
+              onClick={onConfirm}
+            >
+              {busy ? (mode === "selection" ? "Đang chọn…" : "Đang ghi…") : confirmLabel}
+            </WriteButton>
+          )}
         </>
       }
     >
@@ -116,6 +147,15 @@ export function ConfirmSheet({
               Thao tác này chỉ đổi <strong>bộ chọn</strong> của phiên AutoCAD.
               Không đối tượng nào bị thay đổi, và gỡ ra chỉ cần bấm{" "}
               <code>Esc</code> trong AutoCAD.
+            </p>
+          </div>
+        ) : mode === "data" ? (
+          <div className="callout" data-kind="stop">
+            <span className="lbl">Không hoàn tác được</span>
+            <p>
+              App không giữ bản sao lưu nào của dữ liệu này, và{" "}
+              <code>UNDO</code> trong AutoCAD <strong>không</strong> lấy lại được
+              — AutoCAD không biết gì về nó. Dựng lại là cách duy nhất.
             </p>
           </div>
         ) : mode === "session" ? (
@@ -160,7 +200,12 @@ export function ConfirmSheet({
         {/* Chế độ `session` KHÔNG ghi vào bản vẽ nào, nên câu "ghi vào bản vẽ
             đang hoạt động" ở đây sẽ mâu thuẫn thẳng với cảnh báo phía trên —
             trong đúng một hộp thoại mà người dùng đang cân nhắc chuyện bảo mật. */}
-        {mode === "session" ? (
+        {mode === "data" ? (
+          <p className="hint">
+            Xoá dữ liệu của app. Không bản vẽ nào bị ghi, và không cần AutoCAD
+            đang chạy.
+          </p>
+        ) : mode === "session" ? (
           <p className="hint">
             Áp lên phiên AutoCAD đang chạy. Không bản vẽ nào bị ghi.
           </p>

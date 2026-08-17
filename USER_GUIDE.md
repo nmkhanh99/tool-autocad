@@ -514,6 +514,24 @@ chặn không cho lưu.
 TEXT/MTEXT khớp mẫu rồi tìm đường bao kín chứa nó. Ở mọi loại khác, mẫu chữ nằm
 im — app chặn để bạn không gõ đầy rồi tưởng nó đang lọc.
 
+#### Xoá hồ sơ
+
+Nút **Xoá hồ sơ** ở thanh trên xoá hồ sơ **đang chọn**. Không lấy lại được: app
+không giữ bản sao, và `UNDO` trong AutoCAD không liên quan — hồ sơ nằm trên đĩa
+của app chứ không trong bản vẽ nào. Vì thế nó xoá được cả khi AutoCAD đang đóng.
+
+Thẻ xác nhận nói trước ba hệ quả:
+
+- Thay đổi **chưa lưu** của hồ sơ đó mất luôn cùng bản đã lưu.
+- Lượt quét nào đang mở theo hồ sơ này ở màn **Kiểm tra bản vẽ** sẽ không sửa
+  được nữa. Màn đó nói rõ hồ sơ đã bị xoá và khoá nút Sửa — kể cả khi bạn đang mở
+  nó ở một tab khác — nên hãy chọn hồ sơ khác rồi quét lại.
+- Nếu đây là hồ sơ **cuối cùng**, bạn chưa quét được bản vẽ nào cho tới khi bấm
+  **Hồ sơ mới**. App không tự tạo lại hồ sơ nào.
+
+Nếu ai đó vừa sửa hồ sơ ở nơi khác, máy chủ **từ chối** lượt xoá thay vì xoá đè
+lên bản mới; tải lại trang rồi xem lại trước khi xoá.
+
 #### Giới hạn nhận diện của một ánh xạ
 
 Mở bằng nút **Giới hạn** ở mỗi dòng ánh xạ. Hai nhóm, và chúng chạy ở **hai nơi

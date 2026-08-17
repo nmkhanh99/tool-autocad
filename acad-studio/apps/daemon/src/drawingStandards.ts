@@ -874,7 +874,22 @@ export function drawingStandardsRouter(
 
   router.delete("/profiles/:id", (req, res) => {
     try {
-      const removed = deleteProfile(req.params.id, req.get("if-match") || undefined);
+      /* `If-Match` là BẮT BUỘC ở đường xoá, và rỗng KHÔNG được coi là "không gửi".
+         `req.get(...) || undefined` biến chuỗi rỗng thành `undefined`, và
+         `deleteProfile()` khi đó **bỏ qua phép so revision hoàn toàn** — tức xoá
+         một bản mình chưa từng thấy. Một hồ sơ thiếu `revision` (payload cũ,
+         hoặc dữ liệu méo) vì thế mở toang chốt tranh chấp trên đúng đường không
+         lấy lại được. Không biết thì TỪ CHỐI. */
+      const expected = (req.get("if-match") || "").trim();
+      if (!expected) {
+        return res.status(428).json({
+          ok: false,
+          code: "if_match_required",
+          error: "Xoá hồ sơ phải kèm If-Match là revision của bản đang xem",
+          hint: "Tải lại danh sách hồ sơ rồi thử lại.",
+        });
+      }
+      const removed = deleteProfile(req.params.id, expected);
       return res.status(removed ? 200 : 404).json({ ok: removed });
     } catch (error) {
       return errorResponse(res, error);
@@ -887,7 +902,17 @@ export function drawingStandardsRouter(
       cleanupScans();
       const reviewOnly = req.body?.readOnly === true;
       const profile = getProfile(String(req.body?.profileId ?? ""));
-      if (!profile) return res.status(404).json({ ok: false, error: "Không tìm thấy profile" });
+      /* Mã CÓ KIỂU. Không có mã thì khách chỉ thấy 404 kèm một câu tiếng Việt và
+         phải đoán bằng regex — mà "hồ sơ vừa bị xoá ở tab khác" là chuyện có
+         thật kể từ khi có nút Xoá hồ sơ. */
+      if (!profile) {
+        return res.status(404).json({
+          ok: false,
+          code: "profile_not_found",
+          error: "Không tìm thấy profile",
+          hint: "Hồ sơ này có thể vừa bị xoá. Đọc lại danh sách rồi chọn hồ sơ khác.",
+        });
+      }
       /* Mốc nhật ký sự kiện, đặt TRƯỚC cả lượt đọc ảnh chụp đầu tiên.
        *
        * Đặt sau nó thì một sửa đổi xảy ra giữa lúc chụp và lúc đặt mốc sẽ nằm
@@ -1135,7 +1160,18 @@ export function drawingStandardsRouter(
         return res.status(400).json({ ok: false, error: "Danh sách issue không thuộc lần quét" });
       }
       const profile = getProfile(session.profileId);
-      if (!profile || profile.revision !== session.profileRevision) {
+      /* Tách "BỊ XOÁ" khỏi "đã sửa". Gộp vào `profile_stale` là bảo người dùng
+         "quét lại" — mà quét lại bằng chính hồ sơ đó thì không thể, nó không còn
+         tồn tại. Hai tình huống, hai việc phải làm. */
+      if (!profile) {
+        return res.status(409).json({
+          ok: false,
+          code: "profile_not_found",
+          error: "Hồ sơ quy chuẩn của lượt quét này không còn tồn tại",
+          hint: "Chọn một hồ sơ khác rồi quét lại.",
+        });
+      }
+      if (profile.revision !== session.profileRevision) {
         return res.status(409).json({
           ok: false,
           code: "profile_stale",
@@ -1258,7 +1294,52 @@ export function drawingStandardsRouter(
         `(progn ${programs.join("\n")} ${programs.length})`,
         { mutates: true, guardTarget: exactTarget, guardInstance: document.instance || "" },
       );
-      const job = await dependencies.dispatchLiveJob(lisp, nativeTarget, 30_000);
+      /* Đọc lại hồ sơ NGAY TRƯỚC khi ghi.
+       *
+       * Phép kiểm ở đầu handler cách chỗ này hai lượt `await` —
+       * `resolveDocument()` và `requestDrawingInfo()` — và trong quãng đó một tab
+       * khác xoá hoặc sửa được hồ sơ. Chương trình LISP đã dựng từ bản đọc lúc
+       * đầu, nên ghi tiếp là áp một hồ sơ **không còn tồn tại** vào bản vẽ, trên
+       * đường một pha không hoàn tác được.
+       *
+       * Cùng lối với chốt bản vẽ ngay phía trên: mọi thứ đọc trước một lượt
+       * `await` đều là ảnh chụp, và chốt cuối phải đọc lại sát lúc ghi. */
+      const stillThere = getProfile(session.profileId);
+      if (!stillThere) {
+        return res.status(409).json({
+          ok: false,
+          code: "profile_not_found",
+          error: "Hồ sơ quy chuẩn bị xoá giữa lúc đang chuẩn bị ghi",
+          hint: "Chọn một hồ sơ khác rồi quét lại.",
+        });
+      }
+      if (stillThere.revision !== session.profileRevision) {
+        return res.status(409).json({
+          ok: false,
+          code: "profile_stale",
+          error: "Mẫu quy chuẩn đổi giữa lúc đang chuẩn bị ghi; hãy quét lại",
+        });
+      }
+      const job = await dependencies.dispatchLiveJob(lisp, nativeTarget, 30_000, {
+        /* Chốt lần CUỐI, sau khi đã giành được khoá job. `dispatchLiveJob()` CHỜ
+           khoá khi AutoCAD đang chạy một job khác, và quãng chờ đó tính bằng
+           giây — đủ để hồ sơ bị xoá hoặc bị sửa ở một tab khác. Phép kiểm ngay
+           phía trên vẫn cần thiết (nó chặn sớm, không tốn một lượt chờ khoá),
+           nhưng nó vẫn là ảnh chụp trước cửa khoá. */
+        beforeDispatch: () => {
+          const atDispatch = getProfile(session.profileId);
+          if (!atDispatch) {
+            throw new StandardsConflictError(
+              "Hồ sơ quy chuẩn bị xoá trong lúc chờ AutoCAD rảnh; không ghi gì cả.",
+            );
+          }
+          if (atDispatch.revision !== session.profileRevision) {
+            throw new StandardsConflictError(
+              "Mẫu quy chuẩn đổi trong lúc chờ AutoCAD rảnh; hãy quét lại.",
+            );
+          }
+        },
+      });
       if (job.state !== "done" || job.result?.status !== "ok") {
         throw new Error(job.result?.message || `Áp dụng chưa hoàn tất (${job.state})`);
       }

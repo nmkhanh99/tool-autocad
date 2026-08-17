@@ -653,9 +653,30 @@ const DEFAULT_PROFILE_SOURCE = {
 
 export const DEFAULT_PROFILE: DrawingStandardProfile = sanitizeProfile(DEFAULT_PROFILE_SOURCE);
 
+const STORAGE_OPTION_KEYS = new Set(["dataDir", "env", "homeDir"]);
+
 export function resolveStandardsDataDir(
   options: StandardsStorageOptions = {},
 ): string {
+  /* Khoá lạ = LỖI, không phải "bỏ qua".
+   *
+   * Hàm này lùi về kho THẬT của người dùng khi không có `dataDir`. Một script
+   * kiểm thử gõ nhầm tên khoá (`dir` thay vì `dataDir`) vì thế không hỏng, không
+   * báo gì — nó lặng lẽ đọc và GHI vào hồ sơ thật. Đúng chuyện đã xảy ra ngày
+   * 2026-08-17: một script đo hành vi xoá đã xoá hồ sơ thật của người dùng, và
+   * không có bản sao nào để lấy lại.
+   *
+   * TypeScript chặn được ca này ở `.ts`, nhưng mọi script kiểm thử của dự án là
+   * `.mjs` — tức đúng những nơi hay truyền tuỳ chọn kho nhất thì không có kiểu.
+   * Chốt phải nằm ở lúc chạy. */
+  for (const key of Object.keys(options)) {
+    if (!STORAGE_OPTION_KEYS.has(key)) {
+      throw new StandardsValidationError(
+        `Tuỳ chọn kho không hợp lệ: "${key}". Chỉ nhận ${[...STORAGE_OPTION_KEYS].join(", ")}.`
+        + " Gõ nhầm tên khoá sẽ ghi vào kho hồ sơ THẬT của người dùng.",
+      );
+    }
+  }
   if (options.dataDir?.trim()) return options.dataDir.trim();
   const env = options.env ?? process.env;
   const configured = env.ACAD_DATA_DIR?.trim() || env.MEP_DATA_DIR?.trim();

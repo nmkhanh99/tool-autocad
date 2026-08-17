@@ -48,6 +48,7 @@ import {
   normalizeScan,
   pickBlockedReason,
   profileDriftNote,
+  rejectionNote,
   scanBlockedReason,
   severityCounts,
   sendTarget,
@@ -128,6 +129,43 @@ export default function ReviewPage() {
   /* DIM chuẩn cho lệnh căn hàng. Thuộc về LƯỢT QUÉT — dimension của lượt khác là
      handle khác — nên phải xoá khi lượt quét đổi. */
   const [dimBaseHandle, setDimBaseHandle] = useState("");
+  /* `scanId` mà MÁY CHỦ đã nói là hồ sơ không còn. Nhớ lại thay vì chỉ dựa vào
+     danh sách hồ sơ: một lượt nạp lại có thể hỏng, và khi đó `profilesKnown` là
+     `false` nên cảnh báo tắt — rồi nút Sửa bật lại cho một lượt gửi nữa. Máy chủ
+     đã nói ra sự thật đó; nó không hết hạn theo lượt đọc danh sách. */
+  /** Lượt quét mà MÁY CHỦ đã từ chối, kèm lý do đúng của chính lần từ chối đó.
+   *
+   * Nhớ lại thay vì suy ra từ danh sách hồ sơ: một lượt nạp lại có thể HỎNG, và
+   * khi đó `profileDriftNote()` không kết luận gì (đúng — không biết thì không
+   * nói), rồi nút Sửa bật lại cho một lượt gửi nữa vào đúng chỗ vừa bị từ chối.
+   * Máy chủ đã nói ra sự thật; nó không hết hạn theo lượt đọc danh sách.
+   *
+   * Mang theo CÂU CHỮ vì ba mã lỗi dẫn tới đây có ba nghĩa khác nhau — hồ sơ bị
+   * XOÁ, hồ sơ bị SỬA, và hồ sơ đổi trong lúc chờ AutoCAD rảnh. Dùng chung một
+   * câu là nói với người dùng rằng hồ sơ đã bị xoá trong khi nó chỉ vừa được
+   * sửa, và câu sai thì tệ hơn không có câu nào.
+   *
+   * Neo theo `scanId` nên không cần dọn: lượt quét mới có mã khác. */
+  const [scanRejected, setScanRejected] = useState<{ scanId: string; note: string } | null>(null);
+  /* Gương của `target` cho những hàm chạy QUA một lượt chờ: closure của chúng
+     giữ bản vẽ lúc bấm, mà người dùng đổi ô chọn bất cứ lúc nào. */
+  const targetRef = useRef("");
+  /* Gương của `profileId`: `loadProfiles` khai `useCallback([])` nên closure của
+     nó giữ giá trị lượt render đầu, mà nó cần biết lựa chọn HIỆN TẠI để không
+     ghi đè lên một lựa chọn mới hơn chính nó. */
+  const profileIdRef = useRef("");
+  /* Vé cho lượt nạp hồ sơ. Hai lượt chồng nhau là chuyện thường ở đây — nút "Thử
+     lại", nhánh lỗi của lượt quét, nhánh lỗi của lượt sửa — và lượt CŨ về muộn
+     sẽ ghi đè danh sách của lượt MỚI. Cùng lối với `docsSequence`/`scanSequence`
+     đã có sẵn trong tệp này. */
+  const profilesSequence = useRef(0);
+  /* Gương của ba đầu vào biến động mà chốt quét cần. `runScan` chạy qua một lượt
+     `await` (nút "Quét lại" nạp hồ sơ trước), nên closure của nó giữ giá trị lúc
+     bấm — mà AutoCAD tắt được, bản vẽ đóng được, và một lượt quét khác bắt đầu
+     được, tất cả trong quãng đó. */
+  const scanBusyRef = useRef(false);
+  const docsAliveRef = useRef(false);
+  const activeFileRef = useRef("");
   /* Gương của `pickOp` cho hiệu ứng ở trên. Đưa `pickOp` vào deps là hiệu ứng
      chạy lại ngay khi vừa đặt nó, và `pickScanId` lúc đó đã bằng `scanId` hiện
      tại nên không huỷ nhầm — nhưng phụ thuộc thừa vào một giá trị đổi liên tục
@@ -137,6 +175,9 @@ export default function ReviewPage() {
      lượt quét đổi. Neo theo `scanId` chứ không theo tham chiếu `scan` — mọi lượt
      nạp lại hồ sơ đều tạo tham chiếu mới. */
   const scanIdRef = useRef("");
+  /* Hồ sơ mà lượt quét ĐANG HIỂN THỊ đã dùng. Cần để trả lời đúng một câu:
+     "lượt quét vừa hỏng có nói gì về kết quả đang bày trên màn hình không?" */
+  const scannedProfileRef = useRef("");
   const pickOpRef = useRef<{ op: StagedOp; count: number; label: string } | null>(null);
   /* Gương của `pickBusy` cho hiệu ứng huỷ-theo-`scanId`: hiệu ứng đó neo vào
      `scan?.scanId` nên không được phép có `pickBusy` trong deps. */
@@ -168,18 +209,76 @@ export default function ReviewPage() {
   }, []);
   useEffect(loadDocs, [loadDocs]);
 
-  const loadProfiles = useCallback(() => {
+  /** Nạp danh sách hồ sơ, và **TRẢ VỀ** kết quả của chính lượt đó.
+   *
+   * Trả về thay vì chỉ đăng lên state, vì nơi gọi cần biết ngay: `setProfileId`
+   * mới chỉ **xếp lịch** một lượt cập nhật, còn hàm đang chạy thì giữ nguyên
+   * closure của lượt render đã dựng ra nó — tức vẫn thấy `profileId` CŨ. Đọc
+   * ngược lại từ state (hay từ một `ref` gán trong `useEffect`) là đọc một giá
+   * trị chưa tới. Đây đúng là cái bẫy đã cắn ba lần trong tệp này. */
+  const loadProfiles = useCallback(async (
+    /** Hồ sơ muốn GIỮ nếu nó còn trong danh sách. Nơi gọi truyền vào thay vì để
+     * hàm này đọc state: `loadProfiles` khai `useCallback([])` nên closure của nó
+     * giữ giá trị của lượt render ĐẦU TIÊN — luôn rỗng. */
+    preferId?: string,
+  ): Promise<{ ok: boolean; profileId: string }> => {
     setProfilesError("");
-    fetch(endpoints.standardsProfiles(DAEMON_BASE), { cache: "no-store" })
-      .then(daemonRecord)
-      .then((body) => {
-        const list = Array.isArray(body.profiles) ? body.profiles.map(normalizeProfile) : [];
-        setProfiles(list);
-        setProfileId((current) => current || String(body.activeProfileId || "") || list[0]?.id || "");
-      })
-      .catch((failure) => setProfilesError(daemonFailureText(failure)));
+    const ticket = ++profilesSequence.current;
+    /* Lựa chọn LÚC BẮT ĐẦU, để biết người dùng có tự đổi trong lúc chờ không. */
+    const before = profileIdRef.current;
+    try {
+      const body = await daemonRecord(
+        await fetch(endpoints.standardsProfiles(DAEMON_BASE), { cache: "no-store" }),
+      );
+      /* Lượt nạp MỚI đã bắt đầu trong lúc lượt này còn bay: bỏ kết quả này đi.
+         Ghi đè là bày một danh sách cũ hơn thứ đang tới. */
+      /* Lượt nạp MỚI đã bắt đầu: lượt này không còn thẩm quyền gì. Trả `ok:true`
+         là để nơi gọi tưởng đã xong rồi quét bằng một id có thể đã chết — trong
+         khi lượt mới còn đang trên đường chọn hồ sơ thay thế. Không có thẩm
+         quyền thì nói là KHÔNG XONG, đừng nói là xong với một giá trị mượn. */
+      if (ticket !== profilesSequence.current) return { ok: false, profileId: "" };
+      const list = Array.isArray(body.profiles) ? body.profiles.map(normalizeProfile) : [];
+      /* Tính TRƯỚC, ngoài mọi updater. Hàm cập nhật của `setState` chạy ở lượt
+         RENDER chứ không phải lúc gọi, nên gán vào một biến ngoài rồi đọc lại
+         ngay dòng sau là đọc một giá trị chưa được đặt — bản trước của tôi trả
+         về chuỗi rỗng và nút "Quét lại" im lặng không làm gì. */
+      const active = String(body.activeProfileId || "");
+      const chosen = preferId && list.some((item) => item.id === preferId)
+        ? preferId
+        : list.some((item) => item.id === active) ? active : list[0]?.id || "";
+      setProfiles(list);
+      /* Người dùng tự đổi ô chọn TRONG LÚC lượt nạp này đang bay thì tôn trọng
+         lựa chọn mới. Ghi đè vô điều kiện là kéo họ về hồ sơ cũ, rồi nút "Quét
+         lại" quét đúng cái hồ sơ họ vừa rời đi.
+         So với lựa chọn LÚC BẮT ĐẦU, không so với `chosen`: bỏ chọn (về rỗng) là
+         một hành động CÓ CHỦ Ý — "đừng quét gì cả" — mà một phép kiểm `if (now &&
+         …)` lại đọc thành "không đổi gì" rồi quét tiếp bằng hồ sơ cũ. */
+      const now = profileIdRef.current;
+      if (now !== before) {
+        /* Bỏ chọn = HUỶ. Trả thất bại để nơi gọi dừng hẳn, đừng tự chọn hộ. */
+        if (!now) return { ok: false, profileId: "" };
+        if (list.some((item) => item.id === now)) return { ok: true, profileId: now };
+      }
+      /* Hồ sơ đã chọn chỉ được giữ khi còn trong danh sách: nó có thể vừa bị xoá
+         ở màn Hồ sơ tiêu chuẩn (một tab khác), và giữ một id đã chết là để nút
+         Quét sáng lên rồi ăn 404. */
+      setProfileId(chosen);
+      return { ok: true, profileId: chosen };
+    } catch (failure) {
+      /* Lỗi của một lượt đã bị thay thế thì đừng viết lên màn hình: nó mô tả một
+         yêu cầu không còn ai chờ. */
+      if (ticket !== profilesSequence.current) return { ok: false, profileId: "" };
+      setProfilesError(daemonFailureText(failure));
+      return { ok: false, profileId: "" };
+    }
   }, []);
-  useEffect(loadProfiles, [loadProfiles]);
+  /* `void` chứ không truyền thẳng: `loadProfiles` nay TRẢ promise (nhánh lỗi cần
+     `await` nó), mà một hiệu ứng trả promise thì React đọc nhầm thành hàm dọn. */
+  useEffect(() => { void loadProfiles(); }, [loadProfiles]);
+  useEffect(() => { targetRef.current = target; }, [target]);
+  useEffect(() => { profileIdRef.current = profileId; }, [profileId]);
+  useEffect(() => { scanBusyRef.current = scanBusy; }, [scanBusy]);
+  useEffect(() => { docsAliveRef.current = docsAlive; }, [docsAlive]);
 
   useAcadEvents(DAEMON_BASE, (event) => {
     if (event.type.startsWith("doc") || event.type === "pluginLoaded") loadDocs();
@@ -231,6 +330,7 @@ export default function ReviewPage() {
     () => sendTarget(docs.find((doc) => doc.active) ?? {}),
     [docs],
   );
+  useEffect(() => { activeFileRef.current = activeFile; }, [activeFile]);
 
   /* Tiêu đề của bản vẽ ĐÃ QUÉT. Sự kiện reactor mang `activeDoc` là TIÊU ĐỀ,
      còn `scan.target` là đường dẫn tệp — so thẳng hai thứ đó là không bao giờ
@@ -407,7 +507,8 @@ export default function ReviewPage() {
       setDimBaseHandle("");
     }
     scanIdRef.current = id;
-  }, [scan?.scanId]);
+    scannedProfileRef.current = scan?.profileId ?? "";
+  }, [scan?.scanId, scan?.profileId]);
 
   const cancelPick = useCallback(() => {
     /* `busy` chỉ khoá nút ở chân thẻ; `Modal` vẫn gọi `onClose` khi bấm Esc hay
@@ -425,7 +526,14 @@ export default function ReviewPage() {
   }, [pickOp, pickBusy]);
 
   const profile = profiles.find((item) => item.id === profileId) ?? null;
-  const driftNote = profileDriftNote(scan, profile);
+  /* `!profilesError` = danh sách hồ sơ ĐỌC ĐƯỢC. Thiếu vế này thì một lượt đọc
+     hỏng trông y hệt "hồ sơ đã bị xoá", và cảnh báo sai sẽ khoá nút Sửa mà không
+     có đường gỡ. */
+  /* Lời từ chối của máy chủ HẾT HIỆU LỰC khi hồ sơ quay về đúng nội dung lúc
+     quét — `revision` là hash nội dung, nên hoàn nguyên một lần sửa cho ra đúng
+     hash cũ và máy chủ sẽ nhận lượt sửa trở lại. Xem `rejectionNote()`. */
+  const rejectedNote = rejectionNote({ scan, profile, rejected: scanRejected });
+  const driftNote = rejectedNote || profileDriftNote(scan, profile, !profilesError);
   const issues = scan?.issues ?? [];
   const counts = severityCounts(issues);
   /* Ghép hai bộ lọc ở ĐÂY chứ không nhét nhóm vào `filterIssues()`:
@@ -471,8 +579,25 @@ export default function ReviewPage() {
      thay vì để người dùng bấm rồi ăn 400. */
   const unsupported = pickedIssues.map(unsupportedFixReason).find(Boolean) ?? "";
 
-  const runScan = useCallback(async () => {
-    if (scanBlocked) return;
+  /** `overrideProfileId` = hồ sơ vừa nạp về, khi nơi gọi biết rõ hơn closure này.
+   * Không có thì dùng hồ sơ đang chọn. */
+  const runScan = useCallback(async (overrideProfileId?: string) => {
+    const useProfileId = overrideProfileId || profileId;
+    /* TÍNH LẠI chốt, và tính bằng GƯƠNG chứ không bằng closure.
+       Bản trước của tôi viết một phép chặn chỉ cần có override là bỏ qua HẾT —
+       bản vẽ không còn hoạt động, AutoCAD tắt, lượt quét khác đang chạy. Override
+       sinh ra để nói "dùng hồ sơ NÀY", không phải để mở cửa.
+       Đọc từ gương vì hàm này chạy qua một lượt `await` khi nút "Quét lại" nạp
+       hồ sơ trước: closure giữ giá trị lúc bấm, mà cả ba thứ kia đổi được trong
+       quãng đó. `target` thì KHÔNG lấy từ gương — nơi gọi đã bỏ cuộc nếu người
+       dùng đổi bản vẽ, và quét sang bản vẽ mới là làm một việc không ai yêu cầu. */
+    if (scanBlockedReason({
+      target,
+      activeTarget: activeFileRef.current,
+      profileId: useProfileId,
+      docsAlive: docsAliveRef.current,
+      busy: scanBusyRef.current,
+    })) return;
     const ticket = ++scanSequence.current;
     /* Cờ bẩn thuộc về TỪNG lượt quét: một lượt hỏng để sót cờ sẽ chặn nút sửa
        của lượt sạch tiếp theo. */
@@ -489,7 +614,7 @@ export default function ReviewPage() {
              không, và dispatch job KHÔNG kích hoạt tab. Chốt phía giao diện là
              chưa đủ: người dùng đổi tab trong AutoCAD giữa lúc bấm và lúc yêu
              cầu tới nơi thì daemon sẽ tự kích hoạt bản vẽ cũ sau lưng họ. */
-          body: JSON.stringify({ target, profileId, readOnly: true }),
+          body: JSON.stringify({ target, profileId: useProfileId, readOnly: true }),
         }),
       );
       if (ticket !== scanSequence.current) return;
@@ -516,11 +641,26 @@ export default function ReviewPage() {
          vẫn bấm sửa được nếu không đánh dấu — và nó mô tả một trạng thái đã
          qua hai lần. */
       if (code === "drawing_stale") setDrawingChanged(true);
-      if (code === "profile_stale") loadProfiles();
+      /* Lượt QUÉT hỏng vì hồ sơ không còn: chỉ kết luận về lượt quét đang hiển
+         thị khi nó dùng ĐÚNG hồ sơ vừa chết. Quét bằng hồ sơ khác thì kết quả cũ
+         vẫn có thể còn dùng được, và đánh dấu nó là khoá oan.
+         Ngược lại, cùng hồ sơ thì nó chết thật — và phải ghi nhớ, vì nếu lượt
+         nạp lại phía dưới HỎNG thì hồ sơ cũ còn nguyên trong state,
+         `profileDriftNote()` không kết luận gì (đúng: không biết thì không nói),
+         rồi nút Sửa bật lại cho một lượt gửi vào một lượt quét đã chết. */
+      if (code === "profile_not_found" && scanIdRef.current
+        && scannedProfileRef.current === useProfileId) {
+        setScanRejected({
+          scanId: scanIdRef.current,
+          note: "Hồ sơ quy chuẩn của lượt quét này không còn tồn tại — máy chủ đã "
+            + "từ chối. Chọn một hồ sơ khác rồi quét lại.",
+        });
+      }
+      if (code === "profile_stale" || code === "profile_not_found") await loadProfiles(useProfileId);
     } finally {
       if (ticket === scanSequence.current) setScanBusy(false);
     }
-  }, [scanBlocked, target, profileId, loadProfiles]);
+  }, [target, activeFile, profileId, docsAlive, scanBusy, loadProfiles]);
 
   /* KHÔNG `useCallback`. Hàm này đọc năm mẩu trạng thái và gửi một lượt ghi
      KHÔNG hoàn tác được; bọc `useCallback` là dựng một bản chụp trạng thái tại
@@ -580,7 +720,24 @@ export default function ReviewPage() {
          Không nạp lại thì bản sao trên màn hình giữ revision cũ mãi, và cảnh
          báo lệch hồ sơ chặn nút sửa ở MỌI lượt quét sau đó. */
       const code = failure instanceof DaemonError ? failure.code : "";
-      if (code === "profile_stale") loadProfiles();
+      /* Ba mã, ba NGHĨA khác nhau — nói đúng từng cái.
+         `standards_revision_conflict` là mã của chốt chạy SAU cửa khoá job
+         (`beforeDispatch`), và nó dùng chung cho cả "bị xoá" lẫn "bị sửa" trong
+         lúc chờ AutoCAD rảnh; nên câu của nó không được khẳng định là đã xoá.
+         Ghi nhớ TRƯỚC khi nạp lại: lượt nạp có thể hỏng, và khi đó không còn gì
+         nói cho người dùng biết lượt quét này đã chết. */
+      const rejection = code === "profile_not_found"
+        ? "Hồ sơ quy chuẩn của lượt quét này không còn tồn tại — máy chủ đã từ "
+          + "chối. Chọn một hồ sơ khác rồi quét lại."
+        : code === "profile_stale"
+          ? "Hồ sơ quy chuẩn đã đổi sau lượt quét này và máy chủ đã từ chối lượt "
+            + "sửa. Quét lại trước khi sửa."
+          : code === "standards_revision_conflict"
+            ? "Hồ sơ quy chuẩn đổi hoặc bị xoá trong lúc chờ AutoCAD rảnh, nên "
+              + "máy chủ không ghi gì cả. Quét lại trước khi sửa."
+            : "";
+      if (rejection) setScanRejected({ scanId: scan.scanId, note: rejection });
+      if (rejection) await loadProfiles(profileId);
       /* Bản vẽ đổi mà app lỡ mất sự kiện: lượt quét này đã chết, đừng để nó
          bấm lại được. */
       if (code === "drawing_stale") setDrawingChanged(true);
@@ -639,7 +796,7 @@ export default function ReviewPage() {
             <span className="bt">
               <b>Không đọc được hồ sơ quy tắc.</b> {profilesError}
             </span>
-            <span className="actions"><Button onClick={loadProfiles}>Thử lại</Button></span>
+            <span className="actions"><Button onClick={() => void loadProfiles(profileId)}>Thử lại</Button></span>
           </div>
         ) : null}
 
@@ -649,11 +806,27 @@ export default function ReviewPage() {
             <span className="bt"><b>Lượt quét đã cũ.</b> {driftNote}</span>
             <span className="actions">
               <Button
-                /* Nạp lại HỒ SƠ trước rồi mới quét: nếu tab khác đã sửa nó, quét
-                   lại một mình chỉ lấy về revision mới của máy chủ trong khi màn
-                   hình vẫn giữ bản cũ — và cảnh báo này quay lại y nguyên, mãi
-                   mãi, cho tới khi tải lại trang. */
-                onClick={() => { loadProfiles(); void runScan(); }}
+                /* Quét bằng id VỪA NẠP VỀ, không bằng closure. `setProfileId` chỉ
+                   xếp lịch một lượt cập nhật, còn hàm đang chạy giữ nguyên closure
+                   của lượt render đã dựng ra nó — nên gọi `runScan()` trống tay là
+                   quét bằng đúng cái id vừa chết, và lần bấm đầu chắc chắn hỏng.
+                   `await` thôi KHÔNG cứu được: chờ promise không làm closure mới
+                   ra đời. Phải chuyền giá trị. */
+                onClick={() => void (async () => {
+                  /* Giữ hồ sơ đang chọn NẾU nó còn sống; `loadProfiles` tự bỏ nó
+                     khi nó đã bị xoá. */
+                  const loaded = await loadProfiles(profileId);
+                  /* Lượt nạp HỎNG thì đừng quét: id cũ vẫn còn đó, và quét bằng
+                     nó chỉ lặp lại đúng lỗi vừa rồi. */
+                  if (!loaded.ok || !loaded.profileId) return;
+                  /* Bản vẽ đổi TRONG LÚC chờ nạp hồ sơ thì bỏ luôn. `runScan` ở
+                     đây là closure dựng trước lượt chờ, nên `target` trong nó là
+                     bản vẽ CŨ — quét tiếp là bày kết quả của bản vẽ này dưới tên
+                     bản vẽ kia. `abandonScan()` đã dọn lượt quét cũ, nhưng nó
+                     không với tới được closure đang nằm trong tay hàm này. */
+                  if (targetRef.current !== target) return;
+                  await runScan(loaded.profileId);
+                })()}
                 disabled={!!scanBlocked}
               >
                 {profile && profile.version > 0

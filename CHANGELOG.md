@@ -1,5 +1,367 @@
 # CHANGELOG
 
+## 2026-08-17 — Nút Xoá hồ sơ, và một lượt mất dữ liệu do chính tôi gây ra
+
+Mục cuối của kế hoạch. `DELETE /profiles/:id` đã có ở daemon từ lâu; thiếu mỗi
+giao diện, và sau khi xoá panel legacy thì đây là chức năng **duy nhất** mất hẳn
+khỏi app.
+
+### Tôi xoá mất kho hồ sơ thật của người dùng
+
+Phải ghi lại trước phần tính năng, vì nó quan trọng hơn.
+
+Để đo hành vi `deleteProfile`, tôi viết một script tạm và truyền tuỳ chọn kho là
+`{ dir: store }`. Khoá đúng là **`dataDir`**. `StandardsStorageOptions` bỏ qua
+khoá lạ trong im lặng, nên `resolveStandardsDataDir()` lùi về kho mặc định —
+`~/Library/Application Support/acad-studio` — và script chạy đúng kịch bản tôi
+viết, trong đó có bước "xoá nốt hồ sơ cuối cùng", trên **dữ liệu thật**.
+
+Kho trước đó có đúng 1 hồ sơ (phép khẳng định đầu của script xanh nên con số này
+chắc chắn). Nó bị xoá. Không có bản sao: thư mục không có backup,
+`tmutil listlocalsnapshots /` rỗng, Time Machine chưa cấu hình đích, và file nằm
+ngoài repo. Đã đưa kho về trạng thái sạch — hồ sơ mặc định `default-a3-mm` như
+một máy vừa cài — nhưng nếu hồ sơ cũ từng được chỉnh thì phần chỉnh đã mất.
+
+**Hai chốt sinh ra từ đây:**
+
+- `resolveStandardsDataDir()` nay **ném lỗi** khi gặp khoá tuỳ chọn lạ. Trước đó
+  nó bỏ qua trong im lặng rồi ghi vào kho thật. TypeScript chặn được ca này ở
+  `.ts`, nhưng mọi script kiểm thử của dự án là `.mjs` — tức đúng những nơi hay
+  truyền tuỳ chọn kho nhất thì không có kiểu. Chốt phải nằm ở lúc chạy.
+- `test-drawing-standards.mjs` và `test-standards-engine.mjs` nay đặt
+  `ACAD_DATA_DIR` riêng. Trước đó chúng đọc **kho thật** — và đó là cách tôi phát
+  hiện ra thiệt hại: test router hỏng vì hồ sơ mặc định biến mất. Một test phụ
+  thuộc dữ liệu người dùng thì vừa không đáng tin vừa nguy hiểm.
+
+Bài học không phải "cẩn thận hơn": repo **đã có** harness đúng
+(`test-standards-profile.mjs` dùng `{ dataDir }`) và tôi tự viết script mới thay
+vì mở rộng nó. Phép đo mới giờ nằm trong chính harness đó.
+
+### Chế độ xác nhận thứ năm: `data`
+
+`ConfirmSheet` khai rõ nó là hộp xác nhận cho **lệnh ghi vào bản vẽ**, và cả bốn
+chế độ đều nói về AutoCAD. Xoá hồ sơ không chạm bản vẽ nào, nên mọi chế độ có sẵn
+đều nói một câu SAI — mà chính tệp đó đã cảnh báo: một cảnh báo sai làm hỏng đúng
+thứ nó tồn tại để bảo vệ.
+
+Hai điểm khác biệt của `data`, và điểm thứ hai mới là điểm quan trọng:
+
+- Không nhắc `UNDO`: AutoCAD không biết gì về dữ liệu này.
+- **Không dùng `WriteButton`.** Nút đó mờ đi khi AutoCAD chưa chạy hoặc đang bận.
+  Dùng nó ở đây là nút Xoá hồ sơ **chết hẳn mỗi khi người dùng đóng AutoCAD** —
+  một tính năng hỏng theo kiểu không ai đoán ra vì sao.
+
+### Xoá theo bản ĐÃ LƯU, và gửi `If-Match`
+
+Xoá theo `selected` chứ không theo `draft`: `draft` mang cả thay đổi đang gõ dở
+và `revision` của nó không phải thứ máy chủ đang giữ, nên gửi nó trong `If-Match`
+là tự tạo một xung đột giả.
+
+`If-Match` là chốt **duy nhất** chặn việc xoá một bản mình chưa từng thấy — ai đó
+sửa hồ sơ ở tab khác thì máy chủ trả 409 thay vì xoá êm bản mới. Không gửi thì
+`deleteProfile()` bỏ qua phép so hoàn toàn.
+
+Sau khi xoá, chọn hồ sơ kế **theo vị trí cũ** chứ không để rơi về đầu danh sách —
+nhảy đi một chỗ người dùng không yêu cầu là một cú mất phương hướng nhỏ mà tránh
+được.
+
+### Thẻ xác nhận nói ba hệ quả, không cấm cái nào
+
+Không chặn xoá hồ sơ cuối cùng: đã **đo** rằng danh sách rỗng giữ được rỗng
+(không tự gieo lại) và tạo mới được từ đó, nên chặn là cấm một việc hợp lệ. Thẻ
+nói thẳng ba thứ: thay đổi chưa lưu mất luôn · lượt quét đang mở ở màn Kiểm tra
+sẽ không sửa được nữa · nếu là hồ sơ cuối thì chưa quét được gì cho tới khi bấm
+"Hồ sơ mới".
+
+### Vòng review: ba đường hỏng mà trông như không hỏng
+
+Cả ba đều cùng một hình dạng, và là hình dạng tệ nhất trên một thao tác không lấy
+lại được: **thao tác hỏng nhưng màn hình không nói**.
+
+- **Lỗi báo sau lưng thẻ xác nhận.** `setError()` viết vào băng ở tầng trang, mà
+  thẻ nằm ĐÈ lên nó — nên một lượt 409 (ai đó vừa sửa hồ sơ ở nơi khác) trông
+  đúng như "bấm xong không có gì xảy ra": thẻ đứng im, nút vẫn bấm được, câu giải
+  thích bị chính thẻ che. Nay lỗi hiện TRONG thẻ.
+- **Lượt nạp lại hỏng làm hồ sơ đã xoá sống lại.** `loadProfiles()` nuốt lỗi mạng
+  và giữ nguyên danh sách cũ, nên DELETE thành công + GET hỏng = hồ sơ vừa xoá
+  vẫn nằm trên bảng, bấm vào là mở bản nháp của thứ không còn tồn tại. Nay gỡ nó
+  khỏi danh sách NGAY: máy chủ đã xác nhận xoá, đó mới là sự thật.
+- **`/review` giữ một hồ sơ đã chết.** Nó làm `setProfileId((current) => current
+  || …)` — giữ lựa chọn cũ vô điều kiện. Xoá hồ sơ ở tab `/standards` thì tab
+  `/review` vẫn sáng nút Quét rồi ăn 404, hoặc trả `profile_stale` mãi mà không
+  nói được vì sao. Nay chỉ giữ khi id còn trong danh sách.
+
+Bốn đột biến, tất cả đỏ.
+
+### Vòng review tiếp: hồ sơ biến mất mà lượt quét vẫn tưởng còn
+
+Xoá hồ sơ ở màn Hồ sơ tiêu chuẩn không làm lượt quét đang mở ở `/review` biến
+mất — và `profileDriftNote()` trả **rỗng** khi không tra ra hồ sơ, nên nút Sửa
+sáng nguyên rồi ăn 409 lặp đi lặp lại. Ba bản sửa:
+
+- **`profileDriftNote()` chặn khi hồ sơ đã mất** — nhưng chỉ khi **biết** là mất.
+  Một lượt đọc danh sách hỏng cũng cho ra `null`, và chặn vì "không biết" là khoá
+  mất nút sửa không đường gỡ. Đúng nguyên tắc chính hàm này đã ghi cho ca thiếu
+  `revision`; nay nó nhận thêm cờ "danh sách đọc được".
+- **Máy chủ tách `profile_not_found` khỏi `profile_stale`.** Gộp chung là bảo
+  người dùng "quét lại" — mà quét lại bằng chính hồ sơ đó thì không thể, nó không
+  còn tồn tại. Hai tình huống, hai việc phải làm. Đường `/scan` cũng thôi trả 404
+  trần không mã: không có mã thì khách phải đoán bằng regex trên câu tiếng Việt.
+- **`/review` nạp lại danh sách** khi nhận mã đó, để ô chọn thôi trỏ vào một id
+  đã chết.
+
+Đột biến "gộp lại vào `profile_stale`" **không** bị `check:guards` bắt — mã vẫn
+được đường `/scan` phát nên không có entry mồ côi nào. Khoá thêm bằng một bất
+biến văn bản trên đường `/apply`.
+
+### Vòng review tiếp nữa: ba đường bất đồng bộ
+
+- **Thẻ xác nhận đóng được trong lúc lệnh còn đang bay.** `busy` chỉ làm mờ nút ở
+  chân thẻ; `Modal` vẫn gọi `onClose` khi bấm Esc hay nền. Bấm xác nhận rồi bấm
+  Esc là thẻ biến mất giữa chừng, rồi một lượt hỏng chỉ ghi vào chỗ hiển thị của
+  **chính thẻ đó** — hỏng trong im lặng, trên thao tác không hoàn tác được.
+
+  Đây là cái bẫy repo **đã ghi lại**: `/review` từng phải tự vá đúng nó cho thẻ
+  chọn đối tượng, và chú thích ở đó nói nguyên văn "`busy` chỉ khoá nút ở chân
+  thẻ". Tôi vẫn giẫm phải ở cửa thứ hai — nên lần này chốt nằm ở **primitive**,
+  không ở nơi gọi.
+- **`DELETE` trả 404 là ĐÃ xoá, không phải lỗi.** Ai đó vừa xoá ở tab khác thì
+  kết quả người dùng muốn đã đạt. Báo lỗi là để lại dòng hồ sơ trên bảng rồi mời
+  họ bấm lại đúng yêu cầu đó. `DELETE` vốn idempotent.
+- **Lượt nạp lại hồ sơ không được chạy nền.** Bỏ `await` thì hồ sơ cũ còn nguyên
+  suốt lúc đang nạp, `driftNote` vẫn rỗng, và nút Sửa bật lại cho một lượt gửi
+  nữa vào đúng hồ sơ đã bị xoá. Thêm nữa: một lượt nạp **hỏng** làm
+  `profilesKnown` thành `false`, cảnh báo tắt, nút lại bật. Nên `/review` **nhớ**
+  lời máy chủ theo `scanId` — sự thật đó không hết hạn theo lượt đọc danh sách.
+
+Bốn đột biến, tất cả đỏ.
+
+### Vòng chốt: lời từ chối cũng phải hết hiệu lực
+
+Nhớ lời máy chủ từ chối là đúng, nhưng tôi nhớ **vĩnh viễn** theo `scanId`. Trong
+khi `revision` là hash **nội dung**: hoàn nguyên một lần sửa cho ra đúng hash cũ,
+máy chủ sẽ nhận lượt sửa trở lại, mà màn hình vẫn khoá nút Sửa cho tới khi quét
+lại vô ích. Điều này còn **trái với một quyết định đã ghi sẵn** trong dự án —
+"lưu lại một nội dung y hệt không giết lượt quét đang mở, và đó là hành vi đúng".
+
+Tách ra `rejectionNote()` — hàm thuần, có test — và so **cả `id`** chứ không chỉ
+hash: hai hồ sơ nội dung giống hệt nhau mang **cùng một** hash (tính năng, không
+phải trùng lặp), nên chỉ so hash sẽ xoá lời từ chối vì một hồ sơ khác tình cờ
+giống nội dung.
+
+Đột biến lôi ra một ca tôi bỏ sót: **hai vế rỗng** không phải là "khớp". Máy chủ
+bản cũ không phát `profileRevision`, và `"" === ""` khi đó là hai cái KHÔNG BIẾT
+trùng nhau — không phải bằng chứng nội dung đã quay về. Cùng nguyên tắc mà
+`profileDriftNote()` đã ghi cho chính nó.
+
+### Vòng trước: bỏ chọn hồ sơ là một hành động, không phải một khoảng trống
+
+Phép kiểm "người dùng có tự đổi lựa chọn trong lúc chờ không" của tôi viết
+`if (now && now !== chosen)`. Vế `now &&` đọc **bỏ chọn** (về rỗng) thành "không
+đổi gì", nên nút "Quét lại" vẫn quét bằng hồ sơ cũ — đúng thứ người dùng vừa nói
+là không muốn.
+
+Sửa hai chỗ cùng lúc: so với lựa chọn **lúc bắt đầu** thay vì với kết quả hàm tự
+chọn, và coi rỗng là **HUỶ** (trả thất bại để nơi gọi dừng hẳn, đừng tự chọn hộ).
+
+### Vòng trước: `If-Match` rỗng mở toang chốt tranh chấp
+
+`req.get("if-match") || undefined` biến chuỗi **rỗng** thành `undefined`, và
+`deleteProfile()` khi đó **bỏ qua phép so revision hoàn toàn** — tức xoá một bản
+mình chưa từng thấy. Một hồ sơ thiếu `revision` (payload cũ, dữ liệu méo) vì thế
+mở toang chốt tranh chấp trên đúng đường không lấy lại được: ai đó vừa sửa hồ sơ
+ở nơi khác cũng mất.
+
+Lại đúng một hình dạng đã gặp nhiều lần trong đợt này — **"không biết" hoá thành
+"cho phép"**. Chặn ở cả hai phía: đường xoá nay **đòi** `If-Match` (428
+`if_match_required`, và rỗng KHÔNG được coi là "không gửi"), còn nút Xoá bị khoá
+khi hồ sơ không có `revision`.
+
+Một fixture cũ của tôi dựng hồ sơ **không có `revision`** rồi khẳng định nút Xoá
+mở — nay nó đỏ, và đỏ ĐÚNG: hồ sơ thật từ máy chủ luôn có `revision`. Sửa fixture,
+không nới chốt.
+
+Ghi thêm: đột biến "vẫn bỏ qua phép so khi rỗng" **không** làm test đỏ, vì chốt
+428 phía trên đã chặn nên nhánh đó không tới được. Đó là chốt thừa có chủ ý —
+không phải chốt thiếu test.
+
+### Vòng trước: "đã bị thay thế" không phải là "xong"
+
+- **Lượt nạp bị thay thế vẫn báo `ok`.** Vé của tôi bỏ đúng kết quả cũ, nhưng rồi
+  trả `{ ok: true, profileId: profileIdRef.current }` — một giá trị MƯỢN. Nơi gọi
+  tưởng đã xong và quét bằng id có thể đã chết, trong khi lượt mới còn đang trên
+  đường chọn hồ sơ thay thế. Không có thẩm quyền thì nói là **không xong**.
+- **Lượt quét chết mà không ai đánh dấu.** Hai vòng trước tôi gỡ phép đánh dấu ở
+  nhánh lỗi lượt quét vì nó chặn oan — nhưng gỡ hẳn thì mất luôn ca đúng: quét
+  lại bằng **chính hồ sơ** của lượt đang hiển thị, hồ sơ đó đã bị xoá, và lượt
+  nạp lại hỏng. Khi đó hồ sơ cũ còn nguyên trong state, `profileDriftNote()`
+  không kết luận gì (đúng — không biết thì không nói), và nút Sửa bật lại cho một
+  lượt gửi vào một lượt quét đã chết. Nay chỉ đánh dấu khi hồ sơ **khớp**.
+
+Một phép khẳng định cũ của tôi phải **gỡ bỏ**: nó khoá đúng cái hành vi
+`{ ok: true, … }` vừa được chứng minh là sai. Test khoá một hành vi sai thì phải
+đi cùng hành vi đó.
+
+Ghi thêm về lượt review này: job Codex **treo 39 phút** ở pha kiểm, và log cho
+thấy nó đang quét `BAO-CAO-DOI-CHIEU-UI.html` (64K, untracked) chứ không phải mã
+đang sửa. Đã huỷ và chạy lại.
+
+### Vòng trước: cùng lỗ đó, nhưng ở màn Hồ sơ
+
+`loadProfiles()` của `/standards` cũng không có vé. Nút "Thử lại" và lượt nạp lúc
+gắn **không** đặt `busy`, nên một lượt nạp vẫn đang bay khi người dùng bấm Xoá —
+và nó về SAU lượt xoá, gọi `setProfiles` với ảnh chụp TRƯỚC khi xoá. Hồ sơ vừa
+xoá hiện lại trên bảng như chưa có gì xảy ra.
+
+Thêm vé, và cho lượt xoá **vô hiệu** mọi lượt nạp đang bay trước khi sửa danh
+sách — ở **cả hai** nhánh xoá (thành công, và 404 "đã bị xoá ở nơi khác").
+
+**Và một bài học về chính phần kiểm.** Hai đột biến đầu đi qua sạch vì phép khẳng
+định của tôi chỉ hỏi "mẫu này có xuất hiện không" — mà cùng mẫu đó còn nằm ở một
+nhánh khác, nên gỡ mất chốt ở nhánh này vẫn xanh. Đây là **lần thứ ba** trong đợt
+cùng một sai lầm (E1 ở `/review`, rồi hai cái ở đây). Nay phép kiểm **đếm số
+lần** thay vì hỏi có-không, và kiểm riêng "dựng vé" với "KIỂM vé" — dựng mà không
+kiểm thì vé vô dụng.
+
+### Vòng trước: một cơ chế thay cho cái cờ nửa vời
+
+Hai phát hiện còn lại của Codex trùng vào cùng một chỗ yếu, nên thay hẳn cơ chế
+thay vì vá:
+
+- **Ba mã lỗi, ba nghĩa, một câu chữ.** `beforeDispatch` ném cùng một
+  `standards_revision_conflict` cho cả "hồ sơ bị xoá" lẫn "hồ sơ bị sửa" trong
+  lúc chờ AutoCAD rảnh. Cờ `deadProfileScan` của tôi biến mọi lượt từ chối thành
+  câu "hồ sơ không còn tồn tại" — nói với người dùng rằng thứ họ vừa sửa đã bị
+  xoá. Câu sai còn tệ hơn không có câu nào, và nó còn **đè lên** cảnh báo lệch
+  hồ sơ vốn đang nói đúng.
+- **Từ chối `profile_stale` không được nhớ.** Nhánh đó chỉ nạp lại danh sách; nếu
+  lượt nạp HỎNG thì hồ sơ cũ còn nguyên trong state, `profileDriftNote()` không
+  kết luận gì (đúng — không biết thì không nói), và nút Sửa bật lại cho một lượt
+  gửi nữa vào đúng chỗ vừa bị từ chối.
+
+Thay cờ boolean bằng `scanRejected: { scanId, note }` — **mang theo câu chữ của
+chính lần từ chối đó**, và ghi nhớ **TRƯỚC** khi nạp lại danh sách. Máy chủ đã
+nói ra sự thật; nó không hết hạn theo một lượt đọc danh sách có thể hỏng.
+
+Hai phát hiện đầu của vòng này (vé cho `loadProfiles`, chốt quét đọc từ gương)
+tôi đã tự tìm ra và sửa trước khi review về — xem mục ngay dưới.
+
+### Tự rà, không đợi Codex chỉ: hai lỗ cùng họ
+
+Rà lại toàn bộ đường bất đồng bộ của màn Kiểm tra thay vì chờ từng phát hiện:
+
+- **`loadProfiles()` không có vé.** Ba nơi gọi nó (nút "Thử lại", nhánh lỗi lượt
+  quét, nhánh lỗi lượt sửa) chồng nhau được, và lượt CŨ về muộn ghi đè danh sách
+  của lượt MỚI. Tệp này đã có sẵn lối vé ở `docsSequence`/`scanSequence`; chỗ này
+  bị bỏ quên.
+- **Chốt quét đọc từ closure.** `runScan` chạy qua một lượt `await` khi nút "Quét
+  lại" nạp hồ sơ trước, nên `scanBusy`/`docsAlive`/`activeFile` trong nó là giá
+  trị **lúc bấm** — mà AutoCAD tắt được, bản vẽ đóng được, và một lượt quét khác
+  bắt đầu được trong quãng đó. Nay đọc từ gương. `target` thì **không** lấy từ
+  gương: nơi gọi đã bỏ cuộc nếu người dùng đổi bản vẽ, và tự quét sang bản vẽ mới
+  là làm một việc không ai yêu cầu.
+
+Một phép khẳng định của tôi quá lỏng: nó khớp lượt kiểm vé ở nhánh `catch` nên
+vẫn xanh khi nhánh thành công đã mất chốt. Nay kiểm riêng từng nhánh.
+
+### Vòng trước: override của tôi mở toang mọi chốt
+
+- **`overrideProfileId` bỏ qua HẾT.** Tôi viết `if (scanBlocked && !overrideProfileId)
+  return;` — tức chỉ cần có override là bỏ qua mọi phép chặn: bản vẽ không còn
+  hoạt động, AutoCAD đã tắt, một lượt quét khác đang chạy. Override sinh ra để
+  nói "dùng hồ sơ NÀY", không phải để mở cửa. Nay **tính lại** chốt với hồ sơ
+  sắp dùng thay vì bỏ qua nó.
+- **Lượt nạp về muộn kéo người dùng về hồ sơ cũ.** Đổi ô chọn trong lúc
+  `loadProfiles(profileId)` đang bay thì `setProfileId(chosen)` ghi đè lựa chọn
+  mới, rồi nút "Quét lại" quét đúng cái hồ sơ họ vừa rời đi.
+- **Mã của chốt sau cửa khoá bị bỏ sót.** `beforeDispatch` ném
+  `standards_revision_conflict`, mà nhánh xử lỗi chỉ nhìn `profile_stale` và
+  `profile_not_found` — nên chính cái chốt vừa thêm ở vòng trước lại để lượt quét
+  đã chết nằm nguyên với nút Sửa còn sáng.
+
+Một phép khẳng định phủ định của tôi tự bắt trúng mình: chú thích giải thích lỗi
+cũ trích **nguyên văn** dòng mã sai, nên `doesNotMatch` khớp chính lời giải
+thích. Nay soi bản đã bỏ chú thích.
+
+### Vòng trước: cửa sổ đua nằm SAU cửa khoá, và một updater chạy sai lúc
+
+- **P1 — `dispatchLiveJob()` CHỜ khoá job.** AutoCAD chỉ chạy một job một lúc,
+  nên khi máy đang bận, chốt tôi vừa thêm ở vòng trước vẫn là ảnh chụp **trước**
+  cửa khoá — quãng chờ tính bằng giây, đủ để hồ sơ bị xoá ở tab khác. Thêm hook
+  `beforeDispatch` chạy **sau** khi giành được khoá và **trước** khi ghi gì xuống
+  cầu nối; `/apply` dùng nó để đọc lại hồ sơ lần cuối.
+- **`loadProfiles()` của tôi trả về chuỗi rỗng.** Tôi gán `chosen` bên trong
+  `setProfileId((current) => …)` rồi đọc lại ngay dòng sau — nhưng hàm cập nhật
+  của `setState` chạy ở lượt **RENDER**, không phải lúc gọi. Nút "Quét lại" vì
+  thế im lặng không làm gì. Nay tính id **trước mọi `setState`**, và nhận
+  `preferId` từ nơi gọi thay vì đọc state.
+- **Bản vẽ đổi trong lúc chờ nạp hồ sơ.** Closure của nút giữ bản vẽ lúc bấm, nên
+  quét tiếp là bày kết quả của bản vẽ này dưới tên bản vẽ kia.
+
+Đột biến lôi ra hai lỗ trong chính phần kiểm: hook `beforeDispatch` **không có
+test hành vi nào** (bỏ hẳn lời gọi vẫn xanh), và khối test tôi vừa thêm nằm
+**sau** chỗ kiểm biến `failed` của `test-bridge-contract.mjs` — tức nó không bao
+giờ làm test đỏ được. Đã chuyển lên trước, và thêm một phép so THỨ TỰ vì phép đo
+hành vi không phân biệt được "gọi hook trước khoá" với "gọi sau khoá".
+
+### Vòng trước nữa: ba lỗi trong chính bản sửa vòng trước
+
+Vòng thứ ba liên tiếp cùng một vùng, và lần này các phát hiện nói về **bản vá của
+tôi** chứ không về mã gốc. Theo đúng nguyên tắc đã ghi: ba vòng cùng hình dạng
+nghĩa là thiết kế sai, không phải thiếu một miếng vá nữa.
+
+Nguyên nhân chung: tôi luồn trạng thái phục hồi qua **closure và ref** của React.
+`setProfileId` chỉ **xếp lịch** một lượt cập nhật; hàm đang chạy giữ nguyên
+closure của lượt render đã dựng ra nó. Nên `await loadProfiles()` rồi gọi
+`runScan()` trống tay vẫn quét bằng đúng cái id vừa chết — **`await` không cứu
+được, vì chờ promise không làm closure mới ra đời.** Và `profilesErrorRef` gán
+trong một `useEffect` thì lúc `await` xong nó vẫn chưa mang kết quả của lượt vừa
+chạy.
+
+Sửa ở gốc: **`loadProfiles()` TRẢ VỀ sự thật của chính lượt đó**
+(`{ ok, profileId }`), và `runScan(overrideProfileId?)` **nhận** id thay vì đọc
+lại từ state. Chuyền giá trị, đừng đọc ngược. `profilesErrorRef` bị xoá — nó là
+rác do chính bản vá trước của tôi tạo ra.
+
+Lỗi thứ ba là một cái chặn **oan**: nhánh lỗi của lượt quét MỚI đánh dấu lượt
+quét **đang hiển thị** là chết, trong khi lượt đó dùng một hồ sơ khác và có thể
+vẫn sống. Đã bỏ — `profileDriftNote()` vẫn bắt được ca thật, vì sau khi nạp lại
+thì hồ sơ đang chọn khác hồ sơ đã quét.
+
+### Vòng trước đó: một P1 chạm thẳng vào bản vẽ
+
+- **`/apply` ghi bằng một hồ sơ đã bị xoá.** Phép kiểm hồ sơ ở đầu handler cách
+  chỗ `dispatchLiveJob` **hai lượt `await`** — `resolveDocument()` và
+  `requestDrawingInfo()` — và trong quãng đó một tab khác xoá hoặc sửa được hồ
+  sơ. Chương trình LISP đã dựng từ bản đọc lúc đầu, nên nó vẫn ghi: áp một hồ sơ
+  **không còn tồn tại** vào bản vẽ, một pha, không hoàn tác được.
+
+  Nay đọc lại ngay trước khi ghi — cùng lối với chốt bản vẽ đã có sẵn ở đó. Mọi
+  thứ đọc trước một lượt `await` chỉ là ảnh chụp; chốt cuối phải đọc lại sát lúc
+  ghi.
+- **Nút "Quét lại" gọi liền tay hai lệnh** `loadProfiles(); runScan()`, nên lượt
+  quét đi với `profileId` CŨ — chưa `setProfileId` nào kịp commit — và lần bấm
+  đầu chắc chắn ăn thêm một lỗi nữa. Nay `await`, và **bỏ cuộc nếu lượt nạp
+  hỏng**: quét bằng id cũ chỉ lặp lại đúng lỗi vừa rồi. Đọc kết quả lượt nạp qua
+  `ref` chứ không qua biến closure — biến đó là giá trị của lượt render đã dựng
+  ra chính hàm này, tức luôn cũ.
+
+Ba đột biến, tất cả đỏ.
+
+### Technical
+
+- `profileDeleteBlockedReason()` — một lý do chặn cho cả nút lẫn thẻ, đúng lối
+  `pickBlockedReason()`.
+- Ba đường của `deleteProfile` đã **đo thật**: 200 đúng revision · 409 lệch
+  revision **và hồ sơ còn nguyên** · 404 id không có. Cộng hai ca chưa ai kiểm:
+  xoá sạch thì danh sách giữ rỗng, và tạo lại được từ rỗng.
+- Chốt `data`-không-dùng-`WriteButton` khoá ở tầng mã nguồn (`test-contract.mjs`)
+  vì dự án không có harness render React — đây là chỗ duy nhất còn nói được.
+- **47 đột biến**, đo bằng **mã thoát** chứ không grep "AssertionError": một đột
+  biến làm test ném lỗi thay vì trượt khẳng định, và bản đo đầu của tôi đếm sót
+  đúng ca đó rồi báo "lọt".
+- `pnpm verify`: **214 test**, 13 guardrail, exit 0. `test-bridge-contract.mjs` ALL PASS.
+
 ## 2026-08-16 — Mục 6: bảng nhóm phát hiện, và bất biến khoá nó vào máy chủ
 
 Mục áp chót của kế hoạch. `scopeMatches()` — bộ lọc regex tiếng Việt

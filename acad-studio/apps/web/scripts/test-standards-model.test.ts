@@ -27,10 +27,13 @@ import {
   normalizeScan,
   pickBlockedReason,
   profileDriftNote,
+  rejectionNote,
   scanBlockedReason,
   severityCounts,
   severityLabel,
   severityOf,
+  profileDeleteBlockedReason,
+  profileDeleteSummary,
   profileSaveBlockedReason,
   readAciPalette,
   targetOf,
@@ -2065,4 +2068,120 @@ test("DIM chuẩn không tự căn theo chính nó", () => {
     dimspaceBlockedReason({ selected: [issue(["a1"])], dimensions: dims, baseHandle: "A1" }),
     /không còn gì để dời/,
   );
+});
+
+test("xoá hồ sơ: một lý do chặn cho mọi cửa vào", () => {
+  /* `revision` là BẮT BUỘC: nó là token `If-Match`, và thiếu nó thì nút Xoá bị
+     chặn (xem phép kiểm cuối test này). Hồ sơ thật từ máy chủ luôn có. */
+  const profile = normalizeProfile({
+    id: "chuan-mep", name: "Chuẩn MEP", revision: "r1",
+    layers: [{ name: "A" }, { name: "B" }],
+    mappings: [{ id: "m1", label: "m1", kind: "generic", layerPatterns: ["A-*"] }],
+  });
+
+  assert.match(
+    profileDeleteBlockedReason({ selected: null, busy: false }),
+    /Chưa chọn hồ sơ/,
+  );
+  assert.match(
+    profileDeleteBlockedReason({ selected: profile, busy: true }),
+    /Đang xử lý/,
+  );
+  assert.equal(profileDeleteBlockedReason({ selected: profile, busy: false }), "");
+
+  /* KHÔNG chặn khi đây là hồ sơ cuối cùng: màn hình vẫn tạo mới được từ danh
+     sách rỗng (đã đo trên kho thật ở `test-standards-profile.mjs`), nên chặn là
+     cấm một việc hợp lệ. Thẻ xác nhận nói hệ quả thay vì cấm. */
+  assert.equal(profileDeleteBlockedReason({ selected: profile, busy: false }), "");
+
+  /* Thiếu `revision` = thiếu token `If-Match`, và gửi rỗng làm máy chủ BỎ QUA
+     phép so tranh chấp — tức xoá một bản mình chưa từng thấy. Đường không lấy
+     lại được thì "không biết" phải là TỪ CHỐI. */
+  const noRevision = normalizeProfile({ id: "cu", name: "Hồ sơ cũ" });
+  assert.equal(noRevision.revision, "", "payload thiếu revision cho ra chuỗi rỗng");
+  assert.match(
+    profileDeleteBlockedReason({ selected: noRevision, busy: false }),
+    /mã phiên bản/,
+  );
+
+  /* Câu tóm tắt phải đếm được: hai hồ sơ có thể trùng tên gần hết, còn "2 layer"
+     thì không nhầm được. */
+  const summary = profileDeleteSummary(profile);
+  assert.match(summary, /Chuẩn MEP/);
+  assert.match(summary, /2 layer/);
+  assert.match(summary, /1 ánh xạ/);
+});
+
+test("hồ sơ của lượt quét biến mất: chặn, nhưng chỉ khi BIẾT là mất", () => {
+  /* Xoá hồ sơ ở màn Hồ sơ tiêu chuẩn (có thể ở tab khác) không làm lượt quét
+     đang mở ở đây biến mất. Trả rỗng ở đây là để nút Sửa sáng nguyên rồi ăn 409
+     lặp đi lặp lại, và người dùng không có manh mối nào. */
+  const scanned = scan({ scanId: "s1", profileId: "da-xoa", profileRevision: "r1" });
+
+  assert.match(
+    profileDriftNote(scanned, null, true),
+    /không còn tồn tại/,
+    "biết là mất thì phải chặn",
+  );
+  /* Nhưng một lượt ĐỌC HỎNG cũng cho ra `null`. Chặn vì "không biết" là khoá mất
+     nút sửa mà không có đường gỡ — đúng nguyên tắc đã ghi ngay trong hàm này cho
+     trường hợp thiếu `revision`. */
+  assert.equal(profileDriftNote(scanned, null, false), "", "không biết thì không kết luận");
+  assert.equal(profileDriftNote(null, null, true), "", "chưa quét thì không có gì để nói");
+
+  // Hồ sơ còn sống và khớp revision thì vẫn im như cũ.
+  const alive = normalizeProfile({ id: "da-xoa", name: "X", revision: "r1" });
+  assert.equal(profileDriftNote(scanned, alive, true), "");
+});
+
+test("lời từ chối của máy chủ hết hiệu lực khi hồ sơ quay về nội dung cũ", () => {
+  /* `revision` là hash NỘI DUNG, nên hoàn nguyên một lần sửa cho ra đúng hash cũ
+     và máy chủ sẽ nhận lượt sửa trở lại. Giữ lời từ chối khi đó là bắt quét lại
+     một cách vô ích — trái với chính quyết định đã ghi: lưu lại một nội dung y
+     hệt KHÔNG giết lượt quét đang mở. */
+  const scanned = scan({ scanId: "s1", profileId: "chuan", profileRevision: "r1" });
+  const rejected = { scanId: "s1", note: "Máy chủ đã từ chối." };
+  const at = (id: string, revision: string) => normalizeProfile({ id, name: id, revision });
+
+  assert.equal(
+    rejectionNote({ scan: scanned, profile: at("chuan", "r2"), rejected }),
+    "Máy chủ đã từ chối.",
+    "hồ sơ vẫn khác nội dung thì lời từ chối còn nguyên",
+  );
+  assert.equal(
+    rejectionNote({ scan: scanned, profile: at("chuan", "r1"), rejected }),
+    "",
+    "quay về đúng nội dung lúc quét thì lời từ chối hết hiệu lực",
+  );
+
+  /* So CẢ `id`: hai hồ sơ nội dung giống hệt nhau mang CÙNG một hash — tính
+     năng, không phải trùng — nên chỉ so hash sẽ xoá lời từ chối vì một hồ sơ
+     khác tình cờ giống nội dung. */
+  assert.equal(
+    rejectionNote({ scan: scanned, profile: at("ho-so-khac", "r1"), rejected }),
+    "Máy chủ đã từ chối.",
+    "hồ sơ KHÁC dù trùng hash thì không xoá được lời từ chối",
+  );
+  // Hồ sơ bị xoá hẳn: không tra ra gì, lời từ chối phải còn.
+  assert.equal(
+    rejectionNote({ scan: scanned, profile: null, rejected }),
+    "Máy chủ đã từ chối.",
+  );
+
+  /* HAI VẾ RỖNG không phải là "khớp". Máy chủ bản cũ không phát `profileRevision`,
+     và một hồ sơ méo cũng cho ra `revision` rỗng — `"" === ""` khi đó là hai cái
+     KHÔNG BIẾT trùng nhau, không phải bằng chứng nội dung đã quay về. Cùng nguyên
+     tắc với `profileDriftNote()`: một vế rỗng thì không kết luận. */
+  const noRev = scan({ scanId: "s1", profileId: "chuan", profileRevision: "" });
+  assert.equal(
+    rejectionNote({ scan: noRev, profile: at("chuan", ""), rejected }),
+    "Máy chủ đã từ chối.",
+    "hai vế rỗng không được coi là nội dung đã quay về",
+  );
+  // Lời từ chối của lượt quét KHÁC thì không dính dáng.
+  assert.equal(
+    rejectionNote({ scan: scanned, profile: null, rejected: { scanId: "s2", note: "x" } }),
+    "",
+  );
+  assert.equal(rejectionNote({ scan: scanned, profile: null, rejected: null }), "");
 });

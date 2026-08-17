@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
-import { dirname, resolve } from "node:path";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 process.env.ACAD_PROJECT_ROOT = resolve(here, "../../../..");
+/* Kho hồ sơ RIÊNG cho test. Không đặt thì `resolveStandardsDataDir()` lùi về
+   `~/Library/Application Support/acad-studio` — tức test đọc và có thể GHI vào
+   hồ sơ quy chuẩn thật của người dùng. Ngày 2026-08-17 một script đo hành vi xoá
+   đã xoá đúng kho đó, và test này hỏng theo vì hồ sơ mặc định biến mất: một test
+   phụ thuộc dữ liệu người dùng thì vừa không đáng tin vừa nguy hiểm. */
+process.env.ACAD_DATA_DIR = mkdtempSync(join(tmpdir(), "acad-standards-data-"));
 
 const {
   analyzeDimensionRows,

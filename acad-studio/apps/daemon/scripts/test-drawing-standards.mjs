@@ -10,6 +10,12 @@ process.env.ACAD_PROJECT_ROOT = resolve(here, "../../../..");
    test không được ghi vào nhật ký của AutoCAD đang chạy trên máy người dùng. */
 const bridgeDir = mkdtempSync(join(tmpdir(), "acad-standards-test-"));
 process.env.ACAD_BRIDGE_DIR = bridgeDir;
+/* Kho hồ sơ RIÊNG cho test. Không đặt thì `resolveStandardsDataDir()` lùi về
+   `~/Library/Application Support/acad-studio` — tức test đọc và có thể GHI vào
+   hồ sơ quy chuẩn thật của người dùng. Ngày 2026-08-17 một script đo hành vi xoá
+   đã xoá đúng kho đó, và test này hỏng theo vì hồ sơ mặc định biến mất: một test
+   phụ thuộc dữ liệu người dùng thì vừa không đáng tin vừa nguy hiểm. */
+process.env.ACAD_DATA_DIR = mkdtempSync(join(tmpdir(), "acad-standards-data-"));
 
 const {
   buildStandardsAction,
@@ -507,6 +513,27 @@ const routerSource = readFileSync(
 );
 assert.match(routerSource, /snapshotDocument\.quiescent !== true/);
 assert.match(routerSource, /drawing_revision_unavailable/);
+/* "Ho so BI XOA" phai tach khoi "ho so da sua". Gop vao `profile_stale` la bao
+   nguoi dung "quet lai" — ma quet lai bang chinh ho so do thi khong the, no
+   khong con ton tai. Hai tinh huong, hai viec phai lam.
+   Khoa bang van ban vi `check:guards` khong thay duoc: ma `profile_not_found`
+   van con duoc duong `/scan` phat, nen go no khoi duong `/apply` khong tao ra
+   entry mo coi nao. */
+assert.match(
+  routerSource,
+  /if \(!profile\) \{\s*return res\.status\(409\)\.json\(\{\s*ok: false,\s*code: "profile_not_found"/,
+  "duong /apply phai phan biet ho so BI XOA voi ho so da sua",
+);
+/* Chot CUOI: doc lai ho so NGAY TRUOC khi ghi.
+   Phep kiem o dau handler cach cho ghi hai luot `await` — `resolveDocument()` va
+   `requestDrawingInfo()` — va trong quang do mot tab khac xoa duoc ho so. Ghi
+   tiep la ap mot ho so KHONG CON TON TAI vao ban ve, tren duong mot pha khong
+   hoan tac duoc. Moi thu doc truoc mot luot `await` chi la anh chup. */
+assert.match(
+  routerSource,
+  /const stillThere = getProfile\(session\.profileId\);[\s\S]{0,600}?const job = await dependencies\.dispatchLiveJob/,
+  "phai doc lai ho so ngay truoc dispatchLiveJob, khong duoc tin anh chup dau handler",
+);
 assert.match(routerSource, /reviewOnly/);
 /* Chốt độ tươi phải đọc SỰ KIỆN, không so bộ đếm revision. Khoá bằng mã nguồn
    vì đây là thứ dễ "sửa lại cho gọn" nhất: so hai con số trông hợp lý hơn hẳn
@@ -711,6 +738,48 @@ console.log("✓ drawing standards router: typed actions and routes");
   );
   assert.equal(dimspaceRejection([issue], [row("A1", "H", 0)], "A1"), null,
     "toa do hang bang 0 la HOP LE — chi thieu moi la khong");
+}
+
+/* ------------------------------------------------------------------ *
+ * Xoa ho so DOI If-Match, va rong khong phai la "khong gui"
+ * ------------------------------------------------------------------ */
+{
+  /* `req.get(...) || undefined` bien chuoi RONG thanh `undefined`, va
+     `deleteProfile()` khi do BO QUA phep so revision hoan toan — tuc xoa mot ban
+     minh chua tung thay. Mot ho so thieu `revision` (payload cu, hoac du lieu
+     meo) vi the mo toang chot tranh chap tren dung duong khong lay lai duoc. */
+  const deleteRouter = drawingStandardsRouter(baseDependencies);
+  /* Chon theo METHOD: `/profiles/:id` co CA `PUT` lan `DELETE`, va `find` theo
+     path se bat nham cai dau tien. */
+  const layer = deleteRouter.stack.find(
+    (item) => item.route?.path === "/profiles/:id" && item.route?.methods?.delete,
+  );
+  const handler = layer?.route?.stack?.[0]?.handle;
+  assert.equal(typeof handler, "function", "khong tim thay handler DELETE");
+
+  const call = async (header) => {
+    let status = 200;
+    let payload;
+    const res = {
+      status(code) { status = code; return this; },
+      json(value) { payload = value; return this; },
+    };
+    await handler(
+      { params: { id: "khong-co-that" }, body: {}, get: () => header },
+      res,
+    );
+    return { status, payload };
+  };
+
+  for (const header of [undefined, "", "   "]) {
+    const result = await call(header);
+    assert.equal(result.status, 428, `If-Match ${JSON.stringify(header)} phai bi tu choi`);
+    assert.equal(result.payload.code, "if_match_required");
+  }
+  /* Co token that thi di tiep binh thuong — 404 vi id khong ton tai, khong phai
+     428. Mot chot chan het moi thu cung la mot chot hong. */
+  const withToken = await call("revision-nao-do");
+  assert.equal(withToken.status, 404, JSON.stringify(withToken));
 }
 
 console.log("✓ drawing standards: dimspace axis guard + area bounds (rong, don vi)");

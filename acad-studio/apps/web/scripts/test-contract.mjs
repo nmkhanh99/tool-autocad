@@ -215,6 +215,283 @@ assert.match(
   "auto-BOM phải dựng thẻ mới khi thẻ cũ không còn trong hội thoại hiện tại",
 );
 
+/* ── Thẻ xác nhận KHÔNG được đóng khi lệnh còn đang bay ─────────────────────
+ *
+ * `busy` chỉ làm mờ nút ở chân thẻ; `Modal` vẫn gọi `onClose` khi bấm Esc hay
+ * nền. Bấm xác nhận rồi bấm Esc là thẻ biến mất trong lúc yêu cầu còn đang bay —
+ * rồi một lượt hỏng chỉ ghi vào chỗ hiển thị của chính thẻ đó, tức HỎNG TRONG IM
+ * LẶNG trên một thao tác không hoàn tác được.
+ *
+ * Chốt ở PRIMITIVE, không ở từng nơi gọi: `/review` đã phải tự vá đúng cái này
+ * một lần cho thẻ chọn đối tượng, và cửa thứ hai thì không ai nhớ. */
+assert.match(
+  sourceAt("ConfirmSheet.tsx"),
+  /onClose=\{\(\) => \{ if \(!busy\) onCancel\(\); \}\}/,
+  "ConfirmSheet không được huỷ khi đang gửi",
+);
+
+/** Đếm số lần một mẫu xuất hiện. Dùng thay `assert.match` ở những chốt có mặt ở
+ * nhiều nhánh: hỏi "có xuất hiện không" thì gỡ mất chốt ở một nhánh vẫn xanh —
+ * đã xảy ra ba lần trong đợt này. */
+function occurrencesIn(source, pattern) {
+  return [...source.matchAll(new RegExp(pattern, "g"))].length;
+}
+
+/* ── Xoá hồ sơ: ba đường hỏng phải xử đúng ──────────────────────────────────
+ *
+ * Cả ba đều là "hỏng mà trông như không hỏng", loại tệ nhất trên một thao tác
+ * không lấy lại được. */
+{
+  const standards = sourceAt("app/(shell)/standards/page.tsx");
+  /* 1. Lỗi phải hiện TRONG thẻ. `error` ở tầng trang nằm SAU thẻ, nên một lượt
+        409 sẽ trông như "bấm xong không có gì xảy ra". */
+  assert.match(
+    standards,
+    /catch \(failure\) \{[\s\S]{0,1400}?setDeleteError\(daemonFailureText\(failure\)\);/,
+    "lượt xoá hỏng phải báo trong thẻ xác nhận, không phải sau lưng nó",
+  );
+  /* 2. Bỏ hồ sơ khỏi danh sách NGAY. `loadProfiles` nuốt lỗi mạng và giữ nguyên
+        danh sách cũ, nên một lượt nạp hỏng sau khi DELETE đã thành công sẽ để hồ
+        sơ vừa xoá nằm lại trên bảng. */
+  assert.match(
+    standards,
+    /setProfiles\(\(prev\) => prev\.filter\(\(item\) => item\.id !== selected\.id\)\);/,
+    "xoá xong phải bỏ hồ sơ khỏi danh sách ngay, không đợi lượt nạp lại",
+  );
+  /* 3. `If-Match` là chốt duy nhất chặn việc xoá một bản mình chưa từng thấy. */
+  assert.match(
+    standards,
+    /"If-Match": selected\.revision/,
+    "DELETE phải gửi If-Match theo bản ĐÃ LƯU",
+  );
+
+  /* 4. `/review` không được giữ một `profileId` đã biến mất khỏi danh sách —
+        nút Quét sẽ sáng rồi ăn 404. */
+  const review = sourceAt("app/(shell)/review/page.tsx");
+  assert.match(
+    review,
+    /const chosen = preferId && list\.some\(\(item\) => item\.id === preferId\)/,
+    "review phải bỏ hồ sơ đã chọn khi nó không còn trong danh sách",
+  );
+  /* 5. ĐỢI lượt nạp lại. Bỏ chạy nền thì hồ sơ cũ còn nguyên suốt lúc đang nạp,
+        `driftNote` vẫn rỗng, và nút bật lại cho một lượt gửi nữa. */
+  assert.match(
+    review,
+    /if \(code === "profile_stale" \|\| code === "profile_not_found"\) await loadProfiles\(\w+\);/,
+    "nạp lại hồ sơ sau `profile_not_found` phải được `await`",
+  );
+  /* 6. Và nhớ lời máy chủ: một lượt nạp lại HỎNG làm `profilesKnown` thành false,
+        rồi cảnh báo tắt và nút bật lại. Sự thật máy chủ đã nói không hết hạn theo
+        lượt đọc danh sách. */
+  /* Lời từ chối đi qua `rejectionNote()` — hàm THUẦN, có test hành vi — chứ không
+     so `scanId` tại chỗ: nó còn phải hết hiệu lực khi hồ sơ quay về đúng nội dung
+     lúc quét. */
+  assert.match(
+    review,
+    /rejectionNote\(\{ scan, profile, rejected: scanRejected \}\)/,
+    "lượt quét bị máy chủ từ chối phải đi qua rejectionNote()",
+  );
+  /* Và phải nhớ TRƯỚC khi nạp lại: lượt nạp có thể hỏng, và khi đó không còn gì
+     nói cho người dùng biết lượt quét này đã chết. */
+  assert.match(
+    review,
+    /if \(rejection\) setScanRejected\(\{ scanId: scan\.scanId, note: rejection \}\);\s*if \(rejection\) await loadProfiles/,
+    "ghi nhớ lời từ chối TRƯỚC khi nạp lại danh sách",
+  );
+  /* Ba mã có ba nghĩa: dùng chung một câu là nói hồ sơ đã bị XOÁ trong khi nó
+     chỉ vừa được SỬA. */
+  assert.match(
+    review,
+    /code === "standards_revision_conflict"\s*\?\s*"Hồ sơ quy chuẩn đổi hoặc bị xoá trong lúc chờ/,
+    "mã của chốt sau cửa khoá không được khẳng định là đã xoá",
+  );
+  /* 8. Nút "Quét lại" phải quét bằng id VỪA NẠP VỀ, không bằng closure.
+        `setProfileId` chỉ xếp lịch một lượt cập nhật; hàm đang chạy giữ nguyên
+        closure của lượt render đã dựng ra nó, nên `runScan()` trống tay quét
+        bằng đúng cái id vừa chết. `await` không cứu được — chờ promise không làm
+        closure mới ra đời. Phải CHUYỀN giá trị. */
+  assert.match(
+    review,
+    /const loaded = await loadProfiles\(profileId\);[\s\S]{0,900}?if \(!loaded\.ok \|\| !loaded\.profileId\) return;[\s\S]{0,900}?await runScan\(loaded\.profileId\);/,
+    "nút Quét lại phải dùng profileId do loadProfiles trả về",
+  );
+  /* 9. `loadProfiles` phải TRẢ VỀ sự thật của chính lượt đó. Đọc ngược lại từ
+        state — hay từ một `ref` gán trong `useEffect` — là đọc một giá trị chưa
+        tới. Đây là cái bẫy đã cắn nhiều lần trong tệp này. */
+  assert.match(
+    review,
+    /Promise<\{ ok: boolean; profileId: string \}>/,
+    "loadProfiles phải trả về { ok, profileId } thay vì để nơi gọi đọc lại state",
+  );
+  /* 11. Và phải tính id TRƯỚC mọi `setState`: hàm cập nhật của `setState` chạy ở
+         lượt RENDER, nên gán vào biến ngoài rồi đọc lại ngay dòng sau là đọc một
+         giá trị chưa được đặt. */
+  assert.doesNotMatch(
+    review,
+    /setProfileId\(\(current\) => \{/,
+    "đừng tính profileId bên trong updater rồi đọc lại — updater chạy lúc render",
+  );
+  /* 13. Override hồ sơ KHÔNG được bỏ qua các chốt khác. `overrideProfileId` sinh
+         ra để nói "dùng hồ sơ NÀY", không phải để mở cửa cho một lượt quét chạy
+         khi bản vẽ không còn hoạt động hay AutoCAD đã tắt. */
+  /* Soi bản ĐÃ BỎ CHÚ THÍCH: chú thích ở đó trích nguyên văn dòng mã sai để giải
+     thích vì sao nó sai, và một phép `doesNotMatch` trên nguyên văn sẽ bắt trúng
+     chính lời giải thích ấy. */
+  assert.doesNotMatch(
+    stripComments(review),
+    /if \(scanBlocked && !overrideProfileId\) return;/,
+    "override hồ sơ không được bỏ qua mọi chốt quét",
+  );
+  assert.match(
+    review,
+    /if \(scanBlockedReason\(\{[\s\S]{0,200}?profileId: useProfileId,[\s\S]{0,120}?\}\)\) return;/,
+    "runScan phải tính lại chốt với hồ sơ sắp dùng",
+  );
+  /* 16. Hai lượt nạp hồ sơ chồng nhau: lượt CŨ về muộn không được ghi đè lượt
+         MỚI. Cùng lối vé với `docsSequence`/`scanSequence` đã có sẵn. */
+  assert.match(
+    review,
+    /const ticket = \+\+profilesSequence\.current;/,
+    "loadProfiles phải có vé chống phản hồi về muộn",
+  );
+  /* Kiểm ở CẢ HAI nhánh, và kiểm riêng từng cái: một phép so chung khớp được
+     nhánh `catch` rồi báo xanh trong khi nhánh thành công đã mất chốt. */
+
+  /* ĐẾM: mẫu này phải có ở CẢ HAI nhánh — thành công và lỗi. Một lượt nạp đã bị
+     thay thế không có thẩm quyền gì, nên nó không được báo `ok` ở nhánh nào.
+     Báo `ok: true` với một id mượn là để nơi gọi quét bằng hồ sơ có thể đã chết
+     trong khi lượt mới còn đang chọn hồ sơ thay thế. */
+  assert.equal(
+    occurrencesIn(review, 'if \\(ticket !== profilesSequence\\.current\\) return \\{ ok: false, profileId: "" \\};'),
+    2,
+    "cả hai nhánh phải trả về THẤT BẠI khi lượt nạp đã bị thay thế",
+  );
+  /* Lượt quét hỏng chỉ kết luận về kết quả đang hiển thị khi nó dùng ĐÚNG hồ sơ
+     vừa chết — quét bằng hồ sơ khác thì kết quả cũ có thể vẫn dùng được. */
+  assert.match(
+    review,
+    /scannedProfileRef\.current === useProfileId/,
+    "chỉ đánh dấu lượt quét đang hiển thị khi nó dùng đúng hồ sơ vừa chết",
+  );
+  /* 17. Chốt quét đọc từ GƯƠNG: `runScan` chạy qua một lượt `await` khi nút
+         "Quét lại" nạp hồ sơ trước, nên closure giữ giá trị lúc bấm — mà AutoCAD
+         tắt được và một lượt quét khác bắt đầu được trong quãng đó. */
+  assert.match(
+    review,
+    /busy: scanBusyRef\.current,/,
+    "chốt quét phải đọc cờ bận từ gương, không từ closure",
+  );
+  assert.match(
+    review,
+    /docsAlive: docsAliveRef\.current,/,
+    "chốt quét phải đọc trạng thái plugin từ gương",
+  );
+
+  /* 14. Lượt nạp về muộn không được ghi đè lựa chọn MỚI của người dùng. */
+  assert.match(
+    review,
+    /const now = profileIdRef\.current;\s*if \(now !== before\) \{/,
+    "loadProfiles phải so với lựa chọn LÚC BẮT ĐẦU, không với kết quả nó tự chọn",
+  );
+  /* Bỏ chọn hồ sơ là hành động CÓ CHỦ Ý — "đừng quét gì cả". Một phép kiểm
+     `if (now && …)` đọc nó thành "không đổi gì" rồi quét tiếp bằng hồ sơ cũ. */
+  assert.match(
+    review,
+    /if \(!now\) return \{ ok: false, profileId: "" \};/,
+    "bỏ chọn hồ sơ phải được hiểu là HUỶ, không phải là không đổi",
+  );
+  /* 15. Chốt chạy SAU cửa khoá job ném `standards_revision_conflict`; bỏ sót nó
+         là để lượt quét đã chết nằm nguyên với nút Sửa còn sáng. */
+  assert.match(
+    review,
+    /code === "standards_revision_conflict"/,
+    "phải xử mã của chốt sau cửa khoá job",
+  );
+
+  /* 12. Bản vẽ đổi trong lúc chờ nạp hồ sơ thì bỏ lượt quét: closure giữ bản vẽ
+         lúc bấm, và quét tiếp là bày kết quả của bản vẽ này dưới tên bản vẽ kia. */
+  assert.match(
+    review,
+    /if \(targetRef\.current !== target\) return;/,
+    "nút Quét lại phải bỏ cuộc khi bản vẽ đã đổi trong lúc chờ",
+  );
+  /* 10. Lượt QUÉT hỏng vì hồ sơ không còn thì KHÔNG được đánh dấu lượt quét đang
+         HIỂN THỊ là chết — nó dùng hồ sơ khác, có thể vẫn sống. */
+  assert.doesNotMatch(
+    review,
+    /setDeadProfileScan\(scan\?\.scanId/,
+    "đừng gán cờ chết cho lượt quét đang hiển thị từ nhánh lỗi của lượt quét mới",
+  );
+
+  /* 18. `/standards` cũng phải có vé, và lượt XOÁ phải vô hiệu mọi lượt nạp đang
+         bay TRƯỚC khi sửa danh sách. Nút "Thử lại" và lượt nạp lúc gắn không đặt
+         `busy`, nên một lượt nạp vẫn bay được khi người dùng bấm Xoá — và nó về
+         sau, mang ảnh chụp còn hồ sơ vừa xoá. */
+  /* ĐẾM, đừng chỉ hỏi "có không". Hai lần trong đợt này một phép `assert.match`
+     của tôi vẫn xanh sau khi đột biến gỡ mất chốt, chỉ vì cùng một mẫu còn xuất
+     hiện ở một nhánh khác. */
+  const occurrences = (source, pattern) =>
+    [...source.matchAll(new RegExp(pattern, "g"))].length;
+
+  assert.match(
+    standards,
+    /const ticket = \+\+profilesSequence\.current;/,
+    "loadProfiles của /standards phải có vé",
+  );
+  assert.match(
+    standards,
+    /if \(ticket !== profilesSequence\.current\) return;/,
+    "và phải KIỂM vé trước khi ghi danh sách — dựng vé mà không kiểm thì vô dụng",
+  );
+  /* Hai nhánh xoá — thành công và 404-đã-xoá-ở-nơi-khác — đều phải vô hiệu lượt
+     nạp đang bay. Thiếu một nhánh là hồ sơ vừa xoá hiện lại ở đúng nhánh đó. */
+  assert.equal(
+    occurrences(standards, "profilesSequence\\.current \\+= 1;\\s*setProfiles\\(\\(prev\\) => prev\\.filter"),
+    2,
+    "cả hai nhánh xoá phải vô hiệu lượt nạp đang bay trước khi sửa danh sách",
+  );
+
+  /* 7. `/standards`: DELETE trả 404 nghĩa là ĐÃ xoá — báo lỗi là để lại dòng hồ
+        sơ trên bảng và mời bấm lại đúng yêu cầu đó. */
+  assert.match(
+    standards,
+    /failure\.status === 404 \|\| failure\.code === "profile_not_found"/,
+    "DELETE 404 phải xử như đã xoá xong, không phải như lỗi",
+  );
+}
+
+/* ── Xoá dữ liệu app KHÔNG được khoá theo trạng thái AutoCAD ────────────────
+ *
+ * `WriteButton` mờ đi khi AutoCAD chưa chạy hoặc đang bận — đúng cho lệnh ghi
+ * vào bản vẽ, SAI cho một hồ sơ nằm trên đĩa của app. Dùng nhầm là nút Xoá hồ sơ
+ * chết hẳn mỗi khi người dùng đóng AutoCAD, và không ai đoán ra vì sao.
+ *
+ * Khoá bằng mã nguồn vì dự án không có harness render React: đây là chỗ duy nhất
+ * còn nói được. */
+{
+  const sheet = sourceAt("ConfirmSheet.tsx");
+  assert.match(
+    sheet,
+    /mode === "data" \? \(\s*<Button/,
+    "chế độ `data` phải dùng <Button>, không phải <WriteButton>",
+  );
+  assert.match(
+    sheet,
+    /\| "data";/,
+    "ConfirmMode phải có chế độ `data` cho thao tác không chạm bản vẽ",
+  );
+  /* Và nó KHÔNG được nhắc `UNDO`: AutoCAD không biết gì về dữ liệu này, nên câu
+     "gõ UNDO để hoàn tác" là một đường thoát không tồn tại. */
+  const dataBranch = sheet.slice(
+    sheet.indexOf('mode === "data" ? ('),
+    sheet.indexOf('mode === "session" ? ('),
+  );
+  assert.ok(
+    dataBranch.includes("không</strong> lấy lại được"),
+    "cảnh báo của chế độ `data` phải nói rõ UNDO KHÔNG lấy lại được",
+  );
+}
+
 /* ── Bất biến #7: bảng nhóm phát hiện = tập `scope` máy chủ thật sự phát ────
  *
  * Panel cũ lọc nhóm bằng regex tiếng Việt trên chính chuỗi `scope`, và cách đó

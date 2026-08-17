@@ -399,7 +399,7 @@ route, như `blocks.module.css` vừa làm.
   | # | Kế hoạch đòi | Hiện trạng |
   |---|---|---|
   | ~~6~~ | `features/review/scopes.ts` — bảng tra **6 hằng số** thay cho `scopeMatches()` lọc bằng regex tiếng Việt | **XONG 2026-08-16.** Sáu mã đã đo từ `standardsEngine.ts`: `unit` · `layer` · `dimstyle` · `dim-row` · `frame` · `mapping-required`. Kèm bộ lọc theo nhóm ở `/review` — bảng không có người dùng thì là hằng số chết |
-  | 7 | Nút **Xoá hồ sơ** (`DELETE /profiles/:id`) — kế hoạch ghi rõ đây là "việc thêm mới thật" | daemon có endpoint (`drawingStandards.ts:704`), **không màn nào có nút**. Sau khi xoá panel cũ (2026-08-15) đây là chức năng DUY NHẤT mất hẳn khỏi giao diện — chủ dự án đã chấp nhận và hoãn lại |
+  | ~~7~~ | Nút **Xoá hồ sơ** (`DELETE /profiles/:id`) | **XONG 2026-08-17.** Gửi `If-Match`, xác nhận bằng chế độ `data` mới của `ConfirmSheet` (không nhắc `UNDO`, không dùng `WriteButton` — nút đó khoá theo trạng thái AutoCAD mà hồ sơ thì nằm trên đĩa của app) |
   | ~~—~~ | Bất biến CI **#7**: tập `scope:"…"` trích từ `standardsEngine.ts` = tập hằng số trong `features/review/scopes.ts` | **XONG 2026-08-16.** So hai chiều, cộng một phép chặn ca "regex trích hỏng → so trên tập rỗng thì luôn xanh" |
 
   Lý do kế hoạch nêu cho việc bỏ regex đáng giữ nguyên văn: *backend đổi một chữ
@@ -517,6 +517,14 @@ rồi khởi động lại AutoCAD.
 ---
 
 ## Technical Debt
+
+- **Sáu script test khác vẫn đọc/ghi được vào kho dữ liệu thật.** Đã cắt phụ thuộc
+  cho `test-drawing-standards.mjs` và `test-standards-engine.mjs` (2026-08-17,
+  sau khi một script tạm xoá mất hồ sơ thật của người dùng), nhưng chưa rà toàn
+  bộ `apps/daemon/scripts/`. `resolveStandardsDataDir()` nay ném lỗi khi gặp khoá
+  tuỳ chọn lạ, còn ca "quên truyền tuỳ chọn hoàn toàn" thì vẫn lùi về kho thật —
+  đúng như thiết kế, và đó mới là ca còn hở.
+
 
 - **Không có công cụ bắt lỗi danh sách phụ thuộc của hook.** Hai lỗi cùng dạng đã
   lọt tới vòng review — `cancelPick` đọc `pickBusy` cũ, `applyPicked` gửi DIM

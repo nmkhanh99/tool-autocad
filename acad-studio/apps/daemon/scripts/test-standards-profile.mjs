@@ -135,6 +135,51 @@ try {
     "an existing empty store must not recreate the default profile",
   );
 
+  /* ---------------------------------------------------------------- *
+   * Xoa ho so: ba duong, do THAT chu khong doan
+   * ---------------------------------------------------------------- */
+
+  /* 409 phai GIU NGUYEN ho so. Mot lan tu choi ma van xoa mat la dieu te nhat
+     co the xay ra o day: nguoi dung thay bao loi va tuong khong co gi xay ra. */
+  const target = createProfile("Ho so de xoa", undefined, storage);
+  let conflict = null;
+  try {
+    deleteProfile(target.id, "revision-cu-roi", storage);
+  } catch (error) { conflict = error; }
+  assert.ok(conflict instanceof StandardsConflictError, "revision lech phai nem 409");
+  assert.ok(
+    loadStandardsState(storage).profiles.some((profile) => profile.id === target.id),
+    "va ho so phai CON NGUYEN sau lan tu choi",
+  );
+  assert.equal(deleteProfile(target.id, target.revision, storage), true);
+
+  /* Xoa NOT ca ho so cuoi cung: danh sach rong co GIU duoc khong, hay app gieo
+     lai mot ho so mac dinh? Cau tra loi quyet dinh cau chu tren the xac nhan cua
+     giao dien — no hua rang phai bam "Ho so moi" moi quet duoc tiep. */
+  for (const profile of [...loadStandardsState(storage).profiles]) {
+    deleteProfile(profile.id, profile.revision, storage);
+  }
+  assert.equal(
+    loadStandardsState(storage).profiles.length,
+    0,
+    "xoa sach thi danh sach phai GIU rong — giao dien hua dung dieu do",
+  );
+  // Va tao lai duoc tu danh sach rong: duong thoat ma the xac nhan chi ra.
+  assert.ok(createProfile("Ho so moi", undefined, storage).id);
+  assert.equal(loadStandardsState(storage).profiles.length, 1);
+
+  /* Tuy chon kho GO NHAM ten khoa phai NEM, khong duoc lui ve kho that.
+     Ngay 2026-08-17 mot script do hanh vi xoa da truyen `{ dir }` thay vi
+     `{ dataDir }`; ham lui ve `~/Library/Application Support/acad-studio` va
+     xoa ho so THAT cua nguoi dung. Khong co ban sao nao de lay lai. */
+  for (const bad of [{ dir: temporaryDirectory }, { datadir: temporaryDirectory }]) {
+    assert.throws(
+      () => loadStandardsState(bad),
+      /Tuỳ chọn kho không hợp lệ/,
+      `khoa lạ ${JSON.stringify(bad)} phai bi tu choi, khong duoc lui ve kho that`,
+    );
+  }
+
   console.log("standards profile: ok");
 } finally {
   rmSync(temporaryDirectory, { recursive: true, force: true });

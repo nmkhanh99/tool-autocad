@@ -994,6 +994,50 @@ Ba trường màu của `dimension` (`textColor`, `dimensionLineColor`,
 `extensionLineColor`) và `acadstd:set-color` của `/review` **vẫn chỉ nhận ACI** —
 DIMCLR\* là biến hệ thống theo chỉ số, và mở rộng chúng không nằm trong mục này.
 
+#### Xoá hồ sơ, và ba mã xung đột của đường ghi
+
+`DELETE /profiles/:id` nhận `If-Match` là **`revision`** (hash nội dung, không
+phải số phiên bản). Ba kết quả, và cả ba đều có nghĩa riêng ở giao diện:
+
+| Mã | Nghĩa | Giao diện làm gì |
+|---|---|---|
+| 200 | đã xoá | bỏ hồ sơ khỏi danh sách **ngay**, không đợi lượt nạp lại |
+| 404 | hồ sơ **đã** không còn | xử như **đã xong** — `DELETE` idempotent; báo lỗi là để lại dòng hồ sơ rồi mời bấm lại đúng yêu cầu đó |
+| 409 | `revision` lệch | **không xoá gì**; hồ sơ còn nguyên. Báo trong thẻ xác nhận, không phải sau lưng nó |
+
+`If-Match` là **bắt buộc** ở đường xoá: thiếu hoặc rỗng đều trả **428
+`if_match_required`**. Lý do là một cái bẫy thật — `req.get(...) || undefined`
+biến chuỗi rỗng thành `undefined`, và `deleteProfile()` khi đó **bỏ qua phép so
+revision hoàn toàn**, tức xoá một bản mình chưa từng thấy. Hàm thư viện
+`deleteProfile(id, expectedRevision?)` vẫn nhận `undefined` (các test dùng), nên
+chốt phải nằm ở ROUTE.
+
+Xoá hết hồ sơ thì danh sách **giữ rỗng**; app không gieo lại. (Kho chỉ gieo
+`DEFAULT_PROFILE` khi *file chưa tồn tại*.) Tạo mới từ danh sách rỗng vẫn chạy —
+đó là đường thoát mà thẻ xác nhận hứa.
+
+**Ba mã xung đột của `POST /apply`**, khác nhau ở việc người dùng phải làm gì:
+
+- `profile_not_found` (409) — hồ sơ **bị xoá**. Quét lại bằng hồ sơ đó là không
+  thể; phải chọn hồ sơ khác.
+- `profile_stale` (409) — hồ sơ **bị sửa**. Quét lại bằng chính nó là đủ.
+- `standards_revision_conflict` (409) — chốt cuối `beforeDispatch` bắt được, và
+  nó dùng chung cho **cả hai** tình huống trên. Câu chữ ở giao diện vì thế
+  **không được khẳng định là đã xoá**.
+
+`POST /scan` trả `profile_not_found` ở **404** cho cùng nguyên nhân.
+
+**Vì sao có chốt `beforeDispatch`.** `/apply` kiểm hồ sơ ở đầu handler, rồi
+`await resolveDocument()` và `await requestDrawingInfo()`, rồi `dispatchLiveJob()`
+— mà hàm này **CHỜ khoá job**: AutoCAD chỉ chạy một job một lúc. Cộng lại, quãng
+giữa "kiểm" và "ghi" tính bằng giây, đủ để hồ sơ bị xoá hoặc sửa ở một tab khác,
+và chương trình LISP đã dựng xong từ ảnh chụp cũ vẫn ghi. `dispatchLiveJob()` vì
+thế nhận `options.beforeDispatch` — chạy **sau** khi giành được khoá và **trước**
+khi ghi gì xuống cầu nối; ném lỗi ở đó là huỷ lượt gửi.
+
+Nguyên tắc chung, áp cho mọi đường ghi: **mọi thứ đọc trước một lượt `await` chỉ
+là ảnh chụp.** Chốt cuối phải đọc lại sát lúc ghi.
+
 #### `dimensions` của lượt quét, và chốt của `DIMSPACE`
 
 `POST /scan` trả `dimensions[]` (`handle`, `layer`, `style`, `axis`, `row`,
