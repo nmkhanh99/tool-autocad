@@ -280,7 +280,13 @@
           (if (= axis "V") (car point) (cadr point))
           rotation
           (if (assoc 42 data) (cdr (assoc 42 data)) 0.0)
-          (if (assoc 1 data) (cdr (assoc 1 data)) "")))
+          (if (assoc 1 data) (cdr (assoc 1 data)) "")
+          ;; Khong gian (DXF 410). ssget "_X" gom CA Model lan moi layout, ma toa
+          ;; do hai khong gian doc lap nhau — tron chung vao mot lenh DIMSPACE la
+          ;; doi dim theo mot he toa do khong lien quan. Cot nay dat SAU `text` co
+          ;; chu y: ban lib cu khong co no thi phia doc thay RONG (= khong biet)
+          ;; roi tu choi, thay vi doc nham `text` thanh ten khong gian.
+          (if (assoc 410 data) (cdr (assoc 410 data)) "")))
       (setq index (1+ index))))
   index)
 

@@ -18,6 +18,7 @@ const {
   auditStandards,
   buildStandardsScanLisp,
   parseStandardsScanTsv,
+  readStandardsLib,
   standardsLibPath,
 } = await import("../src/standardsEngine.ts");
 
@@ -340,6 +341,39 @@ console.log("✓ standards engine: builder, parser, DIM rows and audit");
   );
 }
 
+/* ------------------------------------------------------------------ *
+ * Cot KHONG GIAN: hop dong giua LISP va parser
+ * ------------------------------------------------------------------ */
+{
+  /* `ssget "_X"` gom ca Model lan moi layout, ma toa do hai khong gian doc lap
+     nhau — thang can hang phai chia theo khong gian. Cot dat SAU `text` co chu y:
+     ban lib cu khong co no thi phia doc thay RONG (= khong biet) roi tu choi,
+     thay vi doc nham `text` thanh ten khong gian. */
+  const withSpace = parseStandardsScanTsv(
+    "DIM\tA1\tDIM-L\tStd\tH\t10\t0\t2500\tghi chu\tLayout1",
+  ).dimensions[0];
+  assert.equal(withSpace.space, "Layout1");
+  assert.equal(withSpace.text, "ghi chu", "cot `text` khong duoc nuot cot dung sau no");
+
+  // Ban lib CU: thieu cot -> rong, KHONG duoc doan la "Model".
+  const legacy = parseStandardsScanTsv(
+    "DIM\tA1\tDIM-L\tStd\tH\t10\t0\t2500\tghi chu",
+  ).dimensions[0];
+  assert.equal(legacy.space, "", "thieu cot phai la KHONG BIET, khong phai Model");
+  assert.equal(legacy.text, "ghi chu");
+
+  /* Va chinh LISP phai phat cot do. Khoa bang van ban vi khong chay duoc AutoCAD
+     trong unit test — go dong nay ra thi parser van xanh trong khi tinh nang chet
+     lang le: moi luot can hang se bi tu choi vi "khong biet khong gian". */
+  const lib = readStandardsLib();
+  const scanDim = lib.slice(lib.indexOf("(defun acadstd:scan-dimensions"));
+  assert.match(
+    scanDim.slice(0, scanDim.indexOf("(defun", 10)),
+    /\(assoc 410 data\)/,
+    "acadstd:scan-dimensions phai phat DXF 410 (khong gian) cho tung DIM",
+  );
+}
+
 console.log("✓ standards engine: khoang trang khong phai so 0");
 
 /* ------------------------------------------------------------------ *
@@ -368,6 +402,69 @@ console.log("✓ standards engine: khoang trang khong phai so 0");
     }
     assert.notEqual(analysis.anchor.handle, "B2", "va cang khong duoc lam moc");
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * Cham diem phai chia theo KHONG GIAN
+ * ------------------------------------------------------------------ */
+{
+  /* Toa do Model va layout doc lap nhau. Gop chung thi "hang chuan" tinh ra la
+     mot con so vo nghia, va phat hien sinh ra co the co MOC o Model con cai LECH
+     o layout — luot sua sau do doi nham ca chong dim, bao thanh cong, va cai that
+     su sai van nam nguyen. */
+  const dim = (handle, axis, row, space) => ({
+    handle, layer: "", style: "", axis, row, rotation: 0, measurement: 0, text: "",
+    space,
+  });
+  const mixed = [
+    dim("M1", "H", 10, "Model"), dim("M2", "H", 20, "Model"), dim("M3", "H", 43, "Model"),
+    dim("L1", "H", 10, "Layout1"), dim("L2", "H", 20, "Layout1"),
+  ];
+  const analyses = analyzeDimensionRows(mixed, 10, 1);
+  for (const a of analyses) {
+    const spaces = new Set([a.anchor, ...a.candidates].map((r) => r.space));
+    assert.equal(spaces.size, 1, `nhom tron khong gian: ${[...spaces].join(",")}`);
+    assert.equal(a.space, a.anchor.space, "nhom phai mang dung khong gian cua no");
+  }
+  const model = analyses.find((a) => a.space === "Model");
+  assert.ok(model, "phai co nhom cho Model");
+  assert.deepEqual(model.candidates.map((c) => c.handle), ["M3"]);
+  // Layout1 deu hang nen khong co ung vien nao.
+  const layout = analyses.find((a) => a.space === "Layout1");
+  assert.ok(!layout || layout.candidates.length === 0);
+}
+
+/* ------------------------------------------------------------------ *
+ * Id cua phat hien phai duy nhat theo khong gian
+ * ------------------------------------------------------------------ */
+{
+  /* `A-B` va `A_B` cung ra slug `a-b`. Trung id thi giao dien chon mot cai la
+     chon ca hai, roi may chu tu choi vi lo tron khong gian — tuc KHONG layout nao
+     sua duoc nua. */
+  const dim = (handle, row, space) => ({
+    handle, layer: "", style: "", axis: "H", row, rotation: 0, measurement: 0,
+    text: "", space,
+  });
+  const profile = {
+    id: "p", revision: "r", version: 1,
+    drawing: {}, layers: [], mappings: [],
+    dimension: { rowSpacing: 10, rowTolerance: 1 },
+  };
+  const scan = {
+    settings: {},
+    objects: [],
+    dimensions: [
+      dim("A1", 10, "A-B"), dim("A2", 20, "A-B"), dim("A3", 43, "A-B"),
+      dim("B1", 10, "A_B"), dim("B2", 20, "A_B"), dim("B3", 47, "A_B"),
+      dim("M1", 10, "Model"), dim("M2", 20, "Model"), dim("M3", 44, "Model"),
+    ],
+  };
+  const rows = auditStandards(profile, { settings: {} }, scan)
+    .filter((i) => i.scope === "dim-row");
+  const ids = rows.map((i) => i.id);
+  assert.equal(new Set(ids).size, ids.length, `id trung nhau: ${ids.join(", ")}`);
+  assert.ok(ids.includes("dim-row-h"), `Model phai giu id cu, co: ${ids.join(", ")}`);
+  assert.equal(rows.length, 3, `phai co ba nhom, co ${rows.length}`);
 }
 
 console.log("✓ standards engine: DIM thieu toa do khong bi bia thanh 0");

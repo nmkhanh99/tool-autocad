@@ -380,6 +380,15 @@ Hai điều bắt buộc, app khoá nút Sửa và nói rõ nếu chưa đạt:
 - **Căn hàng chỉ làm được ở màn này.** Màn hình chuẩn hoá cũ đã bị xoá; nó không
   biết DIM nào thuộc trục nào nên không chặn được lô trộn hai trục — mà đó là
   lượt ghi không hoàn tác được.
+- **Lệnh dời CẢ CHỒNG dim của trục đó**, kể cả những cái đang đúng hàng — chỉ DIM
+  chuẩn đứng yên. Đây không phải lựa chọn của app: lệnh `DIMSPACE` xếp các dim
+  được chọn cách mốc đúng một bước, nên nếu chỉ gửi mấy cái lệch thì chúng nhảy
+  về ngay cạnh mốc và **đè lên** dim đang nằm ở đó. Thẻ xác nhận nói rõ số dim
+  sắp bị dời trước khi bạn bấm.
+- **App từ chối khi không chắc đã thấy hết dim.** Ba trường hợp: lượt quét chạm
+  trần số dim · có dim cùng trục không đọc được vị trí · plugin LISP bản cũ chưa
+  cho biết dim nằm ở Model hay layout nào. Lý do giống nhau: lệnh rải cả chồng,
+  nên một dim nằm ngoài tầm nhìn của nó sẽ bị các dim khác dời lên đè.
 - **Mỗi lượt chỉ một trục.** Lệnh căn hàng lấy một mốc duy nhất, nên nó chỉ căn
   được các DIM cùng trục. Tích cả DIM ngang lẫn DIM dọc là app chặn — bỏ tích một
   trục, sửa xong rồi làm trục còn lại.

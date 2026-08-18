@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { acadLib } from "./acadBridge.js";
@@ -16,6 +17,12 @@ export type StandardsDimension = {
   rotation: number;
   measurement: number;
   text: string;
+  /** Không gian AutoCAD của chính DIM này (DXF 410): `Model` hoặc tên layout.
+   *
+   * Rỗng = bản `standards_lib.lsp` đang deploy chưa phát cột này. KHÔNG được coi
+   * rỗng là "Model": toạ độ hai không gian độc lập nhau, nên đoán sai là dời dim
+   * theo một hệ toạ độ không liên quan — trên đường ghi không hoàn tác được. */
+  space: string;
 };
 
 export type StandardsObject = {
@@ -47,6 +54,12 @@ export type DimensionRowCandidate = StandardsDimension & {
 
 export type DimensionRowAnalysis = {
   axis: "H" | "V";
+  /** Không gian AutoCAD của cả nhóm này. Rỗng = lượt quét không cho biết.
+   *
+   * Chấm điểm phải chia theo không gian: toạ độ Model và layout độc lập nhau,
+   * nên gộp chung cho ra một "hàng chuẩn" vô nghĩa — mốc ở Model còn cái lệch ở
+   * layout, và lượt sửa sau đó dời nhầm chồng dim. */
+  space: string;
   anchor: StandardsDimension;
   candidates: DimensionRowCandidate[];
 };
@@ -215,7 +228,11 @@ export function parseStandardsScanTsv(raw: string): StandardsScan {
         row: finiteNumber(columns[5]) ?? Number.NaN,
         rotation: numberOrZero(columns[6]),
         measurement: finiteNumber(columns[7]) ?? Number.NaN,
-        text: columns.slice(8).join("\t"),
+        /* Cột CỐ ĐỊNH, không `slice().join()`: `acadstd:text` thay mọi tab bằng
+           dấu cách trước khi ghi, nên `text` không bao giờ chứa tab — và nối
+           phần đuôi lại sẽ nuốt luôn cột không gian đứng sau nó. */
+        text: columns[8] ?? "",
+        space: columns[9] ?? "",
       });
     } else if (columns[0] === "OBJECT" && columns[4]) {
       result.objects.push({
@@ -248,9 +265,16 @@ export function analyzeDimensionRows(
   }
 
   const output: DimensionRowAnalysis[] = [];
+  /* Chia theo TRỤC **và KHÔNG GIAN**. `ssget "_X"` gom cả Model lẫn mọi layout,
+     mà toạ độ hai không gian độc lập nhau — gộp chung thì "hàng chuẩn" tính ra
+     là một con số vô nghĩa, và phát hiện sinh ra có thể có mốc ở Model còn cái
+     lệch ở layout. Lượt sửa sau đó dời nhầm cả chồng dim. */
+  const spaces = [...new Set(dimensions.map((row) => String(row.space ?? "").trim()))];
+  for (const space of spaces) {
   for (const axis of ["H", "V"] as const) {
     const rows = dimensions
       .filter((dimension) => dimension.axis.toUpperCase() === axis &&
+        String(dimension.space ?? "").trim() === space &&
         Number.isFinite(dimension.row))
       .slice()
       .sort((left, right) => left.row - right.row ||
@@ -288,7 +312,8 @@ export function analyzeDimensionRows(
         ? [{ ...dimension, expectedRow, offset, deviation }]
         : [];
     });
-    output.push({ axis, anchor: best, candidates });
+    output.push({ axis, space, anchor: best, candidates });
+  }
   }
   return output;
 }
@@ -619,11 +644,26 @@ export function auditStandards(
   if (spacing !== undefined && spacing > 0) {
     for (const analysis of analyzeDimensionRows(scan.dimensions, spacing, tolerance)) {
       if (!analysis.candidates.length) continue;
+      /* Id phải DUY NHẤT theo không gian: cùng một trục có thể lệch hàng ở cả
+         Model lẫn từng layout, và hai phát hiện trùng id thì giao diện chọn một
+         cái là chọn cả hai, rồi máy chủ từ chối vì lô trộn không gian — tức KHÔNG
+         layout nào sửa được nữa.
+         Slug thôi thì CHƯA đủ: `A-B` và `A_B` cùng ra `a-b`. Ghép thêm hash của
+         tên GỐC — phần slug để đọc, phần hash để không đụng nhau.
+         Model giữ id cũ để không đổi vô cớ thứ người dùng đang quen. */
+      const spaceKey = analysis.space.trim();
+      const spaceSlug = spaceKey.toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const spaceHash = createHash("sha1").update(spaceKey).digest("hex").slice(0, 8);
+      const spaceSuffix = !spaceKey || /^model$/i.test(spaceKey)
+        ? ""
+        : `-${spaceSlug ? `${spaceSlug}-` : ""}${spaceHash}`;
       issues.push({
-        id: `dim-row-${analysis.axis.toLowerCase()}`,
+        id: `dim-row-${analysis.axis.toLowerCase()}${spaceSuffix}`,
         scope: "dim-row",
         severity: "warning",
-        message: `${analysis.candidates.length} DIM ${analysis.axis} lệch hàng chuẩn.`,
+        message: `${analysis.candidates.length} DIM ${analysis.axis} lệch hàng chuẩn`
+          + `${spaceKey && !/^model$/i.test(spaceKey) ? ` ở layout ${spaceKey}` : ""}.`,
         handles: analysis.candidates.map((candidate) => candidate.handle),
         current: analysis.candidates.map((candidate) => ({
           handle: candidate.handle,
@@ -634,6 +674,11 @@ export function auditStandards(
         suggestedAction: {
           action: "dimspace",
           axis: analysis.axis,
+          /* Không gian đi kèm phát hiện: lượt sửa phải kiểm mốc người dùng chọn
+             có CÙNG không gian với phát hiện không. Thiếu nó thì `/apply` lặng lẽ
+             dựng thang ở không gian của mốc và bỏ qua đúng cái nó được yêu cầu
+             sửa — lệnh báo thành công mà phát hiện vẫn còn nguyên. */
+          space: analysis.space,
           baseHandle: analysis.anchor.handle,
           handles: analysis.candidates.map((candidate) => candidate.handle),
           spacing,

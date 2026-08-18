@@ -1065,8 +1065,61 @@ chạy `dimspaceRejection()` **trước khi dispatch**. Bốn lý do từ chối
 | `dim_base_row_unknown` | `row` của nó là `NaN` |
 | `dim_base_axis_mismatch` | chuẩn khác trục với lô |
 
-Lý do: `acadstd:dimspace` nhận **đúng một** handle mốc rồi căn mọi handle còn lại
-theo nó, nên nó chỉ căn được các DIM **cùng trục** — và nó ghi MỘT PHA. Trộn trục
+**Lệnh gửi CẢ THANG**, không chỉ mấy DIM bị báo lệch: `dimspaceLadder()` lấy mọi
+DIM cùng trục của lượt quét (bỏ mốc, bỏ DIM không đọc được `row`, sắp theo hàng).
+
+Đo thật trên AutoCAD 2027 ngày 2026-08-17 — bốn DIM ngang ở hàng 10/20/30/**43**,
+mốc ở hàng 10, bước 10:
+
+| Gửi gì | Kết quả |
+|---|---|
+| chỉ DIM lệch (`9B`) | `9B` về hàng **20** — **đè** lên `7F` đang nằm đó |
+| cả thang (`7F 8D 9B`) | **20 / 30 / 40** — thang đều, không đè |
+
+Lệnh báo **thành công ở cả hai**. Lý do: `DIMSPACE` xếp các DIM *được chọn* cách
+mốc đúng một bước, nó **không** đưa chúng về ô trống trong thang — nên nó cần
+thấy cả chồng mới rải đúng.
+
+**"Cả thang" là một lời KHẲNG ĐỊNH về tính đầy đủ**, và `DIMSPACE` rải các DIM
+dựa trên đúng lời khẳng định đó. Mỗi lỗ hổng trong nó là một lượt ghi không hoàn
+tác được đặt dim lên chỗ sai, nên `/apply` **từ chối** thay vì đoán:
+
+| Mã (400) | Khi nào | Vì sao không thể vá bằng cách lọc |
+|---|---|---|
+| `dim_scan_truncated` | lượt quét chạm trần `MAX_SCAN_ITEMS` | DIM ngoài danh sách vẫn nằm trong bản vẽ và đứng yên; cái được gửi rải lên đúng chỗ chúng đang nằm |
+| `dim_space_unknown` | **bất kỳ** DIM cùng trục nào không rõ không gian | nó có thể đang nằm ngay trong không gian của mốc; thang bỏ nó ra rồi rải dim khác lên đúng chỗ nó đứng |
+| `dim_space_mixed` | lô có phát hiện ở nhiều không gian | hai chồng dim độc lập, mà một lệnh chỉ có một mốc |
+| `dim_base_space_mismatch` | mốc ở không gian khác với phát hiện | `/apply` sẽ dựng thang ở không gian của mốc và **bỏ qua đúng cái nó được yêu cầu sửa** — lệnh báo thành công mà phát hiện còn nguyên |
+| `dim_row_unknown_in_ladder` | có DIM cùng trục + cùng không gian không đọc được `row` | nó vẫn ở đó, ở một hàng ta không biết, và thang sẽ rải đè lên |
+
+Cái cuối đáng ghi riêng: bản đầu **lọc âm thầm** những dòng đó khỏi thang. Lọc
+chỉ giấu vấn đề — dim vẫn nằm trong bản vẽ. Nay không loại, mà từ chối cả lô.
+
+**Chấm điểm chia theo KHÔNG GIAN, không chỉ theo trục.** `analyzeDimensionRows()`
+gộp theo `(trục, không gian)`; gộp chung mọi không gian cho ra một "hàng chuẩn"
+vô nghĩa, và phát hiện sinh ra có thể có **mốc ở Model còn cái lệch ở layout**.
+Vì thế `id` của phát hiện mang thêm hậu tố không gian —
+`dim-row-h-<slug>-<hash8>`, ví dụ `dim-row-h-layout1-3f2a91c7`. **Slug thôi thì
+chưa đủ**: `A-B` và `A_B` cùng ra `a-b`, và hai phát hiện trùng `id` thì giao
+diện chọn một cái là chọn cả hai, rồi máy chủ từ chối vì lô trộn không gian — tức
+KHÔNG layout nào sửa được nữa. Phần slug để đọc, phần hash (sha1 của tên GỐC) để
+không đụng nhau. Model giữ `dim-row-h` để không đổi vô cớ thứ người dùng đang quen. `scope` vẫn là
+`dim-row` — bảng nhãn ở `features/review/scopes.ts` không đổi.
+
+**Không gian là một cột của lượt quét.** `acadstd:scan-dimensions` phát DXF 410
+sau cột `text`; `ssget "_X"` gom cả Model lẫn mọi layout, nên thang phải chia
+theo không gian. Vị trí cột đặt sau `text` có chủ ý: bản `standards_lib.lsp` cũ
+không có nó thì phía đọc thấy **rỗng = không biết** rồi từ chối, thay vì đọc nhầm
+`text` thành tên không gian. Đi kèm, `text` thôi dùng `columns.slice(8).join()` —
+`acadstd:text` thay mọi tab bằng dấu cách nên cột cố định là an toàn, còn nối
+phần đuôi sẽ nuốt luôn cột đứng sau.
+
+Đánh đổi phải nói ra ở thẻ xác nhận: lệnh **dời cả những DIM đang đúng hàng**.
+`applySummary()` đếm theo handle của phát hiện nên sẽ nói ÍT HƠN sự thật; `/review`
+thêm một khối cảnh báo riêng ghi rõ số DIM sắp bị dời.
+
+Lý do vẫn phải một trục: `acadstd:dimspace` nhận **đúng một** handle mốc rồi căn
+mọi handle còn lại theo nó — và nó ghi MỘT PHA. Trộn trục
 hay lấy mốc sai trục vẫn chạy êm; AutoCAD không báo gì, các DIM chỉ nằm sai chỗ.
 So handle **sau khi chuẩn hoá hoa/thường**: `cleanHandles()` viết hoa yêu cầu còn
 parser giữ nguyên cách viết của bản vẽ.

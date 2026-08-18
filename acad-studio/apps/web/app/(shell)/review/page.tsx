@@ -41,6 +41,7 @@ import { DaemonError, daemonFailureText, daemonRecord } from "../../../lib/daemo
 import {
   applyBlockedReason,
   dimspaceBlockedReason,
+  dimspaceLadder,
   issueAxis,
   applySummary,
   filterIssues,
@@ -558,10 +559,20 @@ export default function ReviewPage() {
     .filter((issue) => issue.action === "dimspace")
     .map(issueAxis)
     .filter(Boolean))];
+  /* Tập DIM máy chủ THẬT SỰ dời — dùng cho câu cảnh báo ở thẻ xác nhận. */
+  const dimBaseRow = scan?.dimensions.find(
+    (row) => row.handle.trim().toUpperCase() === dimBaseHandle.trim().toUpperCase(),
+  );
+  const dimLadder = dimAxes.length === 1
+    ? dimspaceLadder(
+      scan?.dimensions ?? [], dimAxes[0], dimBaseHandle, dimBaseRow?.space ?? "",
+    )
+    : [];
   const dimNote = dimspaceBlockedReason({
     selected: pickedIssues,
     dimensions: scan?.dimensions ?? [],
     baseHandle: dimBaseHandle,
+    dimensionsTruncated: !!scan?.dimensionsTruncated,
   });
   const applyBlocked = applyBlockedReason({
     scan, target: compareTarget, activeTarget: activeCompare,
@@ -1150,6 +1161,21 @@ export default function ReviewPage() {
           onConfirm={() => void applyPicked()}
           onCancel={() => setConfirmOpen(false)}
         >
+          {/* Lệnh căn hàng dời CẢ THANG, kể cả những DIM đang đúng — nói ra ở
+              đây, vì `applySummary()` đếm theo handle của phát hiện và sẽ nói
+              ÍT HƠN sự thật ở đúng chỗ người dùng đọc để quyết định bấm một lệnh
+              không hoàn tác được. Cùng lý do với ba hành động "chạm cả bản vẽ"
+              mà `applySummary()` đã phải kể riêng. */}
+          {dimAxes.length === 1 ? (
+            <div className="callout" data-kind="warn">
+              <span className="lbl">Căn hàng dời cả chồng dim</span>
+              <p>
+                Lệnh sẽ rải đều <b>{dimLadder.length} DIM trục{" "}
+                {dimAxes[0] === "V" ? "dọc" : "ngang"}</b> theo DIM chuẩn — kể cả
+                những cái <b>đang đúng hàng</b>. Chỉ DIM chuẩn đứng yên.
+              </p>
+            </div>
+          ) : null}
           <ul className="hint" style={{ margin: 0, paddingLeft: "1.2em" }}>
             {pickedIssues.slice(0, 8).map((issue) => (
               <li key={issue.id}>{severityLabel(issue.severity)} · {issue.message}</li>

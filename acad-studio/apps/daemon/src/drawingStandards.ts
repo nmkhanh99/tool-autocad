@@ -85,6 +85,12 @@ type ScanSession = {
   scannedAt: string;
   settings: Record<string, string>;
   dimensions: StandardsDimension[];
+  /** Danh sách dimension đã bị cắt ở `MAX_SCAN_ITEMS` chưa.
+   *
+   * Lệnh căn hàng gửi CẢ THANG, tức nó khẳng định đã thấy hết dim cùng trục —
+   * một danh sách bị cắt làm lời khẳng định đó sai, và các dim được gửi sẽ rải
+   * đè lên những cái không có trong danh sách. */
+  dimensionsTruncated: boolean;
   objects: StandardsObject[];
   issues: StandardsAuditIssue[];
 };
@@ -557,11 +563,118 @@ function metersPerUnit(insunits: unknown): number | null {
  * được phép làm hỏng bản vẽ. Hàm thuần và xuất ra để test được — chốt nằm trong
  * thân handler là chốt không ai kiểm.
  */
+/** Mọi DIM **cùng trục** trong lượt quét, trừ DIM chuẩn — theo thứ tự hàng.
+ *
+ * `DIMSPACE` xếp các DIM **được chọn** cách mốc đúng một bước, chứ không đưa
+ * chúng về ô trống trong thang. Gửi riêng mấy cái lệch vì thế cho ra kết quả sai
+ * mà lệnh vẫn báo thành công — đo thật ngày 2026-08-17: một DIM ở hàng 43 với
+ * mốc ở hàng 10 và bước 10 nhảy về hàng **20**, đè lên một DIM đang nằm sẵn ở
+ * đó. Muốn cả chồng thành một thang đều thì phải gửi **cả chồng**.
+ *
+ * Đánh đổi, và nó phải được nói ra ở thẻ xác nhận: lệnh sẽ **dời cả những DIM
+ * đang đúng hàng**.
+ *
+ * Bỏ DIM không đọc được toạ độ hàng: `DIMSPACE` căn THEO chính con số đó. */
+export function dimspaceLadder(
+  dimensions: readonly StandardsDimension[],
+  axis: string,
+  baseHandle: string,
+  /** Không gian của DIM chuẩn. Chỉ những DIM CÙNG không gian mới vào thang. */
+  space: string,
+): StandardsDimension[] {
+  const wanted = axis.trim().toUpperCase();
+  const base = baseHandle.trim().toUpperCase();
+  const where = space.trim();
+  return dimensions
+    .filter((row) => String(row.axis ?? "").trim().toUpperCase() === wanted)
+    .filter((row) => String(row.space ?? "").trim() === where)
+    .filter((row) => row.handle.trim().toUpperCase() !== base)
+    .sort((left, right) => left.row - right.row);
+}
+
+/** Thang có ĐỦ để gửi đi không — hoặc lý do từ chối.
+ *
+ * "Cả thang" là một lời KHẲNG ĐỊNH về tính đầy đủ, và `DIMSPACE` rải các DIM
+ * được chọn dựa trên đúng lời khẳng định đó. Mỗi lỗ hổng trong nó là một lượt
+ * ghi không hoàn tác được đặt dim lên chỗ sai:
+ *
+ * - **Lượt quét bị cắt** → có DIM không nằm trong danh sách. Chúng đứng yên
+ *   trong bản vẽ, còn những cái được gửi thì rải lên đúng chỗ chúng đang nằm.
+ * - **Có DIM cùng trục/cùng không gian không đọc được `row`** → nó vẫn ở đó,
+ *   ở một hàng ta không biết, và thang sẽ rải đè lên. Loại nó khỏi thang chỉ
+ *   giấu vấn đề đi, không giải quyết.
+ * - **Không biết không gian** (bản `standards_lib.lsp` cũ) → không chia thang
+ *   theo không gian được, mà toạ độ Model và layout thì độc lập nhau.
+ */
+export function dimspaceLadderRejection(input: {
+  dimensions: readonly StandardsDimension[];
+  axis: string;
+  baseHandle: string;
+  baseSpace: string;
+  truncated: boolean;
+}): { error: string; code: string; hint: string } | null {
+  if (input.truncated) {
+    return {
+      error: "Lượt quét đã chạm trần số dimension nên danh sách không đầy đủ",
+      code: "dim_scan_truncated",
+      hint: "Lệnh căn hàng cần thấy TOÀN BỘ dim cùng trục. Thu hẹp bản vẽ hoặc "
+        + "căn tay trong AutoCAD.",
+    };
+  }
+  if (!input.baseSpace.trim()) {
+    return {
+      error: "Lượt quét không cho biết DIM chuẩn thuộc không gian nào",
+      code: "dim_space_unknown",
+      hint: "Bản standards_lib.lsp đang dùng chưa phát không gian của dimension. "
+        + "Triển khai lại thư viện LISP rồi quét lại.",
+    };
+  }
+  const wanted = input.axis.trim().toUpperCase();
+  /* Một DIM cùng trục mà không rõ không gian có thể đang nằm NGAY TRONG không
+     gian của mốc. Thang bỏ nó ra vì không so được, rồi rải các dim khác lên đúng
+     chỗ nó đang đứng — và lệnh báo thành công. Không biết thì từ chối cả lô. */
+  const homeless = input.dimensions.find((row) =>
+    String(row.axis ?? "").trim().toUpperCase() === wanted
+    && !String(row.space ?? "").trim());
+  if (homeless) {
+    return {
+      error: `Không biết DIM ${homeless.handle} cùng trục thuộc không gian nào`,
+      code: "dim_space_unknown",
+      hint: "Bản standards_lib.lsp đang dùng chưa phát không gian cho dim đó. "
+        + "Triển khai lại thư viện LISP rồi quét lại.",
+    };
+  }
+  const blind = input.dimensions.find((row) =>
+    String(row.axis ?? "").trim().toUpperCase() === wanted
+    && String(row.space ?? "").trim() === input.baseSpace.trim()
+    && !Number.isFinite(row.row));
+  if (blind) {
+    return {
+      error: `Không đọc được toạ độ hàng của DIM ${blind.handle} cùng trục`,
+      code: "dim_row_unknown_in_ladder",
+      hint: "Lệnh căn hàng rải cả chồng, nên một dim không biết đang nằm đâu sẽ "
+        + "bị các dim khác đè lên. Sửa dim đó rồi quét lại.",
+    };
+  }
+  return null;
+}
+
 export function dimspaceRejection(
   issues: readonly StandardsAuditIssue[],
   dimensions: readonly StandardsDimension[],
   baseHandle: string,
 ): { error: string; code: string; hint: string } | null {
+  /* Không gian cũng vậy: hai phát hiện cùng trục nhưng khác không gian là hai
+     chồng dim độc lập, và một lệnh `DIMSPACE` chỉ có một mốc. */
+  const spaces = [...new Set(issues
+    .map((issue) => String(asRecord(issue.suggestedAction).space ?? "").trim()))];
+  if (spaces.length > 1) {
+    return {
+      error: "Lô có DIM lệch hàng ở nhiều không gian; lệnh căn hàng chỉ căn được một",
+      code: "dim_space_mixed",
+      hint: "Bỏ tích các phát hiện ở không gian khác, sửa xong rồi làm tiếp.",
+    };
+  }
   const axes = [...new Set(issues
     .map((issue) => String(asRecord(issue.suggestedAction).axis ?? "").trim().toUpperCase())
     .filter(Boolean))];
@@ -617,6 +730,17 @@ export function dimspaceRejection(
       error: `DIM chuẩn thuộc trục ${baseAxis}, còn lô cần căn trục ${axes[0]}`,
       code: "dim_base_axis_mismatch",
       hint: "Chọn một DIM chuẩn cùng trục với các phát hiện đã tích.",
+    };
+  }
+  /* Mốc phải ở CÙNG không gian với phát hiện. Không kiểm thì `/apply` lặng lẽ
+     dựng thang ở không gian của mốc và bỏ qua đúng cái nó được yêu cầu sửa —
+     lệnh báo thành công mà phát hiện vẫn còn nguyên. */
+  const baseSpace = String(base.space ?? "").trim();
+  if (spaces.length === 1 && spaces[0] && baseSpace && baseSpace !== spaces[0]) {
+    return {
+      error: `DIM chuẩn ở "${baseSpace}", còn lô cần căn ở "${spaces[0]}"`,
+      code: "dim_base_space_mismatch",
+      hint: "Chọn một DIM chuẩn cùng không gian với các phát hiện đã tích.",
     };
   }
   return null;
@@ -1063,6 +1187,9 @@ export function drawingStandardsRouter(
         scannedAt,
         settings: parsed.settings,
         dimensions: parsed.dimensions,
+        /* Cùng phép tính với cờ phát ra trong `evidence` — một chỗ nói với người
+           dùng, một chỗ chặn lượt ghi, và hai chỗ đó không được lệch nhau. */
+        dimensionsTruncated: parsed.dimensions.length >= MAX_SCAN_ITEMS,
         objects: displayObjects(parsed.objects, parsed.settings, profile.drawing.insunits),
         issues,
       };
@@ -1251,8 +1378,33 @@ export function drawingStandardsRouter(
         const baseHandle = cleanHandles([req.body?.dimBaseHandle], true)[0]!;
         const rejection = dimspaceRejection(dimensionIssues, session.dimensions, baseHandle);
         if (rejection) return res.status(400).json({ ok: false, ...rejection });
-        const handles = cleanHandles(dimensionIssues.flatMap((issue) => issue.handles))
-          .filter((handle) => handle !== baseHandle);
+        /* CẢ THANG, không chỉ mấy cái lệch. Xem `dimspaceLadder()` — gửi riêng
+           các DIM lệch làm chúng nhảy về mốc+1 bước và đè lên DIM đang nằm ở đó.
+           Trục lấy từ chính phát hiện; `dimspaceRejection()` ngay trên đã bảo
+           đảm cả lô chỉ có MỘT trục và mốc cùng trục với nó. */
+        const batchAxis = String(
+          asRecord(dimensionIssues[0]?.suggestedAction).axis ?? "",
+        ).trim().toUpperCase();
+        /* Không gian lấy từ chính DIM chuẩn — `dimspaceRejection()` ngay trên đã
+           bảo đảm nó có trong lượt quét. */
+        const baseRow = session.dimensions.find(
+          (row) => row.handle.trim().toUpperCase() === baseHandle,
+        );
+        const ladderRejection = dimspaceLadderRejection({
+          dimensions: session.dimensions,
+          axis: batchAxis,
+          baseHandle,
+          baseSpace: String(baseRow?.space ?? ""),
+          truncated: session.dimensionsTruncated,
+        });
+        if (ladderRejection) {
+          return res.status(400).json({ ok: false, ...ladderRejection });
+        }
+        const handles = cleanHandles(
+          dimspaceLadder(
+            session.dimensions, batchAxis, baseHandle, String(baseRow?.space ?? ""),
+          ).map((row) => row.handle),
+        ).filter((handle) => handle !== baseHandle);
         /* Mốc không tự căn theo chính nó. Mã có kiểu thay vì `throw`: đây là
            một lý do từ chối RIÊNG, và người dùng cần biết phải làm gì khác. */
         if (!handles.length) {

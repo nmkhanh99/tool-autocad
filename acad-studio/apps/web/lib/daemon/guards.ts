@@ -157,6 +157,38 @@ export const guards: Record<string, Guard> = {
     fix: "Chọn một DIM khác — bảng dimension hiện “—” ở cột Hàng cho những dòng "
       + "không đo được.",
   },
+  dim_space_mixed: {
+    title: "Lô căn hàng trải trên nhiều không gian",
+    why: "Dim ở Model và dim ở layout là hai chồng độc lập với hai hệ toạ độ "
+      + "riêng, mà một lệnh căn hàng chỉ có một mốc.",
+    fix: "Bỏ tích các phát hiện ở không gian khác, sửa xong rồi làm tiếp.",
+  },
+  dim_base_space_mismatch: {
+    title: "Dim chuẩn khác không gian với lô",
+    why: "Dim chuẩn đang chọn nằm ở một không gian khác với các phát hiện đã "
+      + "tích. Căn theo nó sẽ dời nhầm chồng dim và để nguyên chỗ thật sự sai.",
+    fix: "Chọn một dim chuẩn cùng không gian với lô.",
+  },
+  dim_scan_truncated: {
+    title: "Lượt quét chưa thấy hết dimension",
+    why: "Bản vẽ có nhiều dimension hơn mức một lượt quét đọc được, nên danh sách "
+      + "bị cắt. Lệnh căn hàng rải CẢ CHỒNG dim cùng trục, nên nó phải thấy hết — "
+      + "thiếu cái nào thì cái đó đứng yên và bị các dim khác dời lên đè.",
+    fix: "Căn tay trong AutoCAD, hoặc tách bớt dimension rồi quét lại.",
+  },
+  dim_space_unknown: {
+    title: "Không biết dimension thuộc không gian nào",
+    why: "Thư viện LISP đang chạy chưa cho biết mỗi dimension nằm ở Model hay ở "
+      + "layout nào. Toạ độ hai không gian độc lập nhau, nên trộn chung một lệnh "
+      + "căn hàng sẽ dời dim theo một hệ toạ độ không liên quan.",
+    fix: "Triển khai lại thư viện LISP (standards_lib.lsp) rồi quét lại.",
+  },
+  dim_row_unknown_in_ladder: {
+    title: "Có dimension cùng trục không đọc được vị trí",
+    why: "Lệnh căn hàng rải cả chồng dim cùng trục. Một dim không biết đang nằm "
+      + "đâu vẫn ở nguyên trong bản vẽ, và những dim khác sẽ bị dời lên đè lên nó.",
+    fix: "Sửa hoặc xoá dim đó trong AutoCAD rồi quét lại.",
+  },
   dim_base_only_candidate: {
     title: "Không còn DIM nào để căn",
     why: "Lệnh căn hàng dời các dimension THEO mốc, nên mốc không tự căn theo "

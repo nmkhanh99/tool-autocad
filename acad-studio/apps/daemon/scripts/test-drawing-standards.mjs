@@ -22,6 +22,8 @@ const {
   documentGuardLisp,
   drawingRevision,
   drawingStandardsRouter,
+  dimspaceLadder,
+  dimspaceLadderRejection,
   dimspaceRejection,
   filterObjectsByMappingBounds,
   isIncompleteSnapshotWarning,
@@ -513,6 +515,14 @@ const routerSource = readFileSync(
 );
 assert.match(routerSource, /snapshotDocument\.quiescent !== true/);
 assert.match(routerSource, /drawing_revision_unavailable/);
+/* Duong /apply phai gui CA THANG, khong phai handle cua rieng may phat hien.
+   Test ham `dimspaceLadder()` o duoi khong bat duoc viec doi NOI GOI — do do
+   khoa them bang van ban. */
+assert.match(
+  routerSource,
+  /const handles = cleanHandles\(\s*dimspaceLadder\(\s*session\.dimensions, batchAxis, baseHandle, String\(baseRow\?\.space \?\? ""\),\s*\)\.map\(\(row\) => row\.handle\),/,
+  "duong /apply phai lay handle tu dimspaceLadder(), khong tu issue.handles",
+);
 /* "Ho so BI XOA" phai tach khoi "ho so da sua". Gop vao `profile_stale` la bao
    nguoi dung "quet lai" — ma quet lai bang chinh ho so do thi khong the, no
    khong con ton tai. Hai tinh huong, hai viec phai lam.
@@ -780,6 +790,95 @@ console.log("✓ drawing standards router: typed actions and routes");
      428. Mot chot chan het moi thu cung la mot chot hong. */
   const withToken = await call("revision-nao-do");
   assert.equal(withToken.status, 404, JSON.stringify(withToken));
+}
+
+/* ------------------------------------------------------------------ *
+ * Can hang gui CA THANG, khong chi may cai lech
+ * ------------------------------------------------------------------ */
+{
+  /* `DIMSPACE` xep cac DIM DUOC CHON cach moc dung mot buoc, khong dua chung ve
+     o trong trong thang. Do that tren AutoCAD 2027 ngay 2026-08-17: bon DIM ngang
+     o hang 10/20/30/43, moc la cai o hang 10, buoc 10 —
+       gui rieng cai lech (9B)      -> 9B ve hang 20, DE len 7F dang nam do
+       gui ca thang (7F, 8D, 9B)    -> 20 / 30 / 40, thang deu, khong de nhau
+     Lenh bao thanh cong o CA HAI truong hop. */
+  const dim = (handle, axis, row, space = "Model") => ({
+    handle, layer: "", style: "", axis, row, rotation: 0, measurement: 0, text: "",
+    space,
+  });
+  const all = [
+    dim("9B", "H", 43), dim("71", "H", 10), dim("8D", "H", 30), dim("7F", "H", 20),
+    dim("A9", "V", 210), dim("B7", "V", 225),
+  ];
+
+  // Cung truc, bo moc, va SAP THEO HANG — DIMSPACE rai theo thu tu hinh hoc.
+  const ids = (...args) => dimspaceLadder(...args).map((row) => row.handle);
+  assert.deepEqual(ids(all, "H", "71", "Model"), ["7F", "8D", "9B"]);
+  assert.deepEqual(ids(all, "V", "A9", "Model"), ["B7"]);
+  assert.deepEqual(ids(all, "H", "A9", "Model"), ["71", "7F", "8D", "9B"]);
+  // Hoa/thuong: `cleanHandles()` viet hoa moc, parser giu nguyen cach viet.
+  assert.deepEqual(ids(all, "h", "9b", "Model"), ["71", "7F", "8D"]);
+  /* DIM khong doc duoc toa do hang KHONG bi loai am tham — no van trong thang, va
+     `dimspaceLadderRejection()` tu choi ca lo. Loai no ra chi giau van de: no van
+     nam do trong ban ve, o mot hang ta khong biet, va cac dim khac se rai de len. */
+  assert.deepEqual(ids([...all, dim("CC", "H", Number.NaN)], "H", "71", "Model"),
+    ["7F", "8D", "9B", "CC"]);
+
+  /* KHONG GIAN: `ssget "_X"` gom ca Model lan moi layout, ma toa do hai khong
+     gian doc lap nhau — tron chung vao mot lenh DIMSPACE la doi dim theo mot he
+     toa do khong lien quan. */
+  const mixed = [...all, dim("EE", "H", 15, "Layout1"), dim("FF", "H", 25, "Layout1")];
+  assert.deepEqual(ids(mixed, "H", "71", "Model"), ["7F", "8D", "9B"],
+    "dim o layout khac khong duoc lot vao thang cua Model");
+  assert.deepEqual(ids(mixed, "H", "EE", "Layout1"), ["FF"]);
+
+  /* "Ca thang" la mot loi KHANG DINH ve tinh day du. Moi lo hong trong no la mot
+     luot ghi khong hoan tac duoc dat dim len cho sai. */
+  const reject = (over) => dimspaceLadderRejection({
+    dimensions: all, axis: "H", baseHandle: "71", baseSpace: "Model",
+    truncated: false, ...over,
+  })?.code ?? null;
+
+  assert.equal(reject({}), null, "thang day du thi khong tu choi");
+  assert.equal(reject({ truncated: true }), "dim_scan_truncated",
+    "luot quet bi cat = co DIM khong nam trong danh sach, chung dung yen va bi de len");
+  assert.equal(reject({ baseSpace: "" }), "dim_space_unknown",
+    "ban standards_lib.lsp cu khong phat khong gian → khong chia thang duoc");
+  assert.equal(
+    reject({ dimensions: [...all, dim("CC", "H", Number.NaN)] }),
+    "dim_row_unknown_in_ladder",
+    "DIM cung truc khong doc duoc hang van nam do va se bi de len — loai no khoi thang chi giau van de",
+  );
+  /* DIM mu o KHONG GIAN KHAC thi khong lien quan: no khong nam trong thang. */
+  assert.equal(
+    reject({ dimensions: [...all, dim("CC", "H", Number.NaN, "Layout1")] }),
+    null,
+  );
+  /* KHONG RO khong gian: dim do co the dang nam NGAY TRONG khong gian cua moc.
+     Thang bo no ra vi khong so duoc, roi rai cac dim khac len dung cho no dang
+     dung — va lenh bao thanh cong. */
+  assert.equal(
+    reject({ dimensions: [...all, dim("CC", "H", 55, "")] }),
+    "dim_space_unknown",
+  );
+
+  /* Moc phai CUNG khong gian voi phat hien, neu khong /apply lang le dung thang
+     o khong gian cua moc va bo qua dung cai no duoc yeu cau sua. */
+  const issueIn = (space) => ({
+    id: "dim-row-h", scope: "dim-row", severity: "warning", message: "",
+    handles: ["9B"], current: null, expected: null,
+    suggestedAction: { action: "dimspace", axis: "H", space },
+  });
+  assert.equal(
+    dimspaceRejection([issueIn("Layout1")], all, "71")?.code,
+    "dim_base_space_mismatch",
+    "moc o Model khong can duoc lo cua Layout1",
+  );
+  assert.equal(dimspaceRejection([issueIn("Model")], all, "71"), null);
+  assert.equal(
+    dimspaceRejection([issueIn("Model"), issueIn("Layout1")], all, "71")?.code,
+    "dim_space_mixed",
+  );
 }
 
 console.log("✓ drawing standards: dimspace axis guard + area bounds (rong, don vi)");

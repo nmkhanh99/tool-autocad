@@ -13,6 +13,7 @@ import {
   aciHex,
   applyBlockedReason,
   dimspaceBlockedReason,
+  dimspaceLadder,
   applyProfileEdits,
   applySummary,
   filterIssues,
@@ -1323,9 +1324,14 @@ test("dimspace: một lô — một trục — một DIM chuẩn cùng trục", 
     current: null, expected: null, suggestedAction: { action: "dimspace", axis },
     action: "dimspace",
   });
+  /* Mỗi trục phải có ÍT NHẤT HAI DIM: lệnh gửi CẢ THANG trừ mốc, nên một trục
+     chỉ có mình mốc sẽ dừng ở phép kiểm "không còn gì để dời" trước khi tới phần
+     trục mà test này muốn soi. */
   const dims = [
-    { handle: "A1", layer: "", style: "", axis: "H", row: 0, measurement: 0, text: "" },
-    { handle: "B2", layer: "", style: "", axis: "V", row: 0, measurement: 0, text: "" },
+    { handle: "A1", layer: "", style: "", axis: "H", row: 0, measurement: 0, text: "", space: "Model" },
+    { handle: "A2", layer: "", style: "", axis: "H", row: 10, measurement: 0, text: "", space: "Model" },
+    { handle: "B2", layer: "", style: "", axis: "V", row: 0, measurement: 0, text: "", space: "Model" },
+    { handle: "B3", layer: "", style: "", axis: "V", row: 10, measurement: 0, text: "", space: "Model" },
   ];
   const other = {
     id: "units", scope: "drawing", severity: "warning" as const, message: "", handles: [],
@@ -1334,25 +1340,25 @@ test("dimspace: một lô — một trục — một DIM chuẩn cùng trục", 
   };
 
   assert.equal(
-    dimspaceBlockedReason({ selected: [other], dimensions: dims, baseHandle: "" }),
+    dimspaceBlockedReason({ selected: [other], dimensions: dims, baseHandle: "", dimensionsTruncated: false }),
     "",
     "lô không có dimspace thì không đòi gì",
   );
   assert.match(
-    dimspaceBlockedReason({ selected: [issue("dim-row-h", "H")], dimensions: dims, baseHandle: "" }),
+    dimspaceBlockedReason({ selected: [issue("dim-row-h", "H")], dimensions: dims, baseHandle: "", dimensionsTruncated: false }),
     /Chọn một DIM làm chuẩn/,
   );
   assert.match(
     dimspaceBlockedReason({
       selected: [issue("dim-row-h", "H"), issue("dim-row-v", "V")],
-      dimensions: dims, baseHandle: "A1",
+      dimensions: dims, baseHandle: "A1", dimensionsTruncated: false,
     }),
     /CẢ hai trục/,
     "hai trục trong một lô phải bị chặn dù đã chọn chuẩn",
   );
   assert.match(
     dimspaceBlockedReason({
-      selected: [issue("dim-row-h", "H")], dimensions: dims, baseHandle: "B2",
+      selected: [issue("dim-row-h", "H")], dimensions: dims, baseHandle: "B2", dimensionsTruncated: false,
     }),
     /cùng trục/,
     "chuẩn trục dọc không căn được lô trục ngang",
@@ -1361,13 +1367,13 @@ test("dimspace: một lô — một trục — một DIM chuẩn cùng trục", 
      đó. Gửi đi là hỏng GIỮA CHỪNG — lúc ấy vài lệnh khác trong lô đã ghi xong. */
   assert.match(
     dimspaceBlockedReason({
-      selected: [issue("dim-row-h", "H")], dimensions: dims, baseHandle: "ZZZ",
+      selected: [issue("dim-row-h", "H")], dimensions: dims, baseHandle: "ZZZ", dimensionsTruncated: false,
     }),
     /không có trong lượt quét/,
   );
   assert.equal(
     dimspaceBlockedReason({
-      selected: [issue("dim-row-h", "H")], dimensions: dims, baseHandle: "A1",
+      selected: [issue("dim-row-h", "H")], dimensions: dims, baseHandle: "A1", dimensionsTruncated: false,
     }),
     "",
   );
@@ -1968,23 +1974,27 @@ test("DIM chuẩn: không biết trục hay không biết hàng thì TỪ CHỐI
     handles: ["A1", "B2"], current: null, expected: null,
     suggestedAction: { action: "dimspace", axis: "H" }, action: "dimspace",
   };
-  const row = (axis: string, rowValue: number) => [{
-    handle: "A1", layer: "", style: "", axis, row: rowValue, measurement: 0, text: "",
-  }];
+  /* Hai DIM: cái thứ hai chỉ để thang không rỗng, nếu không phép kiểm "không còn
+     gì để dời" chạy trước và test không chạm tới phần trục/hàng cần soi. */
+  const row = (axis: string, rowValue: number) => [
+    { handle: "A1", layer: "", style: "", axis, row: rowValue, measurement: 0, text: "", space: "Model" },
+    { handle: "A2", layer: "", style: "", axis: "H", row: 99, measurement: 0, text: "", space: "Model" },
+  ];
 
   assert.match(
-    dimspaceBlockedReason({ selected: [issue], dimensions: row("", 0), baseHandle: "A1" }),
+    dimspaceBlockedReason({ selected: [issue], dimensions: row("", 0), baseHandle: "A1", dimensionsTruncated: false }),
     /không đọc được trục/,
   );
   assert.match(
     dimspaceBlockedReason({
       selected: [issue], dimensions: row("H", Number.NaN), baseHandle: "A1",
+      dimensionsTruncated: false,
     }),
     /toạ độ hàng/,
   );
   // `row: 0` là một toạ độ HỢP LỆ — chỉ thiếu mới là không.
   assert.equal(
-    dimspaceBlockedReason({ selected: [issue], dimensions: row("H", 0), baseHandle: "A1" }),
+    dimspaceBlockedReason({ selected: [issue], dimensions: row("H", 0), baseHandle: "A1", dimensionsTruncated: false }),
     "",
   );
 });
@@ -1998,8 +2008,8 @@ test("máy chủ gửi `null` cho số không đọc được — không đượ
   const scan = normalizeScan({
     scanId: "s1",
     dimensions: [
-      { handle: "A1", axis: "H", row: 100, measurement: 2500 },
-      { handle: "B2", axis: "H", row: null, measurement: null },
+      { handle: "A1", axis: "H", row: 100, measurement: 2500, space: "Model" },
+      { handle: "B2", axis: "H", row: null, measurement: null, space: "Model" },
     ],
   }, "/x.dwg");
   assert.equal(scan.dimensions[0].row, 100);
@@ -2015,6 +2025,7 @@ test("máy chủ gửi `null` cho số không đọc được — không đượ
   assert.match(
     dimspaceBlockedReason({
       selected: [issue], dimensions: scan.dimensions, baseHandle: "B2",
+          dimensionsTruncated: false,
     }),
     /toạ độ hàng/,
   );
@@ -2047,26 +2058,46 @@ test("DIM chuẩn không tự căn theo chính nó", () => {
   });
   const dims = ["A1", "B2"].map((handle) => ({
     handle, layer: "", style: "", axis: "H", row: 0, measurement: 0, text: "",
+    space: "Model",
   }));
 
+  /* Nay lệnh gửi CẢ THANG, nên "không còn gì để dời" nghĩa là TRỤC chỉ có mình
+     mốc — chứ không phải "lô chỉ có mình mốc". Chọn cái DIM lệch duy nhất làm
+     mốc vẫn hợp lệ khi trục còn DIM khác để rải. */
   assert.match(
-    dimspaceBlockedReason({ selected: [issue(["A1"])], dimensions: dims, baseHandle: "A1" }),
+    dimspaceBlockedReason({
+      selected: [issue(["A1"])],
+      dimensions: [dims[0]],
+      baseHandle: "A1", dimensionsTruncated: false,
+    }),
     /không còn gì để dời/,
+  );
+  assert.equal(
+    dimspaceBlockedReason({ selected: [issue(["A1"])], dimensions: dims, baseHandle: "A1", dimensionsTruncated: false }),
+    "",
+    "trục còn DIM khác thì mốc trùng cái lệch duy nhất vẫn chạy được",
   );
   // Còn cái khác để dời thì chạy được — kể cả khi mốc nằm trong chính lô.
   assert.equal(
-    dimspaceBlockedReason({ selected: [issue(["A1", "B2"])], dimensions: dims, baseHandle: "A1" }),
+    dimspaceBlockedReason({ selected: [issue(["A1", "B2"])], dimensions: dims, baseHandle: "A1", dimensionsTruncated: false }),
     "",
   );
   // Mốc NGOÀI lô (một DIM đã đúng hàng) là cách dùng đúng nhất.
   assert.equal(
-    dimspaceBlockedReason({ selected: [issue(["B2"])], dimensions: dims, baseHandle: "A1" }),
+    dimspaceBlockedReason({ selected: [issue(["B2"])], dimensions: dims, baseHandle: "A1", dimensionsTruncated: false }),
     "",
   );
-  // Hoa/thường không được làm lệch phép trừ này.
+  /* Hoa/thường không được làm lệch phép trừ mốc khỏi THANG. Lượt quét giữ nguyên
+     cách viết đọc từ bản vẽ, còn mốc đi qua `cleanHandles()` bên máy chủ nên bị
+     viết hoa — hai bên phải gặp nhau. */
   assert.match(
-    dimspaceBlockedReason({ selected: [issue(["a1"])], dimensions: dims, baseHandle: "A1" }),
+    dimspaceBlockedReason({
+      selected: [issue(["A1"])],
+      dimensions: [{ ...dims[0], handle: "a1" }],
+      baseHandle: "A1", dimensionsTruncated: false,
+    }),
     /không còn gì để dời/,
+    "mốc viết hoa phải trừ được DIM viết thường trong thang",
   );
 });
 
@@ -2184,4 +2215,63 @@ test("lời từ chối của máy chủ hết hiệu lực khi hồ sơ quay v�
     "",
   );
   assert.equal(rejectionNote({ scan: scanned, profile: null, rejected: null }), "");
+});
+
+test("căn hàng gửi CẢ THANG, không chỉ mấy cái lệch", () => {
+  /* `DIMSPACE` xếp các DIM được chọn cách mốc đúng MỘT BƯỚC, không đưa chúng về
+     ô trống trong thang. Đo thật trên AutoCAD 2027 ngày 2026-08-17: bốn DIM ngang
+     ở hàng 10/20/30/43, mốc là cái ở hàng 10, bước 10 — gửi riêng mình cái lệch
+     (43) thì nó nhảy về hàng **20**, ĐÈ lên cái đang nằm sẵn ở đó, và lệnh vẫn
+     báo thành công. Muốn cả chồng thành thang đều thì phải gửi cả chồng. */
+  const dim = (handle: string, axis: string, row: number) => ({
+    handle, layer: "", style: "", axis, row, measurement: 0, text: "", space: "Model",
+  });
+  const all = [
+    dim("9B", "H", 43), dim("71", "H", 10), dim("8D", "H", 30), dim("7F", "H", 20),
+    dim("A9", "V", 210), dim("B7", "V", 225),
+  ];
+
+  /* Cùng trục, bỏ mốc, và SẮP THEO HÀNG — `DIMSPACE` rải theo thứ tự hình học,
+     nên thứ tự phải là thứ tự hàng chứ không phải thứ tự quét được. */
+  assert.deepEqual(dimspaceLadder(all, "H", "71", "Model"), ["7F", "8D", "9B"]);
+  assert.deepEqual(dimspaceLadder(all, "V", "A9", "Model"), ["B7"]);
+  // Trục khác không lọt vào.
+  assert.deepEqual(dimspaceLadder(all, "H", "A9", "Model"), ["71", "7F", "8D", "9B"]);
+  // Hoa/thường không được làm lệch phép trừ mốc.
+  assert.deepEqual(dimspaceLadder(all, "h", "9b", "Model"), ["71", "7F", "8D"]);
+  /* DIM không đọc được toạ độ hàng bị loại: `DIMSPACE` căn THEO chính con số đó,
+     nên đưa nó vào là để lệnh dời một thứ không biết dời đi đâu. */
+  /* Dòng không đọc được hàng KHÔNG bị loại âm thầm — nó vẫn trong thang, và
+     `dimspaceBlockedReason()` từ chối cả lô. Loại nó ra chỉ giấu đi một dim vẫn
+     nằm trong bản vẽ và sắp bị đè lên. */
+  assert.deepEqual(
+    dimspaceLadder([...all, dim("CC", "H", Number.NaN)], "H", "71", "Model"),
+    ["7F", "8D", "9B", "CC"],
+  );
+  /* Không gian khác không lọt vào thang. */
+  assert.deepEqual(
+    dimspaceLadder([...all, { ...dim("EE", "H", 15), space: "Layout1" }], "H", "71", "Model"),
+    ["7F", "8D", "9B"],
+  );
+
+  /* Và chốt "không còn gì để dời" phải đếm trên CẢ THANG: chọn cái DIM lệch duy
+     nhất làm mốc vẫn hợp lệ khi trục đó còn DIM khác để rải. */
+  const issue = {
+    id: "dim-row-h", scope: "dim-row", severity: "warning" as const, message: "",
+    handles: ["9B"], current: null, expected: null,
+    suggestedAction: { action: "dimspace", axis: "H" }, action: "dimspace",
+  };
+  assert.equal(
+    dimspaceBlockedReason({ selected: [issue], dimensions: all, baseHandle: "9B", dimensionsTruncated: false }),
+    "",
+    "mốc là cái lệch duy nhất vẫn chạy được vì thang còn ba cái khác",
+  );
+  /* Trục chỉ có đúng một DIM thì mới thật sự không còn gì để dời. */
+  assert.match(
+    dimspaceBlockedReason({
+      selected: [issue], dimensions: [dim("9B", "H", 43)], baseHandle: "9B",
+      dimensionsTruncated: false,
+    }),
+    /không còn gì để dời/,
+  );
 });

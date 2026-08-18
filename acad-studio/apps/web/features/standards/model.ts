@@ -1004,6 +1004,10 @@ export type ScanDimension = {
   row: number;
   measurement: number;
   text: string;
+  /** Không gian của chính DIM này (`Model` hoặc tên layout). Rỗng = bản
+   * `standards_lib.lsp` đang deploy chưa phát cột này — và khi đó lệnh căn hàng
+   * bị máy chủ từ chối, vì không chia thang theo không gian được. */
+  space: string;
 };
 
 function normalizeScanDimension(value: unknown): ScanDimension {
@@ -1019,6 +1023,7 @@ function normalizeScanDimension(value: unknown): ScanDimension {
     row: num(source.row) ?? Number.NaN,
     measurement: num(source.measurement) ?? Number.NaN,
     text: str(source.text),
+    space: str(source.space),
   };
 }
 
@@ -1284,6 +1289,45 @@ export function issueAxis(issue: Issue): string {
   return String(record(issue.suggestedAction).axis ?? "").trim().toUpperCase();
 }
 
+/** Không gian mà một phát hiện `dimspace` nói tới — `Model`, tên layout, hoặc
+ * rỗng khi lượt quét không cho biết. */
+export function issueSpace(issue: Issue): string {
+  return String(record(issue.suggestedAction).space ?? "").trim();
+}
+
+/** Mọi DIM **cùng trục** của lượt quét, trừ DIM chuẩn — theo thứ tự hàng.
+ *
+ * Phải khớp `dimspaceLadder()` bên daemon: đó là tập handle máy chủ THẬT SỰ gửi
+ * vào `DIMSPACE`. Giao diện cần nó để (a) biết lô có gì để dời không, và (b) nói
+ * đúng số DIM sắp bị dời ở thẻ xác nhận — kể cả những cái **đang đúng hàng**.
+ *
+ * Vì sao cả thang chứ không chỉ mấy cái lệch: `DIMSPACE` xếp các DIM được chọn
+ * cách mốc đúng một bước, không đưa chúng về ô trống. Đo thật ngày 2026-08-17:
+ * một DIM ở hàng 43 với mốc hàng 10 và bước 10 nhảy về hàng 20, đè lên DIM đang
+ * nằm sẵn ở đó — lệnh vẫn báo thành công. */
+export function dimspaceLadder(
+  dimensions: readonly ScanDimension[],
+  axis: string,
+  baseHandle: string,
+  /** Không gian của DIM chuẩn. `ssget "_X"` gom cả Model lẫn mọi layout, mà toạ
+   * độ hai không gian độc lập nhau — trộn chung là dời dim theo một hệ toạ độ
+   * không liên quan. */
+  space: string,
+): string[] {
+  const wanted = axis.trim().toUpperCase();
+  const base = baseHandle.trim().toUpperCase();
+  const where = space.trim();
+  return dimensions
+    .filter((row) => row.axis.trim().toUpperCase() === wanted)
+    .filter((row) => row.space.trim() === where)
+    /* KHÔNG lọc bỏ dòng không đọc được hàng: `dimspaceBlockedReason()` từ chối cả
+       lô khi có dòng như vậy. Lọc âm thầm là giấu đi một dim vẫn nằm trong bản vẽ
+       và sắp bị đè lên. */
+    .filter((row) => row.handle.trim().toUpperCase() !== base)
+    .sort((left, right) => left.row - right.row)
+    .map((row) => row.handle);
+}
+
 /** Vì sao lô căn hàng dimension chưa gửi được — hoặc rỗng nếu gửi được.
  *
  * `DIMSPACE` căn các DIM **cùng một trục** theo một DIM mốc. Máy chủ gộp MỌI
@@ -1300,10 +1344,19 @@ export function dimspaceBlockedReason(input: {
   selected: readonly Issue[];
   dimensions: readonly ScanDimension[];
   baseHandle: string;
+  /** Lượt quét có bị cắt danh sách dimension không. */
+  dimensionsTruncated: boolean;
 }): string {
   const batch = input.selected.filter((issue) => issue.action === "dimspace");
   if (!batch.length) return "";
 
+  /* Không gian cũng phải một: hai phát hiện cùng trục nhưng khác không gian là
+     hai chồng dim độc lập, và một lệnh chỉ có một mốc. */
+  const spaces = [...new Set(batch.map(issueSpace))];
+  if (spaces.length > 1) {
+    return "Lô đang có DIM lệch hàng ở nhiều không gian (Model và layout), mà "
+      + "lệnh căn hàng chỉ căn được một. Bỏ tích bớt rồi sửa từng cái.";
+  }
   const axes = [...new Set(batch.map(issueAxis).filter(Boolean))];
   if (axes.length > 1) {
     return "Lô đang có DIM lệch hàng ở CẢ hai trục, mà lệnh căn hàng chỉ căn "
@@ -1330,11 +1383,49 @@ export function dimspaceBlockedReason(input: {
     return "Lượt quét không đọc được trục của DIM chuẩn đang chọn. Chọn một DIM "
       + "khác, hoặc quét lại sau khi build lại plugin AcadBridge.";
   }
+  /* Không biết không gian thì không chia thang được, mà toạ độ Model và layout
+     độc lập nhau. Máy chủ cũng từ chối; nói trước để khỏi bấm rồi mới biết. */
+  if (!base.space.trim()) {
+    return "Lượt quét không cho biết DIM chuẩn thuộc không gian nào (Model hay "
+      + "layout). Triển khai lại thư viện LISP rồi quét lại.";
+  }
+  /* Danh sách bị cắt = có DIM không nằm trong đó. Chúng đứng yên trong bản vẽ,
+     còn những cái được gửi thì rải lên đúng chỗ chúng đang nằm. */
+  if (input.dimensionsTruncated) {
+    return "Lượt quét đã chạm trần số dimension nên danh sách chưa đầy đủ. Lệnh "
+      + "căn hàng cần thấy TOÀN BỘ dim cùng trục, nên nó bị khoá ở lượt quét này.";
+  }
+  /* Một DIM cùng trục, cùng không gian mà không đọc được hàng thì **vẫn nằm đó**
+     trong bản vẽ, ở một chỗ ta không biết — và thang sẽ rải đè lên nó. Loại nó
+     khỏi thang chỉ giấu vấn đề đi. Máy chủ cũng từ chối; nói trước ở đây. */
+  /* Một DIM cùng trục mà không rõ không gian có thể đang nằm NGAY TRONG không
+     gian của mốc — thang bỏ nó ra rồi rải dim khác lên đúng chỗ nó đứng. */
+  const homeless = input.dimensions.find((row) =>
+    row.axis.trim().toUpperCase() === baseAxis && !row.space.trim());
+  if (homeless) {
+    return `Không biết DIM ${homeless.handle} cùng trục thuộc không gian nào. `
+      + "Triển khai lại thư viện LISP rồi quét lại.";
+  }
+  const blind = input.dimensions.find((row) =>
+    row.axis.trim().toUpperCase() === baseAxis
+    && row.space.trim() === base.space.trim()
+    && !Number.isFinite(row.row));
+  if (blind && Number.isFinite(base.row)) {
+    return `Không đọc được toạ độ hàng của DIM ${blind.handle} cùng trục. Lệnh `
+      + "căn hàng rải cả chồng, nên dim đó sẽ bị các dim khác đè lên. Sửa nó rồi "
+      + "quét lại.";
+  }
   /* `DIMSPACE` căn THEO toạ độ hàng của mốc. Không có nó thì mốc không định nghĩa
      được — mà lệnh vẫn chạy. Bảng hiện “—” ở cột Hàng cho đúng những dòng này. */
   if (!Number.isFinite(base.row)) {
     return "DIM chuẩn đang chọn không có toạ độ hàng đọc được (cột Hàng hiện “—”). "
       + "Chọn một DIM khác làm chuẩn.";
+  }
+  /* Mốc phải CÙNG không gian với phát hiện, nếu không máy chủ dựng thang ở không
+     gian của mốc và bỏ qua đúng cái nó được yêu cầu sửa. */
+  if (spaces.length === 1 && spaces[0] && base.space.trim() !== spaces[0]) {
+    return `DIM chuẩn đang chọn ở “${base.space.trim()}”, còn lô cần căn ở `
+      + `“${spaces[0]}”. Chọn một DIM chuẩn cùng không gian với lô.`;
   }
   if (axes.length === 1 && baseAxis !== axes[0]) {
     return `DIM chuẩn đang chọn thuộc trục ${baseAxis === "V" ? "dọc" : "ngang"}`
@@ -1346,13 +1437,17 @@ export function dimspaceBlockedReason(input: {
      người dùng ăn 400 sau khi đã bấm một nút ghi. Không tự chọn hộ một mốc khác:
      mốc quyết định các DIM khác dời đi đâu, và đó là lượt ghi không hoàn tác
      được — nút chọn nằm TRONG bảng chính là để người dùng tự quyết. */
-  const movable = new Set(batch
-    .flatMap((issue) => issue.handles)
-    .map((handle) => handle.trim().toUpperCase()));
+  /* Đếm trên CẢ THANG — đúng tập máy chủ gửi đi — chứ không trên mấy cái lệch:
+     chọn cái DIM lệch duy nhất làm mốc vẫn hợp lệ khi trục đó còn DIM khác để
+     rải. Đếm trên tập hẹp hơn là chặn oan. */
+  const movable = new Set(
+    dimspaceLadder(input.dimensions, axes[0] || base.axis, input.baseHandle, base.space)
+      .map((handle) => handle.trim().toUpperCase()),
+  );
   movable.delete(wanted);
   if (!movable.size) {
-    return "DIM chuẩn đang chọn cũng là DIM duy nhất cần căn trong lô, nên không "
-      + "còn gì để dời. Chọn một DIM đã đúng hàng làm chuẩn, hoặc tích thêm phát hiện.";
+    return "Trục này chỉ có mỗi DIM bạn vừa chọn làm chuẩn, nên không còn gì để "
+      + "dời. Chọn một DIM khác làm chuẩn.";
   }
   return "";
 }

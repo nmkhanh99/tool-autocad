@@ -1,5 +1,110 @@
 # CHANGELOG
 
+## 2026-08-17 (chiều) — Chạy thật trên AutoCAD, và một hành vi chỉ chạy thật mới thấy
+
+### Kiểm trên AutoCAD 2027 thật
+
+Bản vẽ nháp tự dựng bằng AcCoreConsole (4 DIM ngang ở hàng 10/20/30/**43**, 2 DIM
+dọc ở x=210/**225**). Bản vẽ as-built của người dùng vẫn `dbmod 0` suốt cả đợt —
+không bị đụng.
+
+- **Lượt quét đọc đúng**: trục H/V khớp góc xoay, `row` lấy Y cho DIM ngang và X
+  cho DIM dọc, và chỉ hai DIM cố ý đặt lệch bị bắt.
+- **Bốn chốt từ chối bắt đúng**, tất cả 400: `dim_axis_mixed` ·
+  `dim_base_axis_mismatch` · `dim_base_unknown` · `dim_base_only_candidate`.
+- **Xoá hồ sơ**: 428 (thiếu `If-Match`) · 428 (rỗng) · 409 **và hồ sơ còn nguyên**
+  · 200 · 404 khi xoá lại.
+
+### `DIMSPACE` không đưa DIM về ô trống — nó xếp cách mốc một bước
+
+Lượt ghi đầu tiên thành công nhưng ra kết quả **sai theo cách không ai đoán**:
+DIM ở hàng 43 nhảy về hàng **20**, đè lên DIM đang nằm sẵn ở đó. Lệnh vẫn báo
+thành công, và lượt quét lại cũng không còn phát hiện nào — vì 20 đúng là một ô
+hợp lệ của lưới.
+
+Đo trực tiếp bằng AcCoreConsole cho ra câu trả lời: gửi cả thang (`7F 8D 9B`) thì
+kết quả là **20 / 30 / 40**, thang đều, không đè. `DIMSPACE` cần thấy cả chồng.
+
+Nay `/apply` gửi `dimspaceLadder()` — mọi DIM cùng trục, bỏ mốc, bỏ DIM không đọc
+được `row`, sắp theo hàng. Phía web dùng **cùng định nghĩa** cho phép chặn và cho
+câu cảnh báo. Chốt "không còn gì để dời" cũng chuyển sang đếm trên thang: chọn cái
+DIM lệch duy nhất làm mốc vẫn hợp lệ khi trục còn DIM khác để rải.
+
+Đánh đổi được nói thẳng ở thẻ xác nhận: **lệnh dời cả những DIM đang đúng hàng.**
+`applySummary()` đếm theo handle của phát hiện nên nó nói ít hơn sự thật ở đúng
+chỗ người dùng quyết định bấm một lệnh không hoàn tác được.
+
+### Ba phép đo hỏng mà vẫn cho ra con số
+
+Đợt này lộ ra một dạng sai riêng: phép đo hỏng nhưng **vẫn trả về kết quả trông
+hợp lý**. Cả ba lần đều chỉ bắt được nhờ hai phép đo mâu thuẫn nhau:
+
+- `2>/dev/null` nuốt stderr của AcCoreConsole → "16 bản vẽ mẫu, không cái nào có
+  DIM" là kết luận từ một lượt quét **không đọc được gì**.
+- Harness đột biến chạy sai thư mục → baseline cũng đỏ, nên "tất cả đột biến đều
+  đỏ" là câu vô nghĩa. Xảy ra **năm lần**.
+- Daemon mới không lên được (`EADDRINUSE`) nên daemon CŨ trả lời → suýt kết luận
+  "gửi cả thang không sửa được gì", trong khi bản sửa đúng và chỉ là chưa được nạp.
+
+Bài học ghi lại: một lệnh `curl` trả lời **không** chứng minh mã mới đã nạp.
+
+### Vòng review: "cả thang" là một lời khẳng định phải chứng minh được
+
+Ba phát hiện, hai P1, cùng một gốc — tôi gửi "cả thang" mà chưa chứng minh được
+thang đó đầy đủ:
+
+- **Trộn không gian.** `ssget "_X"` gom cả Model lẫn mọi layout, mà lượt quét
+  không ghi không gian của từng DIM. Toạ độ hai không gian độc lập nhau, nên một
+  lệnh gộp cả hai là dời dim theo một hệ toạ độ không liên quan. Nay lượt quét
+  phát DXF 410, và thang chia theo không gian của DIM chuẩn.
+- **Lượt quét bị cắt.** Quá `MAX_SCAN_ITEMS` thì danh sách thiếu — những DIM
+  không có trong đó vẫn nằm yên trong bản vẽ, và các DIM được gửi rải lên đúng
+  chỗ chúng đang nằm. Nay `ScanSession` nhớ cờ cắt và `/apply` từ chối.
+- **DIM không đọc được hàng.** Bản đầu của tôi **lọc âm thầm** chúng khỏi thang.
+  Lọc chỉ giấu vấn đề: dim đó vẫn ở trong bản vẽ, ở một hàng ta không biết, và
+  thang sẽ rải đè lên. Nay không loại nữa mà **từ chối cả lô**.
+
+Cột không gian đặt **sau** `text` có chủ ý: bản `standards_lib.lsp` cũ không có
+nó thì phía đọc thấy rỗng = không biết rồi từ chối, thay vì đọc nhầm `text` thành
+tên không gian. Đi kèm, `text` thôi dùng `columns.slice(8).join()`.
+
+Đã kiểm trên AutoCAD thật sau khi thay LISP: cột không gian về đúng `Model` cho
+cả 6 DIM, và lượt căn cho ra 10/20/30/40 không đè nhau. Lần này có kiểm daemon
+thật sự bind được cổng trước khi tin kết quả.
+
+### Vòng chốt: slug không đủ để làm id
+
+`A-B` và `A_B` cùng ra slug `a-b`. Hai phát hiện trùng `id` thì giao diện chọn
+một cái là chọn cả hai, máy chủ từ chối vì lô trộn không gian — và **không layout
+nào sửa được nữa**. Nay ghép thêm 8 ký tự hash sha1 của tên GỐC: phần slug để
+đọc, phần hash để không đụng.
+
+### Vòng trước: tôi vá ở chỗ ghi, nhưng chỗ CHẤM ĐIỂM mới là chỗ trộn
+
+- **`analyzeDimensionRows()` gộp mọi không gian.** Tôi chia thang theo không gian
+  ở `/apply`, nhưng chính lượt chấm điểm vẫn trộn — nên một phát hiện có thể có
+  **mốc ở Model còn cái lệch ở layout**. Lượt sửa sau đó dựng thang ở không gian
+  của mốc, **bỏ qua đúng cái nó được yêu cầu sửa**, và báo thành công. Nay gộp
+  theo `(trục, không gian)`, `id` mang hậu tố không gian, và `suggestedAction`
+  mang `space` để `/apply` kiểm được mốc có cùng không gian không.
+- **DIM không rõ không gian bị bỏ qua âm thầm.** Chốt cũ chỉ hỏi mốc; một DIM
+  cùng trục có `410` rỗng có thể đang nằm **ngay trong** không gian của mốc, và
+  thang bỏ nó ra rồi rải dim khác lên đúng chỗ nó đứng. Nay bất kỳ DIM cùng trục
+  nào không rõ không gian đều chặn cả lô.
+
+Đây là lần thứ hai trong cùng một mục tôi sửa ở chỗ **dùng** dữ liệu thay vì chỗ
+**sinh ra** nó. Hai mã lỗi mới: `dim_space_mixed` · `dim_base_space_mismatch`.
+
+### Technical
+
+- `dimspaceLadder()` ở cả hai phía, cùng định nghĩa.
+- Ba fixture cũ đỏ theo và **đỏ đúng** — chúng viết theo ngữ nghĩa "chỉ gửi cái
+  lệch". Sửa fixture, không nới chốt.
+- Đột biến "đổi nơi gọi về cũ" không bị test hàm bắt (hàm vẫn còn, chỉ là không ai
+  gọi) → khoá thêm bằng một bất biến văn bản trên đường `/apply`.
+- Ba mã lỗi mới: `dim_scan_truncated` · `dim_space_unknown` · `dim_row_unknown_in_ladder`.
+- `pnpm verify`: **215 test**, 13 guardrail, exit 0.
+
 ## 2026-08-17 — Nút Xoá hồ sơ, và một lượt mất dữ liệu do chính tôi gây ra
 
 Mục cuối của kế hoạch. `DELETE /profiles/:id` đã có ở daemon từ lâu; thiếu mỗi
