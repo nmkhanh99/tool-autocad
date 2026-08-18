@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { assertNotRealStoreInTests } from "./bridgeContract.js";
 
 export const BLOCK_LIBRARY_SCHEMA_VERSION = 1 as const;
 export const BLOCK_LIBRARY_FILE_NAME = "block-library.v1.json";
@@ -534,6 +535,10 @@ export function resolveBlockLibraryDataDir(
   if (options.dataDir?.trim()) return options.dataDir.trim();
   const configured = (options.env ?? process.env).ACAD_DATA_DIR?.trim();
   if (configured) return configured;
+  /* Đường lùi về kho THẬT. Xem `assertNotRealStoreInTests()` — script kiểm thử
+     tới được đây nghĩa là nó quên truyền `dataDir`, và lần trước điều đó đã xoá
+     mất dữ liệu thật của người dùng. */
+  assertNotRealStoreInTests("Kho thư viện block");
   return join(
     options.homeDir ?? homedir(),
     "Library",

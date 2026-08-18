@@ -518,12 +518,21 @@ rồi khởi động lại AutoCAD.
 
 ## Technical Debt
 
-- **Sáu script test khác vẫn đọc/ghi được vào kho dữ liệu thật.** Đã cắt phụ thuộc
-  cho `test-drawing-standards.mjs` và `test-standards-engine.mjs` (2026-08-17,
-  sau khi một script tạm xoá mất hồ sơ thật của người dùng), nhưng chưa rà toàn
-  bộ `apps/daemon/scripts/`. `resolveStandardsDataDir()` nay ném lỗi khi gặp khoá
-  tuỳ chọn lạ, còn ca "quên truyền tuỳ chọn hoàn toàn" thì vẫn lùi về kho thật —
-  đúng như thiết kế, và đó mới là ca còn hở.
+- ~~**Script test đọc/ghi được vào kho dữ liệu thật.**~~ **ĐÓNG 2026-08-18.**
+
+  Đã rà **toàn bộ** `apps/daemon/scripts/`: bảy script chạm tới mã kho, sáu cái
+  đã có rào (`dataDir` hoặc `ACAD_DATA_DIR`), cái thứ bảy
+  (`test-block-library-cad.mjs`) chỉ import hai hàm **thuần** nên không chạm kho.
+  Mục nợ này lúc viết ra là **nói quá** — tôi ghi theo suy đoán chứ không theo đo
+  đạc.
+
+  Nhưng lỗ thật thì có, và nay đã bịt: `assertNotRealStoreInTests()` chặn đường
+  lùi về kho thật khi tiến trình đang chạy `scripts/test-*.mjs`. Phép kiểm khoá-lạ
+  trước đó chỉ bắt ca **gõ nhầm tên**; ca **quên truyền hoàn toàn** — dễ xảy ra
+  hơn, và đúng là ca đã xoá mất dữ liệu — giờ mới bị chặn.
+
+  Khoá bằng `test-store-isolation.mjs` (nằm trong `pnpm verify`), kiểm cả hai
+  chiều: script test bị chặn, mà đường chạy thật thì không.
 
 
 - **Không có công cụ bắt lỗi danh sách phụ thuộc của hook.** Hai lỗi cùng dạng đã

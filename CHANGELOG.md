@@ -1,5 +1,57 @@
 # CHANGELOG
 
+## 2026-08-18 — Bịt nốt đường lùi về kho dữ liệu thật
+
+Mục nợ kỹ thuật nguy hiểm nhất còn lại, vì nó đã cắn một lần: script kiểm thử
+chạm được vào kho dữ liệu thật của người dùng.
+
+### Rà thật thì mục nợ đó nói quá
+
+Tôi ghi "sáu script khác vẫn đọc/ghi kho thật" theo **suy đoán**. Đo lại toàn bộ
+`apps/daemon/scripts/`: bảy script chạm tới mã kho, **sáu** đã có rào
+(`dataDir` hoặc `ACAD_DATA_DIR`), cái thứ bảy chỉ import hai hàm **thuần**. Không
+script nào đang lén dùng kho thật.
+
+### Nhưng lỗ thì có thật, và nó không phải cái tôi đã vá
+
+Phép kiểm khoá-lạ thêm hôm qua chỉ bắt ca **gõ nhầm tên khoá**. Ca còn hở — và
+là ca dễ xảy ra hơn hẳn — là **quên truyền tuỳ chọn hoàn toàn**: khi đó mọi thứ
+hợp lệ về kiểu, không ai báo gì, và đường lùi đưa thẳng vào
+`~/Library/Application Support/acad-studio`.
+
+`assertNotRealStoreInTests()` chặn đúng ca đó: nhận diện qua `argv[1]` — mọi
+script kiểm thử của dự án chạy dưới dạng `scripts/test-*.mjs`, còn daemon thật
+chạy `src/server.ts`. Thô, nhưng nó đúng cho đúng nhóm đã gây ra mất mát và
+không đụng gì tới đường chạy thật. Đặt ở `bridgeContract.ts` vì cả ba kho đều
+cần — mỗi kho tự chép một bản là sớm muộn có bản quên.
+
+### Vòng review: chú thích nói ba kho, tôi nối có hai
+
+- **Kho thư viện LISP không được chốt.** Chú thích của
+  `assertNotRealStoreInTests()` viết nguyên văn "cả ba kho đều cần" — rồi tôi nối
+  cho **hai**. `LispLibrary` dựng không kèm `dataDir` vẫn ghi được vào
+  `roots.json` / `overrides.json` thật. Chú thích không ngăn được bỏ sót; phép
+  kiểm thì có, nên nay cả ba kho đều nằm trong `test-store-isolation.mjs`.
+- **Test của tôi không kín.** Nếu máy đã đặt `ACAD_DATA_DIR`, các lời gọi
+  "không tuỳ chọn" trả về đường dẫn đó **trước** khi chạm tới chốt — test đỏ oan,
+  và tệ hơn là nó có thể trỏ vào một kho thật. Nay xoá `ACAD_DATA_DIR`/
+  `MEP_DATA_DIR` trước mọi phép kiểm. Đã đo: cùng một môi trường có biến đó, bản
+  cũ đỏ, bản sửa xanh.
+
+### Technical
+
+- `test-store-isolation.mjs`, nằm trong `pnpm verify`. Kiểm **cả hai chiều**:
+  script test bị chặn, mà đường truyền `dataDir`/`ACAD_DATA_DIR` hợp lệ vẫn chạy
+  — một chốt chặn hết mọi thứ cũng là một chốt hỏng.
+- Kiểm bằng **cùng một đoạn mã chạy hai chỗ**: đặt ở `scripts/test-*.mjs` thì bị
+  chặn, đổi tên file thì đi qua và trả về đúng đường dẫn thật.
+- Và kiểm **trên daemon thật đang chạy cùng AutoCAD**: cả ba kho đều đọc được
+  (`default-a3-mm`, danh mục block, danh sách gốc LISP). Đây mới là phép kiểm
+  đúng cho rủi ro của thay đổi này — chốt phải chặn script test mà **không đụng**
+  người dùng thật, và `argv[1]` của daemon thật khác hẳn nên test đơn vị không
+  nhìn thấy được sự khác biệt đó.
+- `pnpm verify`: **215 test**, 14 guardrail, exit 0.
+
 ## 2026-08-17 (chiều) — Chạy thật trên AutoCAD, và một hành vi chỉ chạy thật mới thấy
 
 ### Kiểm trên AutoCAD 2027 thật

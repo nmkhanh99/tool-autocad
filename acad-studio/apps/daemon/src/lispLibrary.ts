@@ -47,6 +47,7 @@ import {
   selectOpenDocument,
 } from "./acadBridge.js";
 import {
+  assertNotRealStoreInTests,
   atomicWriteFile,
   ensureBridgeLayout,
   resolveBridgeDir,
@@ -922,11 +923,16 @@ export class LispLibrary {
         process.env.MEP_PROJECT_ROOT ||
         process.cwd(),
     );
+    /* Đường lùi về kho THẬT — chốt giống hai kho kia. Chú thích của
+       `assertNotRealStoreInTests()` nói "cả ba kho đều cần", và lần đầu tôi nối
+       có hai: đúng kiểu bỏ sót mà chú thích tự nó không ngăn được. */
+    const configuredDataDir = options.dataDir
+      || process.env.ACAD_DATA_DIR
+      || process.env.MEP_DATA_DIR;
+    if (!configuredDataDir) assertNotRealStoreInTests("Kho thư viện LISP");
     this.dataDir = resolve(
-      options.dataDir ||
-        process.env.ACAD_DATA_DIR ||
-        process.env.MEP_DATA_DIR ||
-        join(homedir(), "Library", "Application Support", "acad-studio"),
+      configuredDataDir
+        || join(homedir(), "Library", "Application Support", "acad-studio"),
     );
     this.bridgeDir = resolve(options.bridgeDir || resolveBridgeDir());
     this.platform = options.platform ?? process.platform;

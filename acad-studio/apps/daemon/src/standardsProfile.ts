@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { assertNotRealStoreInTests } from "./bridgeContract.js";
 
 export const STANDARDS_SCHEMA_VERSION = 1 as const;
 export const STANDARDS_FILE_NAME = "drawing-standards.v1.json";
@@ -681,6 +682,10 @@ export function resolveStandardsDataDir(
   const env = options.env ?? process.env;
   const configured = env.ACAD_DATA_DIR?.trim() || env.MEP_DATA_DIR?.trim();
   if (configured) return configured;
+  /* Đường lùi về kho THẬT. Xem `assertNotRealStoreInTests()` — script kiểm thử
+     tới được đây nghĩa là nó quên truyền `dataDir`, và lần trước điều đó đã xoá
+     mất dữ liệu thật của người dùng. */
+  assertNotRealStoreInTests("Kho hồ sơ quy chuẩn");
   return join(
     options.homeDir ?? homedir(),
     "Library",

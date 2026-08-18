@@ -52,6 +52,34 @@ export function bridgeDirFromEnv(env: NodeJS.ProcessEnv = process.env): string |
  * 2. ~/Acad-Bridge if it exists (or neither primary nor legacy exists → create primary)
  * 3. ~/MEP-Bridge if primary missing but legacy exists (compat)
  */
+/** Chặn một script TEST lùi về kho dữ liệu THẬT của người dùng.
+ *
+ * Ngày 2026-08-17 một script đo hành vi xoá đã xoá hồ sơ quy chuẩn thật của
+ * người dùng: nó truyền `{ dir }` thay vì `{ dataDir }`, hàm giải đường dẫn bỏ
+ * qua khoá lạ trong im lặng rồi lùi về `~/Library/Application Support/acad-studio`.
+ * Không có bản sao nào để lấy lại.
+ *
+ * Phép kiểm khoá-lạ đã thêm sau đó chỉ bắt ca GÕ NHẦM TÊN. Ca còn hở — và là ca
+ * dễ xảy ra hơn — là **quên truyền tuỳ chọn hoàn toàn**: khi đó mọi thứ hợp lệ
+ * về kiểu, và đường lùi đưa thẳng vào dữ liệu thật.
+ *
+ * Nhận diện bằng `argv[1]`: mọi script kiểm thử của dự án chạy dưới dạng
+ * `scripts/test-*.mjs`, còn daemon thật chạy `src/server.ts`. Thô, nhưng nó
+ * đúng cho đúng cái nhóm đã gây ra mất mát, và nó KHÔNG đụng gì tới đường chạy
+ * thật.
+ *
+ * Đặt ở đây vì cả ba kho (hồ sơ quy chuẩn, thư viện block, thư viện LISP) đều
+ * cần — mỗi kho tự chép một bản là sớm muộn có bản quên. */
+export function assertNotRealStoreInTests(what: string): void {
+  const entry = process.argv[1] ?? "";
+  if (!/[/\\]scripts[/\\]test-[^/\\]*\.(mjs|ts)$/.test(entry)) return;
+  throw new Error(
+    `${what}: script kiểm thử không được dùng kho dữ liệu thật của người dùng. `
+    + "Truyền `dataDir` (hoặc đặt ACAD_DATA_DIR) trỏ vào một thư mục tạm. "
+    + "Ngày 2026-08-17 đúng đường lùi này đã xoá mất hồ sơ quy chuẩn thật.",
+  );
+}
+
 export function resolveBridgeDir(opts?: {
   home?: string;
   env?: NodeJS.ProcessEnv;

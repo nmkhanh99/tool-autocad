@@ -25,10 +25,11 @@
     "test:standards-profile": "tsx scripts/test-standards-profile.mjs",
     "test:standards-engine": "tsx scripts/test-standards-engine.mjs",
     "test:standards-router": "tsx scripts/test-drawing-standards.mjs",
-    "test:standards": "npm run test:standards-profile && npm run test:standards-engine && npm run test:standards-router",
+    "test:standards": "npm run test:standards-profile && npm run test:standards-engine && npm run test:standards-router && npm run test:store-isolation",
     "test:cad-selection": "node --import tsx scripts/test-cad-selection.mjs",
     "test:block-library": "tsx scripts/test-block-library.mjs && tsx scripts/test-block-library-cad.mjs && tsx scripts/test-block-library-router.mjs",
-    "test:cadweb-sync": "tsx scripts/test-cadweb-sync.mjs"
+    "test:cadweb-sync": "tsx scripts/test-cadweb-sync.mjs",
+    "test:store-isolation": "tsx scripts/test-store-isolation.mjs"
   },
   "dependencies": {
     "@acad/sync-server": "workspace:*",
