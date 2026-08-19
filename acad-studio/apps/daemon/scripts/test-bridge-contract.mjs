@@ -1306,6 +1306,149 @@ assert(ctrlSrc.includes("resolveBridgeDir"), "acadControl uses resolveBridgeDir"
   assert(existsSync(jobLsp), "va luot gui binh thuong van phai ghi job.lsp");
 }
 
+/* Moc khoa job: chi noi GUI moi biet han cua no.
+ *
+ * Hai cai bay da dinh, ghi lai ca hai:
+ * 1. `liveJobPending` tang cho CHINH job dang chay, khong rieng job xep hang —
+ *    nen chot `pending > 0` lam duong `/live` (duong chinh) khong bao gio co
+ *    moc, tuc dung ca can dong ho nhat lai la ca no im.
+ * 2. Suy han tu mot hang so chung (`createdAt + JOB_BUSY_MS`) la SAI: `/plot-pdf`
+ *    chay theo `timeout_ms` cua yeu cau va giu khoa lau hon han do, con `/live`
+ *    con mot luot poll NEN sau luot cho dau. Han phai do chinh noi gui khai;
+ *    khong khai thi tra null, khong doan ho.
+ *
+ * Dat TRUOC chot `if (failed)` o duoi — mot khoi test nam sau chot do khong bao
+ * gio lam do duoc build, va da tung co dung loi ay trong chinh tep nay. */
+{
+  const now = Date.parse("2026-08-19T10:00:00.000Z");
+  const D = bridge.busyDeadline;
+  const sent = (lockUntil) => ({ state: "sent", lockUntil });
+
+  assert(
+    D(1, sent(now + 100_000), now) === "2026-08-19T10:01:40.000Z",
+    "mot job dang chay co khai han: phai noi ra dung han do",
+  );
+  assert(D(2, sent(now + 100_000), now) === null,
+    "con job xep hang phia sau thi khong co han nao dung — job ke moi tinh gio khi toi luot");
+  assert(D(1, { state: "sent" }, now) === null,
+    "job KHONG khai han thi tra null — doan ho la dung lai dung loi vua sua");
+  assert(D(1, null, now) === null, "khong co job thi khong phai dang cho");
+  assert(D(1, { state: "done", lockUntil: now + 100_000 }, now) === null,
+    "job da xong cung vay");
+  assert(D(1, sent(now - 1_000), now) === null,
+    "han da qua thi tra null, khong tra mot moc qua khu de noi doc dem so am");
+}
+
+/* `wait` tu body la du lieu NGOAI, va no di thang vao phep cong dung moc thoi gian.
+ *
+ * Mot gia tri JSON kieu `"1000"` bien `Date.now() + wait` thanh phep NOI CHUOI —
+ * khong bao gi tai cho, chi no o mot duong khac han: `/status` goi
+ * `toISOString()` tren so ngoai tam `Date` va nem `RangeError`. Express 4 khong
+ * bat loi cua handler async, nen cu nem do HA LUON daemon — tu mot lan goi
+ * `/job` voi body sai kieu. */
+{
+  const C = bridge.clampWait;
+  assert(C(30_000) === 30_000, "so hop le thi giu nguyen");
+  assert(C("1000") === 1000, "chuoi so van doc duoc, nhung ra SO");
+  assert(typeof C("1000") === "number", "va phai la kieu number, khong phai chuoi");
+  for (const bad of [undefined, null, NaN, "abc", -1, 0, {}, []]) {
+    assert(C(bad) === 15_000, `gia tri ${JSON.stringify(bad)} phai lui ve mac dinh`);
+  }
+  assert(C(10 ** 15) === 120_000, "chan tren: khong de mot so khong lo dung moc");
+}
+
+/* Va chot cuoi phai nam o cho DOC, khong chi o cho nhap: `lockUntil` do nhieu
+   duong ghi, nen mot duong quen chuan hoa la lai nem trong `/status`. */
+{
+  const now = Date.now();
+  const D = bridge.busyDeadline;
+  for (const bad of ["17871266726301000120000", NaN, Infinity, 1e18, -1e18]) {
+    assert(
+      D(1, { state: "sent", lockUntil: bad }, now) === null,
+      `lockUntil ${String(bad)} phai tra null chu khong duoc nem`,
+    );
+  }
+}
+
+/* KHONG co phep kiem end-to-end cho duong `/job` o day, va do la CO Y.
+ *
+ * Toi da viet mot cai, roi phai bo. Hai ly do, ca hai deu do chu khong phai suy:
+ * 1. No khong bao gi. Bai `dispatchLiveJob(..., 200)` phia tren de lai mot khoa
+ *    nen 120 giay, nen `/job` tra 409 truoc khi cham toi nhanh can kiem.
+ * 2. Nguy hiem hon: bo test KHONG doi `ACAD_BRIDGE_DIR`, nen `/job` ghi vao
+ *    `~/Acad-Bridge/job.lsp` THAT — kenh dung chung ma plugin tu nap. Luc do do
+ *    thu, AutoCAD da chay that job cua phep do (noi dung `(princ)`, khong sua gi,
+ *    ban ve van `dbmod=0`). Mot phep kiem cham duoc vao phien CAD cua nguoi dung
+ *    thi khong duoc phep ton tai, ke ca khi noi dung vo hai.
+ *
+ * Phan chong sap (`RangeError` trong `/status`) da duoc bao boi test ham thuan o
+ * ngay tren: dot bien bo chot cuoi di thi do. Muon kiem end-to-end that thi phai
+ * cho suite chay tren mot `ACAD_BRIDGE_DIR` tam — mot viec rieng, khong ghep vao
+ * day. */
+
+/* `lockDeadline()` phai TU chuan hoa: moi route truyen `wait` thang tu body vao
+   `dispatchLiveJob` (nhu `/livequery`), nen chuan hoa o tung route la lam mot lan
+   quen mot lan — da quen dung mot lan roi. Chot o NOI TINH thi khong route nao
+   quen duoc, ke ca route them sau nay. */
+{
+  const src = readFileSync(join(__dirname, "../src/acadBridge.ts"), "utf8");
+  assert(
+    /function lockDeadline\([\s\S]{0,200}?clampWait\(/.test(src),
+    "lockDeadline() phai tu goi clampWait — khong de tung route tu lo",
+  );
+  assert(
+    !/lockUntil[^\n]*Date\.now\(\) \+ wait/.test(src),
+    "khong duoc cong thang `wait` chua chuan hoa vao moc thoi gian",
+  );
+}
+
+/* `wait` phai duoc chan TRUOC KHI dung, khong chi truoc khi HIEN.
+ *
+ * Gia tri do khong chi dung moc hien thi — no la thoi gian `pollResult()` GIU
+ * khoa job dung chung. Mot body `{"wait": 1e15}` qua `/livequery` giu khoa gan
+ * nhu vinh vien, chan moi lenh ghi sau do, trong khi moc hien thi van het han
+ * sau it phut. Ban va truoc chi chan con so HIEN THI va de nguyen HANH VI. */
+{
+  const src = readFileSync(join(__dirname, "../src/acadBridge.ts"), "utf8");
+  /* `pollResult` dinh nghia TRUOC `dispatchLiveJob` trong tep, nen lay no lam
+     moc ket thuc cho ra lat cat RONG — va mot phep so tren chuoi rong thi luon
+     xanh. Chot `body.length` la thu bat duoc chuyen do. */
+  const from = src.indexOf("export async function dispatchLiveJob");
+  const to = src.indexOf("\nexport ", from + 1);
+  const body = src.slice(from, to > from ? to : src.length);
+  assert(body.length > 200, "khong cat duoc than dispatchLiveJob — locator lac hau");
+  assert(
+    /const bounded = clampWait\(wait\);/.test(body),
+    "dispatchLiveJob phai chan `wait` ngay dau, truoc khi no di toi bat cu dau",
+  );
+  assert(
+    !/pollResult\(job, wait\)/.test(body),
+    "va `pollResult` phai nhan gia tri DA CHAN — no la thoi gian giu khoa dung chung",
+  );
+}
+
+/* Moi noi dat `state = "sent"` phai HOAC khai `lockUntil`, HOAC ghi ro vi sao
+   khong khai duoc. Thieu ca hai thi trang thai cho o do im lang — khong bao loi,
+   va im lang thi khong ai thay.
+   Khong noi long thanh "co it nhat mot cho khai": mot ngoai le chinh dang
+   (`/plot-pdf`, xem chu thich trong nguon) khong duoc bien phep kiem thanh vo
+   nghia cho moi duong THEM VAO sau nay. */
+{
+  const src = readFileSync(join(__dirname, "../src/acadBridge.ts"), "utf8");
+  const sentSites = src.split(/\bstate:? ?=? ?"sent"/).length - 1;
+  /* Khop dang khai HIEN TAI (`lockDeadline(...)`). Regex lac hau thi phep kiem
+     do — dung y: doi cach khai ma khong doi cho nay la mot cach lam no im lang. */
+  const declared = (src.match(/lockUntil: lockDeadline\(|job\.lockUntil = lockDeadline\(/g) || []).length;
+  const waived = (src.match(/KHÔNG khai `lockUntil`/g) || []).length;
+  assert(sentSites >= 3, "khong tim thay du cho dat trang thai sent — regex da lac hau");
+  assert(declared >= 1, "phai con it nhat mot duong khai duoc han, khong thi dong ho vo dung");
+  assert(
+    declared + waived === sentSites,
+    `co ${sentSites} cho dat "sent": ${declared} khai han, ${waived} ghi ro mien tru`
+    + " — phan con lai la im lang, phai xu ly",
+  );
+}
+
 writeFileSync(LOG, lines.join("\n") + "\n", "utf8");
 log("\nWrote " + LOG);
 if (failed) {

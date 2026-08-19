@@ -643,6 +643,19 @@ tắc nằm ở `subjectCountKnown()`, dùng chung cho cả bản đầy đủ l
 > con số y nguyên. Lỗi giữa chừng cũng phải báo là **không chắc**: `/draw/target`
 > huỷ từng cái một và dừng khi hỏng, nên những cái trước đó đã mất rồi.
 
+### Bộ test daemon KHÔNG được chạm cầu nối thật
+
+`scripts/test-bridge-contract.mjs` **không** đổi `ACAD_BRIDGE_DIR`, nên bất kỳ
+đường nào ghi `job.lsp` sẽ ghi vào `~/Acad-Bridge` THẬT — kênh dùng chung mà
+plugin tự nạp. Đã xảy ra một lần (2026-08-19): một phép dò gọi `POST /job` và
+AutoCAD của người dùng chạy thật job đó. Nội dung là `(princ)` nên không sửa gì
+và bản vẽ vẫn `dbmod=0`, nhưng lượt ghi ấy đè lên kênh dùng chung.
+
+Vì vậy: **không viết test nào gọi `/job`, `/live`, `/raw/invoke` hay bất kỳ
+đường nào ghi `job.lsp`** cho tới khi suite chạy trên một `ACAD_BRIDGE_DIR` tạm.
+Kiểm logic bằng hàm thuần (`busyDeadline`, `clampWait`) — chúng bao đúng phần
+đáng lo mà không chạm tới AutoCAD.
+
 ### `/api/acad/standards/*` — hồ sơ quy tắc và lượt quét
 
 Hai màn hình dùng chung một API, và ràng buộc giữa chúng là thứ dễ sai nhất.

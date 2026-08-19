@@ -115,6 +115,7 @@ export function AppShell({ screen, title, sub, actions, children }: {
         <Titlebar
           docs={docs}
           acadState={acad.state}
+          busyUntil={acad.busyUntil}
           pending={pendingOps.count}
           pendingStale={pendingOps.stale}
           railLocked={rail.locked}

@@ -35,7 +35,17 @@ export function useAcadStateValue(): AcadState {
  * thích buộc người dùng phải đoán. */
 export function acadBlockReason(state: AcadState): string {
   switch (state) {
-    case "busy": return "AutoCAD đang bận — đợi lệnh hiện tại kết thúc";
+    /* KHÔNG "AutoCAD đang bận": app chỉ biết đã gửi lệnh và chưa nhận kết quả.
+       Lệnh đang chạy thật và lệnh đã hỏng giữa chừng cho ra cùng trạng thái, và
+       ở ca thứ hai thì AutoCAD đang rảnh. Câu chữ phải khớp pill ở thanh trên —
+       hai chỗ nói hai nguyên nhân khác nhau về cùng một trạng thái thì người
+       dùng tin chỗ nào cũng sai một nửa.
+       Và KHÔNG hứa "tự hết sau ít phút" ở đây: trạng thái chờ cũng bật khi có
+       job xếp hàng, mà lúc đó không có hạn nào đúng — khoá kéo dài tới khi hàng
+       đợi cạn. Bịa một cái hạn ở đúng ca không biết hạn là lỗi mà `busyText()`
+       sinh ra để tránh; nói lại nó ở đây là dựng lại lỗi đó bằng chuỗi cứng.
+       Chỗ CÓ mốc thật thì đọc `busyUntil` qua `busyText()`. */
+    case "busy": return "Đang chờ AutoCAD trả kết quả cho lệnh trước";
     case "off": return "AutoCAD chưa chạy — mở AutoCAD rồi thử lại";
     case "missing": return "Chưa cài AutoCAD trên máy này";
     case "no-plugin": return "Chưa nạp plugin AcadBridge — gõ APPLOAD trong AutoCAD";

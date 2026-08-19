@@ -34,17 +34,25 @@ type StatusPayload = {
    * lại để `/job/:id` còn tra được, nên "có activeJob" không đồng nghĩa "đang
    * bận" — suy nhầm là mọi nút ghi bị khoá vĩnh viễn sau job đầu tiên. */
   busy?: boolean;
+  /** Mốc ISO khoá job tự rụng. Daemon KHÔNG biết AutoCAD có bận thật không — nó
+   * chỉ biết đã gửi job và chưa nhận kết quả. Mốc này là thứ nó biết chắc, và là
+   * khác biệt giữa "app hỏng rồi" với "chờ thêm 40 giây nữa". */
+  busyUntil?: string | null;
 };
 type DocsPayload = { running?: boolean; alive?: boolean };
 
 export type AcadConnection = {
   state: AcadState;
+  /** Mốc ISO khoá job tự rụng, rỗng khi không phải đang chờ. Dùng cho
+   * `busyText()` — nói được "chờ thêm N giây" thay vì để người dùng tưởng treo. */
+  busyUntil: string;
   /** Chưa đọc xong lần đầu. Khác với `off`: chưa biết, không phải đã biết là tắt. */
   loading: boolean;
   refresh: () => void;
 };
 
 export function useAcadState(daemon: string): AcadConnection {
+  const [busyUntil, setBusyUntil] = useState<string>("");
   const [state, setState] = useState<AcadState>("off");
   const [loading, setLoading] = useState(true);
   /** Phiên này đã từng thấy plugin trả lời chưa — xem ghi chú heuristic ở đầu file. */
@@ -72,6 +80,10 @@ export function useAcadState(daemon: string): AcadConnection {
       else if (status.busy === true) setState("busy");
       else if (docs.alive === true) setState("on");
       else setState(sawPlugin.current ? "mute" : "no-plugin");
+
+      /* Đặt vô điều kiện, kể cả khi hết bận: giữ mốc cũ là đếm ngược một khoá đã
+         rụng, tức nói về một lượt chờ không còn tồn tại. */
+      setBusyUntil(status.busy === true ? (status.busyUntil || "") : "");
     } catch {
       // Không gọi được daemon thì AutoCAD chắc chắn không điều khiển được.
       // Báo `off` chứ không giữ trạng thái cũ: một pill nói "đã nối" trong khi
@@ -96,5 +108,5 @@ export function useAcadState(daemon: string): AcadConnection {
     if (event.type === "pluginLoaded" || event.type.startsWith("doc")) void read();
   });
 
-  return { state, loading, refresh: () => void read() };
+  return { state, busyUntil, loading, refresh: () => void read() };
 }

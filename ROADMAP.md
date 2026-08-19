@@ -618,8 +618,23 @@ rồi khởi động lại AutoCAD.
   Bản vẽ nháp dùng để đo: `$CLAUDE_JOB_DIR/tmp/blocktest/` (không commit).
 - **Job LISP lỗi giữa chừng làm kẹt `activeJob` 2 phút.** `acad:write-result`
   không chạy thì daemon giữ `state:"sent"` tới khi `JOB_BUSY_MS` hết hạn, và mọi
-  lệnh ghi bị chặn trong quãng đó. Tự khỏi nên không nghiêm trọng, nhưng thông
-  điệp cho người dùng lúc ấy là "AutoCAD đang bận" — sai nguyên nhân.
+  lệnh ghi bị chặn trong quãng đó. Tự khỏi nên không nghiêm trọng.
+
+  **Phần thông điệp đã sửa (2026-08-19).** Nhãn cũ "AutoCAD đang bận" là một
+  **chẩn đoán daemon không làm được**: job đang chạy thật và job đã chết giữa
+  chừng cho ra cùng một trạng thái, mà ở ca thứ hai thì AutoCAD đang rảnh — người
+  dùng đọc câu đó rồi đi tìm nhầm chỗ. Nay nói đúng thứ daemon biết ("Đang chờ
+  AutoCAD trả kết quả"), kèm `busyUntil` để nói được "tự hết sau N giây": khác
+  biệt giữa "app hỏng rồi" và "chờ thêm chút nữa".
+
+  **Cũng đã đo và KHÔNG làm:** đồng hồ đếm ngược chỉ có ở đường `/live` và
+  `/job`. `/plot-pdf` không khai hạn vì `invokeRaw()` có hàng đợi riêng — lượt
+  chờ ở đó phụ thuộc job xếp trước nên không có cận trên nào đúng.
+
+  **Còn lại:** chính cái kẹt 2 phút. Không tự dọn được vì daemon không phân biệt
+  nổi hai ca, mà cho người dùng gỡ khoá bằng tay thì mở đường cho hai lệnh ghi
+  chạy song song — nguy hiểm hơn hẳn việc chờ. Cần plugin báo được "job này đã
+  kết thúc" (kể cả khi hỏng) thì mới đóng được.
 - **`globals.css` 3.500 dòng, 1.119 hex literal.** Xoá ở giai đoạn 10.
 - **32 đường dẫn API rải rác trong `app/page.tsx`.** Ranh giới "endpoint chỉ khai
   ở `lib/daemon/endpoints.ts`" hiện chỉ áp cho `components/` và `features/`.

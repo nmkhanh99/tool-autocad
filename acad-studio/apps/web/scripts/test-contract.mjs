@@ -526,6 +526,27 @@ function occurrencesIn(source, pattern) {
       `${file} không được tự quyết chữ cho trạng thái chưa biết`,
     );
   }
+  /* Hai chỗ nói về CÙNG trạng thái chờ: pill ở thanh trên và nút ghi. Nói hai
+     nguyên nhân khác nhau thì người dùng tin chỗ nào cũng sai một nửa — và câu
+     "AutoCAD đang bận" là một chẩn đoán app không làm được. */
+  assert.doesNotMatch(
+    sourceAt("components/ui/WriteButton.tsx"),
+    /case "busy": return "AutoCAD đang bận/,
+    "nút ghi không được khẳng định nguyên nhân mà app không biết",
+  );
+  /* Đếm ngược phải TỰ NHỊP. Nhịp đọc trạng thái là 15 giây và ghi lại đúng giá
+     trị cũ, nên React bỏ qua render và con số đứng nguyên ở lượt đầu — một cái
+     hạn đứng im nói sai đều đặn, tệ hơn không có hạn. */
+  assert.match(
+    sourceAt("Titlebar.tsx"),
+    /setInterval\(\(\) => setTick\(Date\.now\(\)\), 1_000\)/,
+    "đồng hồ đếm ngược của trạng thái chờ phải tự nhịp",
+  );
+  assert.match(
+    sourceAt("Titlebar.tsx"),
+    /if \(acadState !== "busy" \|\| !busyUntil\) return;/,
+    "và CHỈ nhịp trong lúc chờ — hết chờ thì không còn gì để đếm",
+  );
   /* Chip không được suy sắc thái từ con số: `pending ?? 0` biến cả "0 cũ" lẫn
      "chưa đọc được" thành `"0"`, và CSS tô giá trị đó thành "rỗng, yên tâm". */
   assert.doesNotMatch(

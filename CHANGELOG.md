@@ -11,6 +11,61 @@
   không liên quan, hỏng kiểu không ai biết mà sửa. Nay kiểm đúng loại `INSERT`
   **và** đúng tên block mới đổi; sai thì bỏ qua. Đã đo cả ca chèn ngang.
 
+- **Trạng thái chờ AutoCAD không còn CHẨN ĐOÁN thay daemon.** Nhãn cũ "AutoCAD
+  đang bận" khẳng định một nguyên nhân daemon không biết: job đang chạy thật và
+  job đã chết giữa chừng (LISP lỗi, đóng hộp thoại) cho ra cùng trạng thái, mà ở
+  ca thứ hai thì AutoCAD đang rảnh. Nay nói đúng thứ nó biết — "Đang chờ AutoCAD
+  trả kết quả" — kèm `busyUntil` từ `/status` để nói được "tự hết sau N giây".
+  Không có mốc thì KHÔNG bịa: hứa một cái hạn có thể không tới còn tệ hơn im.
+  Nút ghi (`acadBlockReason`) sửa cùng câu — hai chỗ nói hai nguyên nhân khác
+  nhau về cùng một trạng thái thì tin chỗ nào cũng sai một nửa.
+- **Body sai kiểu có thể HẠ daemon.** `/job` lấy `wait` thẳng từ body. Một giá
+  trị JSON kiểu `"1000"` biến `Date.now() + wait` thành phép **nối chuỗi**, ra
+  một số ngoài tầm `Date`, và `toISOString()` ném `RangeError` ngay trong
+  `/status` — đường giao diện hỏi mỗi 15 giây. Express 4 không bắt lỗi của
+  handler async, nên cú ném đó hạ luôn tiến trình. Chốt ở **chỗ đọc** (trước
+  `toISOString`) vì `lockUntil` do nhiều đường ghi.
+  Bản vá đầu chuẩn hoá ở **một route** — và `/livequery` truyền thẳng `wait` từ
+  body vào `dispatchLiveJob`, nên nó lọt. Chuẩn hoá ở từng route là làm một lần
+  quên một lần; nay gom vào `lockDeadline()`, đúng NƠI TÍNH, để không route nào
+  quên được — kể cả route thêm sau này.
+- **Và `wait` phải bị chặn TRƯỚC KHI DÙNG, không chỉ trước khi hiện.** Giá trị
+  đó không riêng dựng mốc hiển thị — nó là thời gian `pollResult()` **giữ khoá
+  job dùng chung**. Một body `{"wait": 1e15}` qua `/livequery` giữ khoá gần như
+  vĩnh viễn, chặn mọi lệnh ghi sau đó, trong khi mốc hiển thị vẫn hết hạn sau ít
+  phút. Hai bản vá trước tôi chặn con số **hiển thị** và để nguyên **hành vi** —
+  chữa triệu chứng. Không caller hợp lệ nào chờ quá `JOB_BUSY_MS`, nên chặn ở
+  đầu `dispatchLiveJob()` không cắt mất gì.
+- **Plot KHÔNG khai hạn — có chủ ý.** `invokeRaw()` có hàng đợi riêng, nên một
+  plot còn phải chờ hết lượt raw đang chạy trước khi `timeout_ms` của nó bắt đầu
+  tính, và lượt chờ đó phụ thuộc job xếp trước nên không có cận trên. Ba vòng
+  review liên tiếp tìm ra thêm một lượt chờ chưa tính — thiếu `JOB_BUSY_MS`, rồi
+  thiếu lượt poll nền, rồi thiếu hàng đợi raw. Đó là dấu hiệu **không có cận trên
+  nào đúng** ở đường này, không phải thiếu một con số. Thà không có hạn còn hơn
+  một cái hạn sai. Phép kiểm chéo đổi thành "khai hạn HOẶC ghi rõ vì sao không",
+  để một ngoại lệ chính đáng không làm nó vô nghĩa với mọi đường thêm sau này.
+- **Hạn khoá do NƠI GỬI khai, không suy từ một hằng số chung.** `createdAt +
+  JOB_BUSY_MS` sai ở cả hai đường: `/plot-pdf` chạy theo `timeout_ms` của yêu cầu
+  và giữ khoá lâu hơn hẳn, còn `/live` có thêm một lượt poll **nền** sau lượt chờ
+  đầu. Cả hai đều làm cái hạn trôi qua trong lúc máy vẫn bận — tức lại hứa một
+  điều không giữ được, chỉ khác con số. Nay mỗi nơi gửi khai `lockUntil` của
+  chính nó; không khai thì trả `null`, **không đoán hộ**. Câu chữ đổi thành
+  "chậm nhất sau N giây" vì mốc là cận trên: hết sớm hơn là chuyện tốt, còn nói
+  một con số chính xác rồi vượt qua nó mới là nói dối.
+- **Đồng hồ đếm ngược không bao giờ chạy cho đường chính.** `liveJobPending`
+  tăng cho **chính job đang chạy**, không riêng job xếp hàng — nên chốt
+  `pending > 0` làm `/live` không bao giờ có mốc, tức đúng ca cần đồng hồ nhất
+  (job LISP chết giữa chừng đi qua chính đường đó) lại là ca nó im. Đổi thành
+  `pending > 1`, và tách `busyDeadline()` thành hàm thuần để kiểm được.
+- **Nút ghi hứa một cái hạn nó không biết.** Câu "khoá tự hết sau ít phút" cũng
+  bật khi có job xếp hàng, mà lúc đó khoá kéo dài tới khi hàng đợi cạn. Bịa một
+  cái hạn ở đúng ca không biết hạn là lỗi mà `busyText()` sinh ra để tránh — nói
+  lại nó bằng chuỗi cứng ở chỗ khác là dựng lại đúng lỗi đó. Đã bỏ vế thời gian.
+- **Đếm ngược tự nhịp.** Nhịp đọc trạng thái là 15 giây và ghi lại đúng giá trị
+  cũ, nên React bỏ qua lượt render: con số đứng nguyên ở "120 giây" tới lúc khoá
+  đã rụng. Một cái hạn đứng im nói sai đều đặn, tệ hơn không có hạn. Nhịp 1 giây
+  và CHỈ trong lúc chờ.
+
 ### Technical
 
 - **Bất biến #8** trong `test-contract.mjs`: mọi mục `live: true` ở

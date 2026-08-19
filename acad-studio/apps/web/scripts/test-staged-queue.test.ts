@@ -12,6 +12,7 @@ import {
   secondsLeft,
 } from "../features/staged-ops/queue";
 import { documentMatchesTarget } from "../lib/daemon/docs";
+import { ACAD_STATE_LABEL, busyText } from "../lib/acadState";
 import { stagedDrawPreviews, unwarnedPreviews } from "../lib/daemon/drawTarget";
 
 const NOW = Date.parse("2026-08-18T10:00:00.000Z");
@@ -363,3 +364,33 @@ test("lượt đọc ĐẦU chưa xong: rail và thanh trên phải nói cùng m
   assert.notEqual(pendingBadge(undefined, false).tone, "empty", "và KHÔNG được ẩn như hàng chờ rỗng");
   assert.equal(pendingBadge(0, false).tone, "empty", "chỉ 0 vừa đọc xong mới ẩn được");
 });
+
+test("trạng thái chờ không được CHẨN ĐOÁN thay daemon", () => {
+  /* Daemon chỉ biết một điều: đã gửi job, chưa nhận `acad:write-result`. Hai
+     chuyện rất khác nhau cùng ra trạng thái đó — job đang chạy thật, và job đã
+     CHẾT giữa chừng (LISP lỗi, người dùng đóng hộp thoại) nên sẽ không bao giờ
+     báo về. Ở ca thứ hai thì AutoCAD đang RẢNH, nên nhãn cũ "AutoCAD đang bận"
+     chỉ sai chỗ, và người dùng đi tìm nhầm nguyên nhân. */
+  assert.doesNotMatch(ACAD_STATE_LABEL.busy.label, /đang bận/,
+    "nhãn không được khẳng định một nguyên nhân daemon không biết");
+  assert.match(ACAD_STATE_LABEL.busy.label, /chờ/, "nói cái nó BIẾT: đang chờ kết quả");
+
+  const now = Date.parse("2026-08-19T10:00:00.000Z");
+
+  /* Có mốc thì nói ra: khác biệt giữa "app hỏng rồi" và "chờ thêm 40 giây nữa". */
+  const withDeadline = busyText("2026-08-19T10:00:40.000Z", now);
+  assert.match(withDeadline, /40 giây/);
+  assert.match(withDeadline, /chậm nhất/,
+    "mốc là cận TRÊN do nơi gửi khai — nói như một con số chính xác rồi vượt qua nó là nói dối");
+  assert.match(withDeadline, /không phân biệt được/,
+    "và phải nói thẳng là app KHÔNG biết đang ở ca nào");
+
+  /* Không có mốc thì KHÔNG bịa một con số — hứa một cái hạn có thể không tới. */
+  for (const missing of ["", undefined, "hôm qua"]) {
+    assert.doesNotMatch(busyText(missing, now), /giây/,
+      `mốc ${JSON.stringify(missing)} không đọc được thì không được đoán thời gian`);
+  }
+  /* Mốc đã qua cũng vậy: đếm ngược một khoá đã rụng là nói về lượt chờ không còn. */
+  assert.doesNotMatch(busyText("2026-08-19T09:59:00.000Z", now), /giây/);
+});
+

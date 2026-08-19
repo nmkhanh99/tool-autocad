@@ -11,19 +11,22 @@
  * tới mất dữ liệu khi người dùng khởi động lại AutoCAD. Không biết thì nói
  * không biết.
  */
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/icons";
 import { isRouteBuilt } from "./nav";
 import { pendingBadge } from "../../features/staged-ops/queue";
-import { ACAD_STATE_LABEL, type AcadState } from "../../features/acad-connection/useAcadState";
+import { ACAD_STATE_LABEL, busyText, type AcadState } from "../../lib/acadState";
 import type { AcadDocument } from "../../lib/daemon/docs";
 
 export function Titlebar({
-  docs, acadState, pending, pendingStale, railLocked, railExpanded, onToggleRail, onOpenPalette, onOpenDrawer,
+  docs, acadState, busyUntil = "", pending, pendingStale, railLocked, railExpanded, onToggleRail, onOpenPalette, onOpenDrawer,
 }: {
   docs: AcadDocument[];
   acadState: AcadState;
+  /** Mốc ISO khoá job tự rụng. Rỗng = không phải đang chờ, hoặc không biết mốc. */
+  busyUntil?: string;
   /** Số thao tác đang chờ, hoặc `undefined` khi CHƯA đọc được. Hai thứ khác
    * nhau: `0` là "không có gì chờ", còn `undefined` là "chưa biết" — và hiện
    * `0` cho cái sau là nói dối ở đúng chỗ nhắc người dùng đừng quên lệnh ghi. */
@@ -37,6 +40,22 @@ export function Titlebar({
   onOpenDrawer: () => void;
 }) {
   const conn = ACAD_STATE_LABEL[acadState];
+  /* Trạng thái chờ nói rõ nó là gì và bao giờ tự hết. Nhãn cũ ("AutoCAD đang
+     bận") là một chẩn đoán daemon không làm được: job chạy thật và job CHẾT giữa
+     chừng cho ra cùng trạng thái, và ở ca thứ hai thì AutoCAD đang rảnh. */
+  /* Nhịp đọc trạng thái là 15 giây và nó ghi lại ĐÚNG giá trị cũ, nên React bỏ
+     qua lượt render — đồng hồ đếm ngược sẽ đứng nguyên ở con số đầu tiên ("120
+     giây") cho tới lúc khoá đã rụng. Một cái hạn đứng im còn tệ hơn không có
+     hạn: nó nói sai, đều đặn. Nên tự nhịp, và CHỈ trong lúc chờ — hết chờ thì
+     không còn gì để đếm. */
+  const [tick, setTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (acadState !== "busy" || !busyUntil) return;
+    setTick(Date.now());
+    const timer = setInterval(() => setTick(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [acadState, busyUntil]);
+  const connHint = acadState === "busy" ? busyText(busyUntil, tick) : "";
   // Pill kết nối và chip thay đổi đều là liên kết. Route chưa tồn tại thì
   // chúng phải hiện dạng tĩnh kèm lý do — dẫn người dùng tới 404 tệ hơn hẳn.
   const settingsBuilt = isRouteBuilt("/settings");
@@ -125,7 +144,8 @@ export function Titlebar({
         </Button>
 
         {settingsBuilt ? (
-          <Link className="conn" href="/settings" data-state={acadState} data-od-id="acad-connection">
+          <Link className="conn" href="/settings" data-state={acadState}
+            title={connHint || undefined} data-od-id="acad-connection">
             <span className="beacon" />
             {conn.label}
           </Link>
@@ -133,7 +153,9 @@ export function Titlebar({
           <span
             className="conn"
             data-state={acadState}
-            title="Màn hình Kết nối AutoCAD chưa được dựng"
+            title={connHint
+              ? `${connHint} (Màn hình Kết nối AutoCAD chưa được dựng)`
+              : "Màn hình Kết nối AutoCAD chưa được dựng"}
             data-od-id="acad-connection"
           >
             <span className="beacon" />

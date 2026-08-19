@@ -969,6 +969,11 @@ interface JobRecord {
   state: "pending" | "sent" | "done" | "error" | "timeout";
   createdAt: number;
   kind?: "live" | "plot_pdf";
+  /** Mốc (ms) khoá job **chậm nhất** nhả ra. Do chính nơi gửi khai, vì chỉ nơi đó
+   * biết mình chờ bao lâu: `/live` còn một lượt poll nền sau lượt chờ đầu, còn
+   * `/plot-pdf` chạy theo `timeout_ms` của yêu cầu và có thể vượt xa `JOB_BUSY_MS`.
+   * Suy từ một hằng số chung là hứa một cái hạn trôi qua trong lúc máy vẫn bận. */
+  lockUntil?: number;
   result?: JobResult;
   uncertain?: boolean;
   outputPath?: string;
@@ -988,6 +993,77 @@ function acadBusy(): boolean {
   return liveJobPending > 0 ||
     !!(activeJob && activeJob.state === "sent" && Date.now() - activeJob.createdAt < JOB_BUSY_MS);
 }
+
+/** Khoá job tự hết lúc nào — thuần, để kiểm được mà không cần dựng cả cầu nối.
+ *
+ * Daemon **không biết** AutoCAD có đang bận thật hay không. Nó chỉ biết: đã gửi
+ * job và chưa nhận `acad:write-result`. Hai chuyện rất khác nhau cùng ra trạng
+ * thái đó — job đang chạy thật, và job đã CHẾT giữa chừng (LISP lỗi, người dùng
+ * đóng hộp thoại) nên sẽ không bao giờ báo về. Không phân biệt được thì đừng
+ * đoán; nhưng cái nó biết chắc là khoá sẽ tự rụng, và nói ra mốc đó biến một câu
+ * chẩn đoán sai thành một câu dùng được.
+ *
+ * `pending > 1` = còn job XẾP HÀNG phía sau: lúc đó không có hạn nào đúng, vì
+ * job kế chỉ bắt đầu tính giờ khi tới lượt nó. Nhưng `pending === 1` là **chính
+ * job đang chạy** đang giữ khoá — bản đầu tôi viết `pending > 0` nên đường
+ * `/live` (đường chính) không bao giờ có mốc, tức đồng hồ vừa dựng không bao giờ
+ * chạy.
+ *
+ * Mốc có thể trôi qua mà máy vẫn bận (lượt poll nền giữ khoá thêm). Không sao:
+ * nơi đọc hạ xuống câu không có thời gian khi mốc đã qua, thay vì đếm số âm. */
+/** `wait` từ body về một số giây hợp lệ. Ngoài khoảng thì lùi về mặc định.
+ *
+ * Body là dữ liệu ngoài: chuỗi, `null`, `NaN`, số âm đều tới được đây, và nó đi
+ * thẳng vào phép cộng dựng mốc thời gian. `"1000"` biến phép cộng thành nối
+ * chuỗi — một lỗi không báo gì tại chỗ, chỉ nổ ở một đường khác hẳn.
+ *
+ * Chống SẬP thì chốt ở `busyDeadline()` đã đủ. Hàm này giữ thêm một thứ khác:
+ * đồng hồ đếm ngược vẫn CHẠY cho job đó, thay vì im lặng tắt. Nói thẳng phần
+ * chưa kiểm được: đột biến bỏ lời gọi này đi không làm đỏ test nào, vì trong môi
+ * trường test `/job` dừng ở lỗi quyền Accessibility nên job không bao giờ tới
+ * trạng thái `sent` — đã đo, không phải suy. Bản thân hàm thì có test riêng. */
+export function clampWait(value: unknown, fallback = 15_000): number {
+  const wait = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(wait) || wait <= 0) return fallback;
+  return Math.min(wait, JOB_BUSY_MS);
+}
+
+/** Mốc khoá nhả, tính từ `wait` do NƠI GỌI đưa vào — tự chuẩn hoá.
+ *
+ * Một chỗ tính duy nhất, vì đây là chỗ đã sai hai lần theo cùng một kiểu: tôi
+ * chuẩn hoá ở route `/job` rồi để `/livequery` truyền thẳng `wait` từ body vào
+ * `dispatchLiveJob`, nên `Date.now() + "8000"` lại thành phép nối chuỗi. Sửa ở
+ * NƠI TÍNH thì không route nào quên được — kể cả route thêm sau này. */
+function lockDeadline(wait: unknown): number {
+  return Date.now() + clampWait(wait) + JOB_BUSY_MS;
+}
+
+export function busyDeadline(
+  pending: number,
+  job: { state: string; lockUntil?: number } | null,
+  now: number,
+): string | null {
+  if (pending > 1) return null;
+  if (!job || job.state !== "sent") return null;
+  /* KHÔNG có đường lùi về một hằng số. Job không khai hạn nghĩa là không ai biết
+     hạn của nó, và đoán hộ là dựng lại đúng lỗi vừa sửa — chỉ khác con số. */
+  if (!job.lockUntil) return null;
+  /* Chốt cuối trước `toISOString()`, và nó **phải** ở đây chứ không chỉ ở nơi
+     nhập. `wait` của `/job` lấy thẳng từ body: một giá trị JSON kiểu `"1000"`
+     biến `Date.now() + wait` thành phép NỐI CHUỖI, ra một số ngoài tầm `Date`,
+     và `toISOString()` ném `RangeError` — ngay trong `/status`, đường giao diện
+     hỏi mỗi 15 giây. Express 4 không bắt lỗi của handler async, nên cú ném đó
+     hạ luôn daemon. Nơi nhập đã chuẩn hoá, nhưng một trường do nhiều đường ghi
+     thì chốt phải nằm ở chỗ ĐỌC. */
+  if (typeof job.lockUntil !== "number" || !Number.isFinite(job.lockUntil)) return null;
+  if (Math.abs(job.lockUntil) > 8.64e15) return null;
+  return job.lockUntil > now ? new Date(job.lockUntil).toISOString() : null;
+}
+
+function acadBusyUntil(): string | null {
+  return busyDeadline(liveJobPending, activeJob, Date.now());
+}
+
 const history: JobRecord[] = [];
 let liveJobQueue: Promise<void> = Promise.resolve();
 let liveJobPending = 0;
@@ -1067,6 +1143,15 @@ export async function dispatchLiveJob(
     beforeDispatch?: () => void;
   } = {},
 ) {
+  /* Chặn NGAY ĐẦU, trước khi `wait` đi tới bất cứ đâu.
+     `/livequery` truyền thẳng `wait` từ body vào đây, và giá trị đó không chỉ
+     dựng mốc hiển thị — nó là thời gian `pollResult()` GIỮ khoá job dùng chung.
+     Một body `{"wait": 1e15}` giữ khoá đó gần như vĩnh viễn, chặn mọi lệnh ghi
+     sau đó, trong khi mốc hiển thị vẫn hết hạn sau ít phút.
+     Bản vá trước tôi chỉ chặn con số HIỂN THỊ và để nguyên HÀNH VI — chữa triệu
+     chứng. Không caller hợp lệ nào chờ quá `JOB_BUSY_MS`, nên chặn ở đây không
+     cắt mất gì. */
+  const bounded = clampWait(wait);
   const release = await acquireLiveJobLock();
   let backgroundOwnsRelease = false;
   try {
@@ -1075,9 +1160,15 @@ export async function dispatchLiveJob(
     ensureBridgeDirs();
     writeFileSync(join(getBridgeDir(), "job_target.txt"), target ? String(target) : "", "utf8");
     atomicWrite(getJobLsp(), wrapJob(jobId, lisp, undefined, options));
-    const job: JobRecord = { jobId, state: "sent", createdAt: Date.now() };
+    /* Chậm nhất: lượt chờ đầu, rồi lượt poll NỀN giữ khoá thêm `JOB_BUSY_MS`
+       nữa khi lượt đầu hết giờ mà job chưa báo về. Lấy `JOB_BUSY_MS` không thôi
+       là hụt đúng quãng đó. */
+    const job: JobRecord = {
+      jobId, state: "sent", createdAt: Date.now(),
+      lockUntil: lockDeadline(bounded),
+    };
     activeJob = job;
-    const state = await pollResult(job, wait);
+    const state = await pollResult(job, bounded);
     rememberJob(job);
     if (state === "sent") {
       // The HTTP caller may stop waiting, but job.lsp is still a shared
@@ -1178,6 +1269,9 @@ function snapshotDocument(
     : null;
 }
 
+/** Lượt kiểm plugin ngay trước khi chạm kênh raw. */
+const PLOT_PREFLIGHT_MS = 5_000;
+
 async function runPlotPdfJob(
   job: JobRecord,
   request: PlotPdfRequest,
@@ -1186,10 +1280,19 @@ async function runPlotPdfJob(
   let keepPossiblyActiveTemp = false;
   try {
     job.state = "sent";
+    /* KHÔNG khai `lockUntil` cho plot — cố ý.
+       `invokeRaw()` có hàng đợi RIÊNG (`withLiveInvokeLock`), nên một plot còn
+       phải chờ hết lượt raw đang chạy trước khi `timeout_ms` của nó bắt đầu
+       tính. Lượt chờ đó không có cận trên: nó phụ thuộc vào những job xếp trước.
+       Ba vòng review liên tiếp tìm ra thêm một lượt chờ chưa tính — `JOB_BUSY_MS`
+       thiếu, rồi lượt poll nền thiếu, rồi hàng đợi raw thiếu. Đó là dấu hiệu
+       KHÔNG có cận trên nào đúng ở đường này, chứ không phải thiếu một con số.
+       Không biết thì không nói: `busyDeadline()` trả `null`, giao diện hạ xuống
+       câu không có thời gian. Thà không có hạn còn hơn một cái hạn sai. */
     rememberJob(job);
 
     // Re-check immediately before touching the single-slot raw transport.
-    const current = await listOpenDocs(5_000);
+    const current = await listOpenDocs(PLOT_PREFLIGHT_MS);
     if (!current.alive) {
       throw new PlotPdfValidationError(
         "plugin_unavailable",
@@ -1442,6 +1545,9 @@ export function acadBridgeRouter(): Router {
       bridgeDir: getBridgeDir(),
       activeJob: activeJob ? { jobId: activeJob.jobId, state: activeJob.state } : null,
       busy: acadBusy(),
+      /* Mốc khoá tự rụng. Xem `acadBusyUntil()`: daemon không biết AutoCAD có
+         bận thật không, nên giao diện phải nói cái nó BIẾT thay vì chẩn đoán. */
+      busyUntil: acadBusyUntil(),
       trustedHint:
         "Lần đầu chạy job nếu AutoCAD hỏi SECURELOAD, chọn 'Load'. Để hết hỏi: lệnh TRUSTEDPATHS thêm " +
         getBridgeDir() + "/...",
@@ -1666,6 +1772,10 @@ export function acadBridgeRouter(): Router {
         kind: "plot_pdf",
         state: "pending",
         createdAt: Date.now(),
+        /* `lockUntil` đóng dấu TRONG `runPlotPdfJob()`, sau khi giành được khoá
+           — không phải ở đây. Một plot xếp hàng sau job khác có thể chờ rất lâu
+           mới tới lượt, mà đồng hồ thì đã chạy từ lúc nhận yêu cầu: hạn trôi qua
+           trong khi lượt raw vẫn còn nguyên `timeout_ms` để chạy. */
         outputPath: request.outputPath,
         tempPath,
       };
@@ -2341,7 +2451,10 @@ export function acadBridgeRouter(): Router {
 
   // Kênh 2 — job vào session GUI đang mở: ghi job.lsp; plugin auto-load (keystroke = fallback).
   r.post("/job", async (req, res) => {
-    const { lisp, wait = 15000 } = req.body ?? {};
+    const { lisp } = req.body ?? {};
+    /* Chuẩn hoá luôn ở đây vì `wait` còn đi vào `pollResult()` nữa, không riêng
+       phép dựng mốc — `lockDeadline()` tự lo phần của nó. */
+    const wait = clampWait(req.body?.wait);
     if (!lisp) return res.status(400).json({ error: "Thiếu 'lisp' (payload AutoLISP)" });
     if (acadBusy())
       return res.status(409).json({ error: "Đang có job chạy dở", jobId: activeJob?.jobId });
@@ -2415,6 +2528,8 @@ end tell`;
         });
       }
       job.state = "sent";
+      /* Cùng hình dạng với `dispatchLiveJob`: lượt chờ đầu rồi lượt poll nền. */
+      job.lockUntil = lockDeadline(wait);
       const state = await pollResult(job, wait);
       rememberJob(job);
       if (state === "sent") {
