@@ -283,8 +283,23 @@ export function buildCreateBlockLisp(block: BlockDefinition): string {
               (entmod (subst (cons 4 ${lispString(fallbackDescription)}) (assoc 4 acadlib:ed) acadlib:ed))
               (entmod (append acadlib:ed (list (cons 4 ${lispString(fallbackDescription)})))))
             (command "_.-LAYER" "_M" ${lispString(layer)} "")
+            ;; -BLOCK DOI phan da chon thanh mot the hien cua block vua tao, nen
+            ;; entlast chinh la the hien do -- da do tren AcCoreConsole 2027:
+            ;; entlast ra INSERT mang dung ten block, doi tuong khac khong dung toi.
+            ;; Nhung no dung nho mot dieu kien NGAM: khong co gi them doi tuong vao
+            ;; ban ve giua -BLOCK va entlast (-LAYER _M chi tao ban ghi bang, khong
+            ;; phai doi tuong). Chen mot buoc vao quang do la CHPROP lang le doi
+            ;; layer cua mot hinh KHONG lien quan.
+            ;; Nen kiem thang thu vua nhat duoc thay vi tin vao thu tu: dung loai
+            ;; INSERT va dung ten block thi moi doi. Sai thi BO QUA -- khong doi
+            ;; layer con sua duoc bang tay, doi nham mot hinh khac thi khong ai
+            ;; biet ma sua.
             (setq acadlib:ref (entlast))
-            (if acadlib:ref (command "_.CHPROP" acadlib:ref "" "_LA" ${lispString(layer)} ""))
+            (if (and acadlib:ref
+                     (= (cdr (assoc 0 (entget acadlib:ref))) "INSERT")
+                     (= (strcase (cdr (assoc 2 (entget acadlib:ref))))
+                        (strcase ${lispString(name)})))
+              (command "_.CHPROP" acadlib:ref "" "_LA" ${lispString(layer)} ""))
             (setvar "CLAYER" acadlib:old-layer)
             (acad:write-result "ok" (strcat "created=" ${lispString(name)}))
           )

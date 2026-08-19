@@ -1,5 +1,38 @@
 # CHANGELOG
 
+## 2026-08-19 — Nợ kỹ thuật: ba mục đóng, hai trong đó vì mục nợ SAI
+
+### Fixed
+
+- **`CHPROP` sau `-BLOCK` nay chốt đúng thứ nó sắp đổi.** Mã cũ nhặt `entlast`
+  rồi đổi layer thẳng. Đo trên AcCoreConsole 2027: `entlast` **đúng** là thể hiện
+  block vừa tạo — nhưng đúng nhờ một điều kiện ngầm là không có gì thêm đối tượng
+  vào bản vẽ giữa hai bước. Chèn một bước vào quãng đó là đổi layer một hình
+  không liên quan, hỏng kiểu không ai biết mà sửa. Nay kiểm đúng loại `INSERT`
+  **và** đúng tên block mới đổi; sai thì bỏ qua. Đã đo cả ca chèn ngang.
+
+### Technical
+
+- **Bất biến #8** trong `test-contract.mjs`: mọi mục `live: true` ở
+  `functions.ts` phải có `case` tương ứng trong `opLisp()`. Thiếu là `/live` trả
+  400 và nút đó hỏng **mọi lần bấm**.
+
+### Ba mục nợ đã đóng
+
+- `copyfloor`/`tagmeta` "2 nút luôn báo lỗi" — **mục nợ sai**: cả hai đều có
+  handler, và đường headless (`recipeBody`) gọi chung đúng hàm đó. Viết theo suy
+  đoán chứ không theo đo đạc.
+- `buildCreateBlockLisp`/`entlast` — **mục nợ sai**: tiền đề "`-BLOCK` không chèn
+  thể hiện nào" không đúng. Phép đo bác cả nghi vấn cũ lẫn suy luận tôi tự dựng
+  lại trước khi đo.
+- "Thao tác chọn không bị huỷ khi rời trang" — **không sửa**, vì cách sửa đã đề
+  ra nay là sai: `/changes` làm thao tác đó hiện ra và bỏ được, nên tự huỷ lúc
+  rời trang là xoá thứ người dùng đang đi tới để xác nhận.
+
+Ba lần đo hạ ba mục nợ, hai trong đó viết theo suy đoán. Đáng ghi lại: mục nợ
+cũng là một lời khẳng định, và nó không tự đúng chỉ vì đã nằm trong file lâu.
+
+
 ## 2026-08-18 (chiều) — Giai đoạn 7 mở màn: hàng chờ ghi nhìn thấy được
 
 `/changes` là màn kế hoạch gọi là **trục xoay của sản phẩm**, và trước hôm nay nó

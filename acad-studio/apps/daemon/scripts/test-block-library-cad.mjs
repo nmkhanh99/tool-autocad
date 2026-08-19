@@ -51,6 +51,22 @@ assert.match(create, /_\.-BLOCK/);
 assert.match(create, /ACADLIB:v1;id=block-chair/);
 assert.match(create, /selection_required/);
 
+/* `CHPROP` sau `-BLOCK` phải chốt ĐÚNG thứ nó sắp đổi.
+ *
+ * `-BLOCK` đổi phần đã chọn thành một thể hiện của block vừa tạo, nên `entlast`
+ * là thể hiện đó — đo trên AcCoreConsole 2027 rồi, không phải suy đoán
+ * (`ROADMAP.md` từng ngờ ngược lại). Nhưng nó đúng nhờ một điều kiện NGẦM: không
+ * có gì thêm đối tượng vào bản vẽ giữa hai bước. Chèn một bước vào quãng đó là
+ * `CHPROP` lặng lẽ đổi layer của một hình KHÔNG liên quan — hỏng kiểu không ai
+ * biết mà sửa. Đã đo cả ca đó: có chốt thì lệnh bị BỎ QUA và hình kia còn nguyên.
+ *
+ * Chốt phải kiểm CẢ HAI: đúng loại `INSERT`, và đúng tên block. Thiếu vế tên thì
+ * một `INSERT` bất kỳ vẫn lọt. */
+assert.match(create, /\(= \(cdr \(assoc 0 \(entget acadlib:ref\)\)\) "INSERT"\)/,
+  "phải kiểm entlast đúng loại INSERT trước khi CHPROP");
+assert.match(create, /\(strcase \(cdr \(assoc 2 \(entget acadlib:ref\)\)\)\)/,
+  "và phải kiểm đúng TÊN block — INSERT bất kỳ vẫn không phải cái vừa tạo");
+
 assert.throws(
   () => buildCreateBlockLisp({ ...block, type: "dynamic" }),
   /dynamic block.*Block Editor/,

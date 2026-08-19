@@ -817,6 +817,57 @@ function occurrencesIn(source, pattern) {
   );
 }
 
+/* ── Bất biến #8: mọi nút "chạy thẳng vào AutoCAD" phải có handler thật ─────
+ *
+ * `functions.ts` khai `live: true` + `liveRecipe`; daemon dựng LISP trong
+ * `opLisp()`. Recipe khai mà daemon không có `case` thì `/live` trả 400 và nút
+ * đó **luôn báo lỗi** — không phải lúc AutoCAD trục trặc, mà mọi lần bấm.
+ *
+ * `ROADMAP.md` từng ghi ngờ đúng hai nút (`copyfloor`, `tagmeta`) là hỏng kiểu
+ * này. Đối chiếu ra cả hai đều CÓ handler, và cả `livedraw` nữa; mục nợ đó viết
+ * theo suy đoán chứ không theo đo đạc. Phép so này thay chỗ cho suy đoán.
+ *
+ * Ba cái bẫy khi tự đo, đã trả giá đủ cả ba:
+ * 1. **Bóc chú thích trước.** Dòng khai kiểu có ghi `// … (mặc định "drawpipes")`
+ *    — regex ngây thơ đếm nó thành một khai báo.
+ * 2. **So nhãn `case`, đừng GỌI hàm.** `opLisp(id, {})` trả `null` cho cả id
+ *    không tồn tại lẫn id tồn tại nhưng thiếu tham số. Gọi hàm với tham số đoán
+ *    bừa thì hai chuyện khác hẳn nhau ra cùng một kết quả.
+ * 3. **Nhớ giá trị mặc định.** Thiếu `liveRecipe` thì recipe là `"drawpipes"`;
+ *    bỏ qua nó là báo oan một mục hoàn toàn lành. */
+{
+  const daemon = readFileSync(join(webDir, "../daemon/src/session.ts"), "utf8");
+  const uncomment = (text) => text
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+
+  const opLispBody = uncomment(daemon.slice(
+    daemon.indexOf("export function opLisp"),
+    daemon.indexOf("export function recipeBody"),
+  ));
+  const handled = new Set([...opLispBody.matchAll(/case "([^"]+)"/g)].map((m) => m[1]));
+  assert.ok(handled.size >= 5,
+    `chỉ trích được ${handled.size} case từ opLisp() — regex trích không còn khớp mã`
+    + " nguồn, và một phép so trên tập rỗng thì luôn xanh");
+
+  /* Cắt theo mốc `{ id: "` nên mỗi mục dừng đúng ở mục kế — không có chuyện
+     `live: true` của mục sau bị tính cho mục trước. */
+  const entries = uncomment(sourceAt("app/functions.ts")).split(/\{\s*id:\s*"/).slice(1);
+  assert.ok(entries.length >= 10,
+    `chỉ đọc được ${entries.length} mục từ functions.ts — bộ tách không còn khớp`);
+
+  const broken = [];
+  for (const entry of entries) {
+    const id = entry.slice(0, entry.indexOf('"'));
+    if (!/live:\s*true/.test(entry)) continue;
+    const declared = entry.match(/liveRecipe:\s*"([^"]+)"/);
+    const recipe = declared ? declared[1] : "drawpipes";
+    if (!handled.has(recipe)) broken.push(`${id} → ${recipe}`);
+  }
+  assert.deepEqual(broken, [],
+    `nút live không có handler trong opLisp() — mỗi lần bấm là một lỗi 400: [${broken}]`);
+}
+
 /* Quyết định D6: nếu UI hiển thị trạng thái đã lưu / chưa lưu thì `/docs`
  * PHẢI trả `dbmod`, và plugin PHẢI phát trường đó. Ba nơi phải khớp nhau —
  * lệch một nơi là chấm xanh nói dối trên một bản vẽ chưa lưu. */

@@ -599,15 +599,23 @@ rồi khởi động lại AutoCAD.
   (bọc vào comment không qua được), và đòi lưới của hai panel chừa hàng cho
   banner ở **mọi** khổ màn hình. Gỡ một tên khỏi danh sách phải sửa mục này
   trong cùng lượt.
-- **Nghi vấn ở `buildCreateBlockLisp` — chưa xác minh, chưa sửa.** Sau khi chạy
-  `-BLOCK` (lệnh này **xoá** các đối tượng đã chọn), LISP làm
-  `(setq acadlib:ref (entlast))` rồi `CHPROP` đối tượng đó sang layer mặc định
-  của block. Nhưng `-BLOCK` không chèn thể hiện nào, nên `entlast` khả năng cao
-  **không** phải block vừa tạo mà là một đối tượng bất kỳ — tức có thể âm thầm
-  đổi layer của một hình không liên quan. Đã thử dò trên AutoCAD thật nhưng job
-  LISP lỗi giữa chừng và không trả kết quả, nên **chưa kết luận được**. Không sửa
-  trong giai đoạn UI này; cần một lượt kiểm riêng trên bản vẽ nháp.
-  File: `apps/daemon/src/blockLibraryCad.ts`, quanh dòng 277-287.
+- ~~**Nghi vấn ở `buildCreateBlockLisp` — `entlast` có thể trỏ nhầm.**~~ **ĐÓNG
+  2026-08-19 — đã ĐO trên AutoCAD thật; nghi vấn SAI, nhưng đã chốt lại.**
+
+  Đo bằng AcCoreConsole 2027 trên bản vẽ nháp: `-BLOCK` **đổi** phần đã chọn
+  thành một thể hiện của block vừa tạo, nên `entlast` ra đúng `INSERT` mang đúng
+  tên block, và đối tượng khác **không** bị đụng. Tiền đề của mục nợ ("`-BLOCK`
+  không chèn thể hiện nào") sai — và đó cũng là suy luận tôi tự dựng lại trước
+  khi đo, rồi bị chính phép đo bác.
+
+  Nhưng mã đúng nhờ một điều kiện **ngầm**: không có gì thêm đối tượng vào bản vẽ
+  giữa `-BLOCK` và `entlast`. Chèn một bước vào quãng đó là `CHPROP` lặng lẽ đổi
+  layer của một hình không liên quan — hỏng kiểu không ai biết mà sửa. Nên nay
+  kiểm thẳng thứ vừa nhặt: đúng loại `INSERT` **và** đúng tên block thì mới đổi,
+  sai thì bỏ qua. Đã đo cả ca chèn ngang: chốt báo "BỎ QUA" và hình kia còn
+  nguyên layer cũ.
+
+  Bản vẽ nháp dùng để đo: `$CLAUDE_JOB_DIR/tmp/blocktest/` (không commit).
 - **Job LISP lỗi giữa chừng làm kẹt `activeJob` 2 phút.** `acad:write-result`
   không chạy thì daemon giữ `state:"sent"` tới khi `JOB_BUSY_MS` hết hạn, và mọi
   lệnh ghi bị chặn trong quãng đó. Tự khỏi nên không nghiêm trọng, nhưng thông
@@ -621,9 +629,25 @@ rồi khởi động lại AutoCAD.
 - **"Revision" mang 4 nghĩa không so sánh được với nhau** (CadWeb integer ·
   document instance · content-hash hồ sơ/catalog · `manifestRevision`). Phải đặt
   4 nhãn khác nhau trong UI trước khi viết thêm màn hình.
-- **`copyfloor` và `tagmeta`** trong `functions.ts` khai `liveRecipe` nhưng không
-  có trong 15 recipe headless — chưa đối chiếu với `/api/acad/live`. Nếu không
-  có handler thì đó là 2 nút luôn báo lỗi.
+- ~~**`copyfloor` và `tagmeta` có thể là 2 nút luôn báo lỗi.**~~ **ĐÓNG
+  2026-08-19 — mục nợ này SAI.**
+
+  Cả hai đều có `case` trong `opLisp()`, và `recipeBody()` (đường headless) gọi
+  chung đúng hàm đó — nên không có chuyện "có live mà thiếu headless". Đối chiếu
+  cả ba mục khai `live: true` (`copyfloor`, `tagmeta`, `livedraw`): đủ handler.
+  Mục nợ viết theo suy đoán chứ không theo đo đạc, giống hệt mục "script test
+  đọc/ghi kho thật" phía trên.
+
+  Nguy cơ nó chỉ tới thì có thật, nên thay suy đoán bằng **bất biến #8** trong
+  `test-contract.mjs`: mọi mục `live: true` phải có `case` tương ứng trong
+  `opLisp()`, nếu không `/live` trả 400 và nút đó hỏng **mọi lần bấm**. Kiểm
+  bằng đột biến hai chiều (gõ nhầm tên ở web · đổi tên case ở daemon).
+
+  Ba cái bẫy khi tự đo, đã trả giá đủ cả ba và ghi lại trong chính phép kiểm:
+  bóc chú thích trước khi khớp (dòng khai kiểu có chữ `"drawpipes"` trong
+  comment); so **nhãn `case`** chứ đừng GỌI `opLisp` (gọi với tham số đoán bừa
+  thì "không có handler" và "thiếu tham số" ra cùng một `null`); và nhớ giá trị
+  **mặc định** `"drawpipes"` khi thiếu `liveRecipe`.
 - ~~**Script test mang đường dẫn tuyệt đối của một máy cụ thể.**~~ **Xong
   2026-08-14** — chín file (không phải bảy), nay dùng `mkdtempSync(tmpdir())`.
 - **Lượt quét không ghi KHÔNG GIAN của từng đối tượng.** `acadstd:scan` dùng
@@ -632,11 +656,23 @@ rồi khởi động lại AutoCAD.
   hiện thuộc layout khác bấm "Chọn trong AutoCAD" sẽ bị từ chối. Hiện giao diện
   nói rõ giới hạn và hiện không gian lúc quét; sửa đủ cần LISP ghi thêm cột, rồi
   parser → model → giao diện đọc nó (bốn tầng).
-- **Thao tác chọn không bị huỷ khi rời trang.** `/review` không có dọn dẹp lúc
-  unmount, nên một thao tác đã chuẩn bị (hoặc đang chuẩn bị) sẽ nằm lại trong
-  hàng chờ của daemon tới khi hết TTL 5 phút. Không mất dữ liệu — thao tác chọn
-  không ghi gì, và máy chủ vẫn chốt bằng `instance`+`revision` — nhưng nó chiếm
-  một chỗ trong hàng chờ và hiện ra ở màn Thay đổi như một lệnh treo.
+- ~~**Thao tác chọn không bị huỷ khi rời trang.**~~ **ĐÓNG 2026-08-19 — không
+  sửa, vì cách sửa đã đề ra nay là SAI.**
+
+  Mục này viết khi hàng chờ còn vô hình, nên "nằm lại tới hết TTL" đồng nghĩa với
+  rác không ai thấy. `/changes` (2026-08-18) đổi hẳn tiền đề: một thao tác đã
+  chuẩn bị nay **hiện ra và bỏ được** từ màn hình đó. Tác hại mục này nêu —
+  "hiện ra ở màn Thay đổi như một lệnh treo" — chính là thứ màn đó sinh ra để
+  làm.
+
+  Thêm nữa, tự huỷ lúc unmount sẽ **phá** đúng luồng vừa dựng: chuẩn bị ở
+  `/review` rồi sang `/changes` xác nhận là đường đi hợp lệ, và huỷ ngầm lúc rời
+  trang là xoá thứ người dùng đang đi tới để xác nhận — một hành động phá huỷ
+  không hỏi ai.
+
+  `/review` vẫn huỷ ở ba ca nó THỰC SỰ biết là thừa: lượt quét đổi giữa chừng,
+  người dùng bấm Bỏ, và kết quả về sau khi lượt quét đã đổi. Đó là những ca mã
+  chắc chắn; rời trang thì không.
 - **Không có lint/format.** Ba ranh giới thư mục kiểm bằng script riêng.
 - **Chat vẫn thiếu test cho luồng gửi/nhận.** Đã có 7 test cho việc sửa message
   theo ID và 8 test cho bus sự kiện, nhưng `send()` và luồng stream SSE của
