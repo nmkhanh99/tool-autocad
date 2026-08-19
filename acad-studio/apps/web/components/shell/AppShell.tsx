@@ -23,7 +23,7 @@ import { Titlebar } from "./Titlebar";
 import { useRail } from "./useRail";
 import { useAcadState } from "../../features/acad-connection/useAcadState";
 import { AcadStateProvider } from "../ui/WriteButton";
-import { useStagedOps } from "../../features/staged-ops/store";
+import { usePendingOpsCount } from "../../features/staged-ops/queue";
 import { fetchDocs, type AcadDocument } from "../../lib/daemon/docs";
 import { DAEMON_BASE } from "../../lib/daemon/endpoints";
 import { useAcadEvents } from "../../features/acad-connection/events";
@@ -38,7 +38,10 @@ export function AppShell({ screen, title, sub, actions, children }: {
 }) {
   const rail = useRail();
   const acad = useAcadState(DAEMON_BASE);
-  const staged = useStagedOps();
+  /* Đọc từ DAEMON, cùng nguồn với màn "Thay đổi chờ duyệt". Trước đó chip này
+     lấy số từ một kho trong trình duyệt mà không hàm nào ghi vào — tức nó vĩnh
+     viễn bằng 0 trong khi hàng chờ thật có thể đầy. */
+  const pendingOps = usePendingOpsCount();
   const [docs, setDocs] = useState<AcadDocument[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -112,7 +115,8 @@ export function AppShell({ screen, title, sub, actions, children }: {
         <Titlebar
           docs={docs}
           acadState={acad.state}
-          pending={staged.pending}
+          pending={pendingOps.count}
+          pendingStale={pendingOps.stale}
           railLocked={rail.locked}
           railExpanded={rail.state === "expanded"}
           onToggleRail={rail.toggle}
@@ -121,7 +125,7 @@ export function AppShell({ screen, title, sub, actions, children }: {
         />
 
         <div className="body">
-          <Rail screen={screen} pending={staged.pending} />
+          <Rail screen={screen} pending={pendingOps.count} pendingStale={pendingOps.stale} />
 
           <main className="main">
             <div className="pagehead">

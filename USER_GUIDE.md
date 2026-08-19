@@ -343,6 +343,41 @@ nhãn "đã lưu" sai là đúng thứ khiến bạn đóng AutoCAD và mất ph
 Khối gập ở cuối trang in nguyên phản hồi của máy chủ. Dùng khi màn hình và
 AutoCAD nói khác nhau và bạn cần biết bên nào sai.
 
+### Thay đổi chờ duyệt (`/changes`)
+
+Màn hình này **chỉ duyệt** — thao tác được tạo ở nơi bạn đang làm việc (Hồ sơ bản
+vẽ, Không gian làm việc), rồi bạn sang đây xác nhận hoặc bỏ.
+
+**Đây KHÔNG phải danh sách đầy đủ mọi lệnh ghi.** Chỉ những thao tác *hai pha*
+mới dừng ở đây. Các lệnh ghi **một pha** — sửa phát hiện ở Kiểm tra bản vẽ
+(`/review`) và chèn block ở Thư viện block (`/library/blocks`) — ghi thẳng vào
+AutoCAD ngay khi bạn xác nhận, **không** đi qua màn này và **không** hoàn tác
+được từ app. Đừng dùng màn hình này để kiểm lại xem mình đã ghi những gì: nó chỉ
+biết phần hàng chờ của nó.
+
+Ba điều phải biết:
+
+- **Hàng chờ sống trong bộ nhớ của daemon.** Khởi động lại daemon là mất sạch —
+  và **không thao tác nào được ghi**. Bạn chỉ mất phần chuẩn bị, không mất dữ
+  liệu bản vẽ.
+- **Mỗi thao tác tự hết hạn sau vài phút.** Cột *Còn lại* đếm ngược. Quá hạn thì
+  phải quay lại màn hình gốc chuẩn bị lại.
+- **Ghi là một lần.** Thao tác hỏng không bấm lại được — phải chuẩn bị lại từ
+  đầu. Đây là chủ ý: gọi lại cùng một lệnh ghi có thể ghi hai lần.
+
+Mục đã xong hoặc đã bỏ vẫn nằm lại trong danh sách (bấm **Hiện cả mục đã xong**)
+— chúng trả lời câu "tôi vừa bấm xong, sao không thấy gì xảy ra".
+
+Cột **Đối tượng** hiện `—` khi máy chủ không đếm được, chứ không hiện `0`: hai
+điều đó khác nhau, và bạn đang quyết định có bấm một lệnh không hoàn tác được.
+
+**Đổi bản vẽ có thể xoá bản xem trước của bộ vẽ.** Xác nhận một thao tác *đổi bản
+vẽ hoạt động* sẽ kéo đích vẽ theo — và điều đó **huỷ mọi bản xem trước đang chờ**
+của màn hình vẽ: hình đã vẽ trong AutoCAD bị xoá, không hoàn tác được. Thẻ xác
+nhận đếm và nói rõ số bản xem trước sắp mất trước khi bạn bấm. Muốn giữ chúng thì
+đóng thẻ, sang màn hình vẽ chốt xong rồi mới quay lại. Nếu thẻ báo **không đọc
+được** hàng chờ của bộ vẽ, hãy coi như có thể mất — nó không đoán thay bạn.
+
 ### Kiểm tra bản vẽ (`/review`)
 
 Quét bản vẽ theo một **hồ sơ quy tắc**, rồi sửa những phát hiện bạn chọn.

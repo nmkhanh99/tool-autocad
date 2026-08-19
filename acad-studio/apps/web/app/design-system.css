@@ -849,9 +849,16 @@ table.data th.sortable[aria-sort]:not([aria-sort="none"]) { color: var(--accent)
   border-radius: var(--r-pill); background: var(--fg-06); color: var(--fg-72);
   display: grid; place-items: center;
 }
-.stagedchip[data-count="0"] { color: var(--muted); }
-.stagedchip:not([data-count="0"]) { border-color: var(--acc-30); background: var(--acc-08); color: var(--accent); }
-.stagedchip:not([data-count="0"]) .n { background: var(--accent); color: var(--bg); }
+/* Ba sắc thái, do `pendingBadge()` quyết — KHÔNG suy từ con số. Bản cũ dùng
+   `data-count={pending ?? 0}`, nên "0 cũ" và "chưa đọc được lần nào" đều thành
+   `"0"` và cùng được tô màu "rỗng, yên tâm": giao diện trấn an người dùng đúng
+   lúc con số không đáng tin. */
+.stagedchip[data-tone="empty"] { color: var(--muted); }
+.stagedchip[data-tone="active"] { border-color: var(--acc-30); background: var(--acc-08); color: var(--accent); }
+.stagedchip[data-tone="active"] .n { background: var(--accent); color: var(--bg); }
+/* Không đáng tin: viền đứt để phân biệt bằng HÌNH chứ không chỉ bằng màu — và
+   không mượn màu nhấn, vì đó là màu của "có N mục chờ", một câu chắc chắn. */
+.stagedchip[data-tone="unsure"] { border-style: dashed; color: var(--muted); }
 .conn[data-state="off"],
 .conn[data-state="no-plugin"],
 .conn[data-state="mute"] { border-color: var(--fg); border-width: 1.5px; color: var(--fg); font-weight: 550; }

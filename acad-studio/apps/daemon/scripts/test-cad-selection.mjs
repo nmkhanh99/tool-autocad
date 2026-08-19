@@ -1438,3 +1438,156 @@ console.log("✓ cad selection: exact target, two-phase confirmation, full captu
 
   console.log("✓ chốt không gian: phân biệt thiếu trường với không đọc được");
 }
+
+/* ------------------------------------------------------------------ *
+ * GET /operations — hàng chờ phải NHÌN THẤY được
+ * ------------------------------------------------------------------ *
+ *
+ * Trước đây `/prepare` trả id và CHỈ nơi gọi đó biết id ấy. Một thao tác chuẩn
+ * bị ở màn này rồi chuyển sang màn khác là biến mất khỏi tầm mắt: nó vẫn nằm
+ * trong hàng chờ của daemon và vẫn sẽ ghi vào bản vẽ khi ai đó xác nhận. Một
+ * hàng chờ không nhìn thấy được trên đường ghi KHÔNG HOÀN TÁC ĐƯỢC là chỗ tệ
+ * nhất để giấu thông tin.
+ */
+{
+  const test = harness();
+  const empty = await invoke(test.router, "GET", "/operations");
+  assert.equal(empty.status, 200);
+  assert.deepEqual(empty.payload.operations, [], "chưa chuẩn bị gì thì rỗng");
+
+  const first = await invoke(test.router, "POST", "/prepare", {
+    body: { target: drawing.file, action: "activate-document" },
+  });
+  const second = await invoke(test.router, "POST", "/prepare", {
+    body: { target: drawing.file, action: "activate-document" },
+  });
+
+  const listed = await invoke(test.router, "GET", "/operations");
+  assert.equal(listed.payload.operations.length, 2);
+  const ids = listed.payload.operations.map((operation) => operation.id);
+  /* Hai lượt này chuẩn bị trong CÙNG một mili-giây (đồng hồ của harness đứng
+     yên) — đúng ca hay gặp nhất khi người dùng bấm hai lần liên tiếp. Phép sắp
+     phải cho ra một câu trả lời XÁC ĐỊNH, không tuỳ thứ tự chèn. */
+  assert.deepEqual(
+    ids,
+    [second.payload.operation.id, first.payload.operation.id],
+    "mới nhất lên đầu — người dùng đọc từ trên xuống",
+  );
+
+  // Và khi mốc thời gian KHÁC nhau thì vẫn đúng chiều.
+  test.advance(5_000);
+  const third = await invoke(test.router, "POST", "/prepare", {
+    body: { target: drawing.file, action: "activate-document" },
+  });
+  const withThird = await invoke(test.router, "GET", "/operations");
+  assert.equal(
+    withThird.payload.operations[0].id,
+    third.payload.operation.id,
+    "thao tác mới hơn hẳn phải đứng đầu",
+  );
+  assert.equal(test.calls.length, 0, "liệt kê KHÔNG được gọi vào AutoCAD");
+
+  /* Trả về MỌI trạng thái, không chỉ `pending`: cái vừa bị bỏ cũng là câu trả
+     lời cho "tôi vừa bấm xong, sao không thấy gì xảy ra". */
+  await invoke(test.router, "POST", rejectPath(first.payload.operation).path,
+    rejectPath(first.payload.operation));
+  const afterReject = await invoke(test.router, "GET", "/operations");
+  assert.equal(afterReject.payload.operations.length, 3, "bỏ một cái không xoá nó khỏi danh sách");
+  const states = Object.fromEntries(
+    afterReject.payload.operations.map((operation) => [operation.id, operation.state]),
+  );
+  assert.equal(states[first.payload.operation.id], "rejected");
+  assert.equal(states[second.payload.operation.id], "pending");
+
+  /* HẾT HẠN tính khi ĐỌC — không có bộ đếm giờ chạy nền. Không gọi
+     `expireOperations()` trong lượt liệt kê thì danh sách bày ra những thao tác
+     `pending` đã chết từ lâu, và người dùng bấm vào một thứ chắc chắn hỏng. */
+  test.advance(CAD_SELECTION_TTL_MS + 1_000);
+  const afterExpiry = await invoke(test.router, "GET", "/operations");
+  const expired = afterExpiry.payload.operations.find(
+    (operation) => operation.id === second.payload.operation.id,
+  );
+  assert.equal(expired.state, "expired", "liệt kê phải tính hết hạn khi đọc");
+
+  /* Bản GỌN: đường này bị hỏi mỗi 5 giây ở mọi màn hình có thanh trên, trong khi
+     bảng chỉ cần vài trường tóm tắt. Kèm cả `scope.handles` (tới 5.000 phần tử)
+     và bản xem trước `subjects` là serialize/truyền/parse hàng nghìn phần tử mỗi
+     lượt cho không ai đọc. */
+  {
+    const scoped = harness();
+    const withHandles = await invoke(scoped.router, "POST", "/prepare", {
+      body: {
+        target: drawing.file,
+        action: "select",
+        scope: { kind: "handles", handles: ["A1", "B2", "C3"] },
+        catalogGuard,
+      },
+    });
+    assert.equal(withHandles.status, 201, JSON.stringify(withHandles).slice(0, 200));
+
+    const one = withHandles.payload.operation;
+    assert.ok(one.scope, "bản ĐẦY ĐỦ của /prepare vẫn phải có scope");
+
+    const listed = await invoke(scoped.router, "GET", "/operations");
+    const row = listed.payload.operations[0];
+    assert.equal(row.id, one.id);
+    assert.equal(row.scope?.kind, "handles", "giữ KIỂU phạm vi — giao diện nói ra nó");
+    assert.equal(row.scope?.handles, undefined, "nhưng KHÔNG kèm danh sách handle");
+    assert.equal(row.subjects, undefined, "và không kèm bản xem trước đối tượng");
+
+    /* Chốt cả TẬP KHOÁ, không chỉ vài trường đã biết là dài.
+       Vòng review trước tôi viết bản gọn bằng cách liệt kê những trường cần BỎ,
+       và nó bỏ sót `summary.fromLayers` ngay lượt kế tiếp — vì trường mới mặc
+       định được đi kèm. Phép so tập khoá làm danh sách CHO PHÉP hỏng theo chiều
+       ngược lại: thêm một trường vào `operationView()` mà quên cân nhắc thì ĐỎ
+       ở đây, chứ không âm thầm phình cái payload bị hỏi mỗi 5 giây. */
+    assert.deepEqual(
+      Object.keys(row).sort(),
+      ["action", "document", "expiresAt", "id", "revision", "scope", "state",
+       "subjectCount", "summary", "target"],
+      "bản gọn phải đúng bằng danh sách cho phép",
+    );
+  }
+
+  /* `summary.fromLayers` là mọi layer NGUỒN của lượt chuyển — bảng chỉ đọc
+     `toLayer`. Một đề xuất trải trên nhiều layer thì đây lại là một danh sách
+     dài nữa đi qua nhịp 5 giây. */
+  {
+    const scoped = harness({ captureSubjects: [
+      { ...baseSubjects[0], layer: "A-WALL" },
+      { ...baseSubjects[1], layer: "A-FURN", layerHandle: "12" },
+    ] });
+    const move = await invoke(scoped.router, "POST", "/prepare", {
+      body: { target: drawing.file, action: "move-to-layer", params: { layer: "a-dest" } },
+    });
+    assert.equal(move.status, 201, JSON.stringify(move).slice(0, 200));
+    assert.ok(move.payload.operation.summary.fromLayers, "bản ĐẦY ĐỦ vẫn giữ fromLayers");
+
+    const row = (await invoke(scoped.router, "GET", "/operations")).payload.operations[0];
+    assert.equal(row.summary.fromLayers, undefined, "bản gọn KHÔNG kèm layer nguồn");
+    assert.equal(row.summary.toLayer, "A-DEST", "nhưng giữ layer đích — bảng nói ra nó");
+    assert.equal(row.summary.count, 2, "và giữ số đối tượng");
+  }
+
+  /* `subjectCount` THIẾU nghĩa là "không biết", khác hẳn `0` = "không chạm đối
+     tượng nào" — hai câu đó dẫn tới hai quyết định khác nhau ở người sắp bấm một
+     nút ghi không hoàn tác được, và `countOf()` bên web dựa đúng vào chỗ thiếu
+     đó. `activate-document` không đếm được đối tượng nào cả, nên nó là ca thử
+     của quy tắc. Bản gọn và bản đầy đủ phải trả lời GIỐNG NHAU: lệch nhau thì
+     cùng một thao tác đọc ở bảng hàng chờ và ở thẻ xác nhận lại ra hai con số. */
+  {
+    const scoped = harness();
+    const activate = await invoke(scoped.router, "POST", "/prepare", {
+      body: { target: drawing.file, action: "activate-document" },
+    });
+    assert.equal(activate.status, 201, JSON.stringify(activate).slice(0, 200));
+    assert.equal(activate.payload.operation.subjectCount, undefined,
+      "bản đầy đủ: không đếm được thì KHÔNG phát ra con số");
+
+    const row = (await invoke(scoped.router, "GET", "/operations")).payload.operations[0];
+    assert.equal(row.subjectCount, undefined, "bản gọn cũng vậy — thiếu, không phải 0");
+    assert.ok(!Object.keys(row).includes("subjectCount"), "trường phải VẮNG hẳn, không phải undefined");
+  }
+
+  console.log("✓ hàng chờ liệt kê được: mới nhất trước, đủ mọi trạng thái, hết hạn tính khi đọc");
+}

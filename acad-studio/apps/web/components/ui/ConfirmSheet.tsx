@@ -55,7 +55,16 @@ export type ConfirmMode =
    * - Nút xác nhận **không** phải `WriteButton`. Nút đó khoá khi AutoCAD chưa
    *   chạy, mà xoá một hồ sơ nằm trên đĩa của app thì không cần AutoCAD — dùng
    *   nhầm là tính năng chết hẳn mỗi khi người dùng đóng AutoCAD. */
-  | "data";
+  | "data"
+  /** Đổi **bản vẽ đang hoạt động** của AutoCAD. Không sửa đối tượng nào, không
+   * đổi bộ chọn — nhưng nó đổi ĐÍCH của mọi lệnh ghi sau đó, và đó mới là điều
+   * người dùng cần biết.
+   *
+   * Không dùng chung `selection` được: chế độ đó nói "bộ chọn sẽ đổi" và gắn nhãn
+   * nút là "Chọn trong AutoCAD" — cả hai đều sai ở đây. Cũng không dùng chung
+   * `session`: câu "phiên chỉ trở lại như cũ khi bạn đóng AutoCAD" là sai, vì đổi
+   * bản vẽ thì bấm lại tab là về. */
+  | "document";
 
 export function ConfirmSheet({
   title,
@@ -110,7 +119,9 @@ export function ConfirmSheet({
             <span>
               {mode === "selection"
                 ? "Tôi đã xem đối tượng sắp được chọn"
-                : "Tôi đã đọc và hiểu thao tác này không hoàn tác được"}
+                : mode === "document"
+                  ? "Tôi hiểu mọi lệnh ghi sau đó sẽ nhắm vào bản vẽ này"
+                  : "Tôi đã đọc và hiểu thao tác này không hoàn tác được"}
             </span>
           </label>
           <Button onClick={onCancel} disabled={busy}>Bỏ qua</Button>
@@ -133,7 +144,10 @@ export function ConfirmSheet({
               title={blocked || undefined}
               onClick={onConfirm}
             >
-              {busy ? (mode === "selection" ? "Đang chọn…" : "Đang ghi…") : confirmLabel}
+              {busy
+                ? mode === "selection" ? "Đang chọn…"
+                  : mode === "document" ? "Đang chuyển…" : "Đang ghi…"
+                : confirmLabel}
             </WriteButton>
           )}
         </>
@@ -147,6 +161,16 @@ export function ConfirmSheet({
               Thao tác này chỉ đổi <strong>bộ chọn</strong> của phiên AutoCAD.
               Không đối tượng nào bị thay đổi, và gỡ ra chỉ cần bấm{" "}
               <code>Esc</code> trong AutoCAD.
+            </p>
+          </div>
+        ) : mode === "document" ? (
+          <div className="callout" data-kind="warn">
+            <span className="lbl">Không sửa gì trong bản vẽ</span>
+            <p>
+              Thao tác này chỉ đổi <strong>bản vẽ đang hoạt động</strong> của
+              AutoCAD. Không đối tượng nào bị thay đổi, và bấm lại tab cũ là về
+              như trước — nhưng <strong>mọi lệnh ghi sau đó sẽ nhắm vào bản vẽ
+              mới</strong>.
             </p>
           </div>
         ) : mode === "data" ? (
@@ -200,7 +224,14 @@ export function ConfirmSheet({
         {/* Chế độ `session` KHÔNG ghi vào bản vẽ nào, nên câu "ghi vào bản vẽ
             đang hoạt động" ở đây sẽ mâu thuẫn thẳng với cảnh báo phía trên —
             trong đúng một hộp thoại mà người dùng đang cân nhắc chuyện bảo mật. */}
-        {mode === "data" ? (
+        {mode === "document" ? (
+          <div>
+            <div className="eyebrow">Chuyển sang bản vẽ</div>
+            <div className="mono" style={{ fontSize: 12 }}>
+              {target || "bản vẽ đã chuẩn bị"}
+            </div>
+          </div>
+        ) : mode === "data" ? (
           <p className="hint">
             Xoá dữ liệu của app. Không bản vẽ nào bị ghi, và không cần AutoCAD
             đang chạy.

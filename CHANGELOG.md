@@ -1,5 +1,277 @@
 # CHANGELOG
 
+## 2026-08-18 (chiều) — Giai đoạn 7 mở màn: hàng chờ ghi nhìn thấy được
+
+`/changes` là màn kế hoạch gọi là **trục xoay của sản phẩm**, và trước hôm nay nó
+là một placeholder — vì hàng chờ **không nhìn thấy được**.
+
+### Hàng chờ vô hình
+
+`/prepare` trả về một id, và **chỉ nơi gọi biết id ấy**. Chuẩn bị một thao tác ở
+màn Kiểm tra bản vẽ rồi chuyển màn là nó biến mất khỏi tầm mắt — vẫn nằm trong
+hàng chờ của daemon, vẫn sẽ ghi khi ai đó xác nhận. Một hàng chờ vô hình trên
+đường ghi KHÔNG HOÀN TÁC ĐƯỢC là chỗ tệ nhất để giấu thông tin.
+
+Chú thích của placeholder nói "máy chủ không lưu thao tác đã chuẩn bị và không có
+API liệt kê". Đo lại: daemon **có** giữ chúng trong một `Map` — chỉ thiếu đường
+liệt kê. `GET /api/acad/selection/operations` là toàn bộ phần backend cần thêm.
+
+### Sắp xếp phải cho ra câu trả lời XÁC ĐỊNH
+
+Test đầu tiên đỏ, và đỏ đúng: hai thao tác chuẩn bị trong cùng một mili-giây có
+`createdAt` bằng nhau — **đúng ca hay gặp nhất**, người dùng bấm hai lần liên
+tiếp — và khi đó phép sắp để nguyên thứ tự chèn, tức cái CŨ nhất lên đầu. Nay
+`.reverse()` trước rồi dựa vào phép sắp ổn định của JS.
+
+### Chip ở thanh trên đọc một kho KHÔNG AI GHI VÀO
+
+Codex bắt được cái nặng nhất: `AppShell` lấy số cho chip và huy hiệu từ
+`features/staged-ops/store.ts` — kho trong trình duyệt — trong khi màn hình mới
+đọc daemon. Đo tiếp: `writeStaged()` có **0 nơi gọi**. Kho đó là giàn giáo dựng
+sẵn cho giai đoạn 7, và chip vì thế **vĩnh viễn bằng 0** trong khi hàng chờ thật
+có thể đầy.
+
+Chú thích của chính kho đó đã viết bất biến: *"cả ba phải đọc CÙNG một con số.
+Nếu chip nói 2 mà màn hình nói 3 thì người dùng không còn tin được cái nào."* Nay
+cả ba đọc daemon; kho trình duyệt bị xoá, và `test-contract.mjs` chặn nó sống lại.
+
+### Sáu bản sửa khác từ review
+
+- **Lỗi của lượt GHI bị lượt ĐỌC xoá trắng.** `runApply` ghi lý do hỏng, rồi
+  `finally` gọi `load()` và lượt đọc thành công xoá nó — mà mục hỏng lại bị bộ
+  lọc mặc định giấu đi. Nay hai loại lỗi hai ô riêng, và lượt ghi hỏng tự mở bộ
+  lọc để người dùng THẤY thứ vừa hỏng.
+- **Chế độ xác nhận thứ sáu: `document`.** `activate-document` từng dùng chung
+  `selection` — chế độ đó nói "bộ chọn sẽ đổi" và gắn nhãn nút "Chọn trong
+  AutoCAD", cả hai đều sai. `session` cũng sai vì câu "phiên chỉ trở lại như cũ
+  khi đóng AutoCAD" không đúng với đổi tab. Chế độ mới nói đúng điều cần nói:
+  không sửa gì, bấm lại tab là về, **nhưng mọi lệnh ghi sau đó nhắm vào bản vẽ mới**.
+- **"Đã bỏ" có thể là nói dối.** `rejectStagedOp()` cố ý nuốt lỗi — đúng cho ca
+  rời màn hình, sai cho ca người dùng vừa bấm nút và đang chờ câu trả lời. Thêm
+  `rejectQueuedOp()` có kiểm.
+- **Mục HỎNG không bỏ được** dù daemon nhận `["pending","failed"]`.
+- **`activate-document` hiện "1 đối tượng"** — `summary.count: 1` ở đó là BẢN VẼ.
+- **Đọc hỏng vẫn bày "hàng chờ trống"** cạnh băng lỗi.
+
+### Vòng review sau: bốn thứ nhỏ, một cái là lỗi của primitive
+
+- **`Modal` giật focus mỗi giây.** Nhịp đếm ngược một giây của màn mới làm cha
+  render lại; `ConfirmSheet` truyền `onClose={() => …}` — một arrow MỚI mỗi lượt
+  — nên hiệu ứng bẫy focus của `Modal` (deps `[onClose]`) dọn rồi chạy lại, và
+  focus bị kéo về ô đầu tiên. Người dùng dùng bàn phím không tới được nút xác
+  nhận. Sửa ở **primitive**: giữ `onClose` trong một ref, hiệu ứng chạy đúng một
+  lần cho mỗi lượt mở. Nhịp đồng hồ chỉ làm lộ ra nó.
+- **Chip "0 chờ duyệt" trước khi đọc được lần nào.** `undefined` = CHƯA BIẾT,
+  khác hẳn `0` = "không có gì chờ" — và nếu lượt đọc đầu hỏng thì lời nói dối đó
+  nằm mãi trên thanh trên, đúng chỗ sinh ra để nhắc đừng quên một lệnh ghi.
+- **`data-kind` trên `.banner` không có tác dụng** — hệ thiết kế dùng
+  `data-tone` cho banner, `data-kind` là của `callout`. Băng lỗi hiện ra như băng
+  thường, mất hẳn dấu hiệu mức độ.
+- **"Đã ghi" cho thao tác không ghi gì.** Thẻ xác nhận vừa nói "không sửa gì
+  trong bản vẽ", rồi báo "Đã ghi" ngay sau đó — tự mâu thuẫn ở đúng chỗ người
+  dùng đang lo. Nay câu báo theo từng thao tác.
+
+### Vòng chốt: một lời hứa mã không giữ
+
+**Daemon giữ HAI đích khác nhau** — bản vẽ đang hoạt động của AutoCAD, và đích của
+bộ vẽ (`/draw/stage`). `activate-document` chỉ đổi cái thứ nhất. Màn hình legacy
+đã POST `/api/acad/draw/target` sau mỗi lượt kích hoạt từ lâu; màn mới thì không
+— trong khi thẻ xác nhận của nó **hứa** rằng "mọi lệnh ghi sau đó nhắm vào bản vẽ
+mới". Lệnh vẽ tiếp theo sẽ ghi vào bản vẽ CŨ, hoặc vào tệp `.work` mặc định.
+
+Đây là loại lỗi chỉ lộ ra khi đối chiếu với đường cũ: màn mới tự nó nhất quán,
+chỉ là nó không biết một khái niệm mà backend có. Nay `lib/daemon/drawTarget.ts`
+giữ khái niệm đó ở một chỗ, và lỗi đặt đích được báo **riêng** — bản vẽ đã chuyển
+thật, chỉ là đích vẽ chưa theo kịp; hai câu khác nhau.
+
+Kèm: tiêu đề màn hình thôi khẳng định "0 thao tác đang chờ" khi lượt đọc đầu
+hỏng. `loaded` (đã chạy xong một lượt) và `hasData` (đã đọc THÀNH CÔNG) là hai
+thứ khác nhau — mảng rỗng vì đọc hỏng không phải bằng chứng hàng chờ rỗng.
+
+### Vòng chốt: hai tab đua nhau, và một màn hình đứng im
+
+- **Đua giữa hai tab.** Tab A kích hoạt bản vẽ A, tab B kích hoạt B, rồi lượt
+  `setDrawTarget` của A về SAU — đích vẽ thành A trong khi bản vẽ đang mở là B.
+  Nay kiểm bản vẽ ĐANG hoạt động trước khi đặt đích, và nói thẳng khi lệch thay
+  vì ghi đè.
+
+  Chốt này **thu hẹp** cửa sổ chứ không đóng hẳn — vẫn còn khe giữa lúc đọc và
+  lúc POST. Đóng hẳn phải gộp hai bước vào một giao dịch phía daemon, mà
+  `/draw/target` hiện còn huỷ staged op và tự giải bản vẽ nên gộp là thay đổi
+  chéo module có rủi ro riêng. Ghi vào ROADMAP thay vì làm vội.
+- **Màn hình đứng im.** Chỉ huy hiệu có nhịp đọc; bảng thì một lượt duy nhất lúc
+  mở. Một thao tác chuẩn bị ở tab khác làm huy hiệu nhảy lên 2 trong khi bảng vẫn
+  trống — đúng thứ "hai con số nói hai điều khác nhau" vừa sửa xong ở tầng chip,
+  lặp lại ở tầng dưới.
+- **Số của lượt đọc hỏng bày như số hiện tại.** Giữ bảng cũ là đúng (mất nó còn
+  tệ hơn), nhưng phải gắn nhãn "(số của lần đọc trước)".
+
+### Vòng chốt: chốt an toàn của tôi tự nổ ở đúng nhóm nó bảo vệ
+
+- **Bẫy mã phiên, lần nữa.** `op.target` có thể là đường dẫn, **mã phiên** (bản
+  vẽ chưa lưu) hay tiêu đề — daemon chọn dạng nào là tuỳ năng lực plugin lúc
+  chuẩn bị. Chốt tôi vừa thêm so bằng `file || title`, tức **luôn lệch** với mã
+  phiên: nó bỏ qua `setDrawTarget` mỗi lần, đúng ở nhóm bản vẽ chưa lưu — gây ra
+  chính cái nó sinh ra để chặn. Nay `documentMatchesTarget()` so cả ba dạng.
+- **Thẻ xác nhận cuối chỉ hiện tiêu đề.** Hai bản vẽ đang mở trùng tiêu đề là
+  chuyện thường, và đây là bước xác nhận của một lệnh **một lần**. Nay hiện đích
+  chính xác; bảng ở trên vẫn hiện tiêu đề cho dễ đọc.
+- **Huy hiệu nuốt lỗi lặng lẽ.** Tôi đánh dấu "số cũ" cho màn hình mà quên cái
+  hook — một thao tác chuẩn bị ngay trước lúc mạng trục trặc bị giấu sau con số
+  `0` của lượt đọc trước.
+
+Hai trong ba cái này là **sửa một chỗ, quên chỗ song song** — cùng lỗi đã lặp ở
+vòng ngay trước (đánh dấu số cũ cho bảng, quên huy hiệu).
+
+### Vòng chốt: màn hình hứa nhiều hơn nó làm
+
+Daemon giữ **nhiều hàng chờ rời nhau**. Bảng mới đọc được một — hàng chờ của bộ
+chọn — trong khi bản xem trước của lệnh vẽ (`/draw/stage`) nằm trong một `Map`
+khác của `drawRouter`, với vòng đời riêng. Câu "mọi lệnh ghi vào bản vẽ dừng ở
+đây" vì thế là một **lời hứa thừa**, và ở một màn hình AN TOÀN thì lời hứa thừa
+nguy hiểm hơn một khoảng trống được nói rõ.
+
+Nay màn hình nói đúng phạm vi của nó, và hai khoảng trống còn lại vào ROADMAP:
+gộp hàng chờ của bộ vẽ, và `/draw/target` đánh rơi mã phiên (lỗi có sẵn ở
+`drawRouter` — nó lưu `DrawTarget` chỉ gồm `title` + `file`, nên hai bản vẽ chưa
+lưu trùng tiêu đề không đặt đích được).
+
+Kèm: huy hiệu ở rail cũng nhận tín hiệu "số cũ" — `0` của một lượt đọc hỏng KHÔNG
+chứng minh hàng chờ rỗng, và đây là **lần thứ ba** trong cùng mục tôi sửa một chỗ
+rồi quên chỗ song song.
+
+### Vòng chốt: bộ lọc mặc định giấu đúng thứ không được giấu
+
+- **Mục HỎNG và HẾT HẠN bị bộ lọc mặc định giấu đi.** Một lượt ghi hỏng ở tab
+  khác thì bảng này im lặng cho tới khi người dùng tự bật bộ lọc — đúng bằng việc
+  không có màn hình này. Nay quy tắc rõ hơn: chỉ giấu thứ người dùng đã **tự
+  quyết** (đã ghi, đã bỏ); `failed`/`expired` là kết cục họ **không** chọn nên ở
+  lại.
+- **Phạm vi không hiện ở thẻ xác nhận.** Hai đề xuất CHỌN trên cùng một bản vẽ
+  trông y hệt nhau nếu chỉ có tên thao tác và số đối tượng. Nay hiện `layer
+  A-WALL` / `block VAN-DN80` — nhưng **im** với `handles`, vì ở đó cái tên không
+  nói lên điều gì và bịa một nhãn chỉ làm rối.
+
+### Vòng chốt: chi phí của một đường bị hỏi mỗi 5 giây
+
+- **Bản liệt kê gọn.** `operationView()` kèm cả `scope.handles` (tới **5.000**
+  phần tử) và bản xem trước `subjects`. Đường `/operations` bị hỏi **mỗi 5 giây**
+  ở mọi màn hình có thanh trên, trong khi bảng chỉ cần vài trường tóm tắt —
+  serialize, truyền và parse hàng nghìn phần tử mỗi lượt cho không ai đọc. Giữ
+  `scope.kind` + `scope.name` vì thẻ xác nhận nói ra chúng.
+- **Danh sách BỎ BỚT thì bỏ sót.** Bản gọn đầu tiên tôi viết liệt kê những
+  trường cần loại (`subjects`, `scope.handles`) — và bỏ sót `summary.fromLayers`
+  ngay lượt review kế tiếp, vì trường mới mặc định được đi kèm. Viết lại thành
+  danh sách **CHO PHÉP**: hỏng theo chiều ngược lại, quên khai một trường thì
+  màn hình thiếu dữ liệu và thấy ngay. Test chốt cả **tập khoá**, nên thêm
+  trường vào `operationView()` mà quên cân nhắc là đỏ.
+- **`subjectCount`: thiếu ≠ 0.** Tách quy tắc "có đếm được không" thành
+  `subjectCountKnown()` dùng chung cho cả hai bản — hai bản trả lời lệch nhau
+  thì cùng một thao tác ra hai con số ở bảng hàng chờ và ở thẻ xác nhận. Quy
+  tắc này trước nay chưa có test nào chốt; giờ có.
+- **Hai hàm cạnh nhau nói ngược nhau: GHI được mà BỎ thì không.** Mốc hết hạn
+  đọc không ra (`Date.parse` ra `NaN`) — `applyBlockedReason` tính `NaN <= now`
+  nên **cho ghi**, còn `canReject` tính `NaN > now` nên **cấm bỏ**. Daemon coi
+  chuỗi hỏng là CHƯA hết hạn, tức nó vẫn nhận lệnh bỏ; giao diện thì để thao tác
+  đó mắc kẹt không có đường dọn. Gom về một `isExpired()` tính đúng như daemon.
+- **Rail ẩn huy hiệu ở lượt đọc đầu, thanh trên thì hiện `—`.** Ở rail, "không
+  có huy hiệu" đọc y hệt "không có gì chờ". Chỉ ẩn khi hàng chờ CHẮC CHẮN rỗng
+  (`tone !== "empty"`) — hai thanh cùng đọc một nguồn thì phải nói cùng một điều.
+- **"Lời gọi hỏng" không có nghĩa là "không mất gì".** `/draw/target` huỷ TỪNG
+  bản xem trước một rồi dừng ngay khi một cái hỏng — những cái trước đó đã bị
+  xoá khỏi AutoCAD rồi. Đường lỗi của tôi để `discarded` ở `0`, nên lời báo vẫn
+  nói "không bản vẽ nào bị sửa" sau một lượt xoá dở. Giờ đánh dấu trước khi gọi
+  và nói rõ là **không chắc còn lại những gì**.
+- **Đếm ở tiêu đề bảng hiện `0` khi chưa đọc được lần nào.** Bảng rỗng vì lỗi
+  trông y hệt bảng rỗng vì hàng chờ trống, mà hai câu đó ngược nhau: một bên là
+  "không có gì phải làm", bên kia là "có thể đang có một lệnh ghi chờ xác nhận".
+- **Chốt bản vẽ hoạt động mở toang khi không biết.** Nó hỏi "có chắc là SAI
+  không" — nên đọc không ra bản vẽ hoạt động nào, hay đọc không tới AutoCAD, đều
+  lọt xuống nhánh GỌI `/draw/target`, tức nhánh xoá bản xem trước. Đổi thành "có
+  chắc là ĐÚNG không": phản hồi sống, đúng **một** bản vẽ hoạt động, và khớp
+  đích. `find()` cũng bỏ: nhiều bản vẽ cùng khai `active` thì nó nhặt cái đầu
+  danh sách — đoán bừa ngay trước một lệnh không hoàn tác được. Lời từ chối nói
+  luôn vì sao (`describeActives`), thay vì để người dùng đoán.
+- **Lời báo thành công nói "không bản vẽ nào bị sửa" ngay sau khi xoá hình.**
+  Câu mặc định của `activate-document` là đúng — trừ đúng lượt vừa huỷ bản xem
+  trước. Giờ có huỷ thì THAY hẳn câu (nối thêm là hai vế chọi nhau trong một
+  hơi, và người dùng tin vế đầu), nói rõ số hình đã mất và rằng không lấy lại
+  được.
+- **Chip trấn an người dùng đúng lúc con số không đáng tin.** `data-count={pending
+  ?? 0}` biến cả "0 CŨ" lẫn "chưa đọc được lần nào" thành `"0"`, mà CSS tô
+  `[data-count="0"]` thành màu "rỗng, yên tâm" — thứ nó giấu đi là một lệnh ghi
+  đang chờ xác nhận. Thêm `tone` vào `pendingBadge()` (`empty` · `active` ·
+  `unsure`) và một kiểu riêng cho `unsure`: viền đứt, phân biệt bằng HÌNH chứ
+  không chỉ bằng màu, và không mượn màu nhấn vì đó là màu của một câu chắc chắn.
+- **Đếm số không phải là danh tính.** Phép kiểm lúc gửi của tôi so *số lượng*
+  bản xem trước: một tab khác bỏ một cái rồi dựng cái mới thì con số y nguyên,
+  nhưng thứ sắp bị xoá đã là thứ khác — người dùng đồng ý mất `a` rồi mất `c`.
+  Đổi sang so **tập mã** (`stagedDrawPreviews` trả mã, `unwarnedPreviews` tìm mã
+  lạ). Tập con vẫn đi tiếp được: mất ít hơn thứ đã đồng ý mất là chấp nhận được.
+- **Đọc hỏng thì DỪNG, không đi liều.** Bản trước tôi cho `undefined` đi qua với
+  lý do "chặn nhầm thì phiền". Hai phía không cân nhau: chặn nhầm thì người dùng
+  thử lại, còn đi liều thì `/draw/target` xoá hình đã vẽ và không có đường về —
+  vả lại `/draw/ops` chỉ đọc một Map trong bộ nhớ, nó hỏng nghĩa là daemon đang
+  có chuyện. Khoá cả ở nút lẫn ở phép kiểm lúc gửi, để nút không hứa một điều
+  lúc gửi sẽ từ chối.
+- **Cảnh báo chưa kịp hiện thì nút đã bấm được.** Nút xác nhận vẫn sống trong
+  lúc đang đọc `/draw/ops` — bấm nhanh là ghi mà chưa thấy câu nào, tức mở đúng
+  cái cửa mà cảnh báo sinh ra để đóng. Khoá nút lúc đang kiểm, và **đọc lại ngay
+  trước khi ghi**: một tab khác có thể vừa dựng bản xem trước sau lúc thẻ hiện
+  ra, khi đó câu người dùng đã đồng ý không còn đúng. Phép đọc lại đặt TRƯỚC
+  `applyStagedOp` vì đó là điểm dừng sạch duy nhất — dừng sau lượt kích hoạt thì
+  bản vẽ đã chuyển mà đích vẽ còn trỏ chỗ cũ.
+- **`{ok: true}` thiếu `operations` hoá thành hàng chờ rỗng.** Đó là "máy chủ
+  không trả lời được", không phải "không có gì đang chờ" — nhưng `load()` coi
+  lượt đọc là thành công, xoá cờ số-liệu-cũ và dựng một bảng trống trong khi có
+  thể đang có lệnh ghi chờ xác nhận. Giờ ném lỗi để màn hình giữ số liệu cũ và
+  nói ra rằng lượt đọc hỏng.
+- **Huy hiệu bịa ra một lần đọc chưa từng có.** Lượt đọc ĐẦU hỏng thì `pending`
+  vẫn là `undefined` nhưng `stale` đã bật: thanh trên hiện `—?` kèm câu "số này
+  của lần trước" — trong khi chưa có con số nào tồn tại. `—?` còn đọc như một
+  giá trị hỏng chứ không như "chưa biết". Gom cả ba trạng thái vào
+  `pendingBadge()` dùng chung cho thanh trên và thanh điều hướng: mỗi nơi tự
+  diễn giải lại cặp `(pending, stale)` là hai góc màn hình nói hai điều khác
+  nhau về cùng một hàng chờ, và điều đó đã xảy ra thật.
+- **Tài liệu hứa `/changes` là danh sách đầy đủ mọi lệnh ghi.** Không đúng, và
+  chính `USER_GUIDE.md` nói ngược lại cách đó hai mục: sửa phát hiện ở `/review`
+  và chèn block ở `/library/blocks` là ghi MỘT PHA, không đi qua hàng chờ. Đọc
+  câu cũ rồi coi màn này là sổ kiểm lệnh ghi là bỏ sót đúng những lệnh không
+  hoàn tác được. Đã ghi rõ giới hạn ngay đầu mục.
+- **Xác nhận "chỉ đổi tab" lại xoá hình đã vẽ.** Xong `activate-document`,
+  `/changes` gọi `/draw/target` để đích vẽ theo kịp — nhưng đường đó chạy
+  `discardStagedOps()`: nó gửi lệnh reject vào AutoCAD cho mọi bản xem trước còn
+  `staged`, tức **xoá hình đã vẽ**, không hoàn tác được. Hàng chờ đó là một hàng
+  chờ KHÁC, `/changes` không hề bày ra. Người dùng bấm một nút vừa hứa "không sửa
+  gì trong bản vẽ" và mất hình đang chờ.
+  Tôi **đã biết** — comment ngay tại chỗ gọi ghi rõ `/draw/target` huỷ staged op
+  — nhưng chỉ ghi vào ROADMAP thay vì nói ra ở đúng cái nút. Giờ thẻ xác nhận đọc
+  `/draw/ops` lúc MỞ và nói thẳng số bản xem trước sắp mất; đọc hỏng thì nói là
+  đọc hỏng, không rút về "không có gì". Người dùng vẫn có quyền huỷ chúng — điều
+  không được phép là huỷ mà không biết.
+- **Lượt đọc cũ về muộn đè lên số mới.** Nhịp đọc là `setInterval` nên nó không
+  chờ lượt trước xong: một lượt chậm hơn 5 giây là có hai lượt cùng bay, và thứ
+  tự **về** là chuyện của mạng chứ không phải của thứ tự gửi. Trên thanh trên,
+  cái đè đó có thể là `0` đè lên `1` — giấu mất một lệnh ghi đang chờ xác nhận,
+  đúng thứ thanh đó sinh ra để nhắc. Thêm `createLatestGate()`: chỉ lượt mới
+  nhất được ghi, cả nhánh thành công lẫn nhánh lỗi. Tách thành hàm thuần vì
+  dự án chưa có bộ dựng React trong test — nằm trong hook thì không kiểm được.
+- **Nút "Bỏ" luôn hỏng với mục quá hạn.** Còn `pending` trên màn hình không đủ:
+  daemon tính hết hạn ngay đầu đường reject rồi mới xét trạng thái, nên mục quá
+  TTL nhận `operation_expired`. Nút sáng cho một lượt gọi chắc chắn hỏng là ngõ
+  cụt — người dùng bấm, thấy lỗi, và không hiểu vì sao "Bỏ" lại hỏng.
+
+### Technical
+
+- `features/staged-ops/queue.ts` — đọc hàng chờ, tách khỏi `prepareApplyReject.ts`
+  (giao thức MỘT thao tác) vì đây là cái nhìn TOÀN hàng chờ.
+- Hai đột biến đầu **đi qua sạch**: tôi sửa mà chưa viết test cho bản sửa. Thêm
+  test rồi cả sáu mới đỏ.
+- **73 đột biến.** Hai cái đầu đi qua sạch vì tôi sửa mà chưa viết test cho bản sửa.
+- `pnpm verify`: **224 test**, 14 guardrail, exit 0.
+- Chạy thật trên daemon: chuẩn bị → hiện trong hàng chờ → bỏ → nằm lại với trạng
+  thái `rejected`. Bản vẽ của người dùng `dbmod 0`.
+
 ## 2026-08-18 — Bịt nốt đường lùi về kho dữ liệu thật
 
 Mục nợ kỹ thuật nguy hiểm nhất còn lại, vì nó đã cắn một lần: script kiểm thử

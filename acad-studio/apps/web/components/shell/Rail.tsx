@@ -12,22 +12,44 @@
 import Link from "next/link";
 import { NAV } from "./nav";
 import { Icon } from "../ui/icons";
+import { pendingBadge } from "../../features/staged-ops/queue";
 
-export function Rail({ screen, pending }: { screen: string; pending: number }) {
+export function Rail({ screen, pending, pendingStale }: {
+  screen: string;
+  /** `undefined` = chưa đọc được lần nào. Xem `pendingBadge()` — chữ và câu giải
+   * thích cho cả ba trạng thái nằm ở đó, dùng chung với thanh trên. */
+  pending: number | undefined;
+  /** Lượt đọc gần nhất HỎNG. Khi đó `0` KHÔNG chứng minh hàng chờ rỗng — một
+   * thao tác chuẩn bị ngay trước lúc mạng trục trặc sẽ bị giấu mất nếu huy hiệu
+   * im lặng, nên trạng thái này luôn hiện huy hiệu. */
+  pendingStale?: boolean;
+}) {
+  /* Cùng một phép suy với thanh trên — dùng chung hàm, vì hai góc màn hình nói
+     hai điều khác nhau về cùng một hàng chờ là chuyện đã xảy ra: chỗ này từng
+     hiện `?` kèm câu "chưa chắc hàng chờ rỗng" ngay cả khi chưa đọc được lần
+     nào, tức là nói về một con số chưa từng có. */
+  const badge = pendingBadge(pending, !!pendingStale);
+  /* Chỉ ẩn khi hàng chờ CHẮC CHẮN rỗng. Mọi trạng thái khác — kể cả lượt đọc đầu
+     chưa xong — phải hiện, vì ở đây "không có huy hiệu" đọc y hệt "không có gì
+     chờ". Bản trước suy từ `pending`/`pendingStale`, nên lượt đọc ĐẦU (chưa có
+     số, chưa hỏng) bị ẩn trong khi thanh trên hiện `—`: hai thanh nói hai điều
+     khác nhau về cùng một hàng chờ, đúng thứ `pendingBadge()` sinh ra để dẹp. */
+  const showBadge = badge.tone !== "empty";
+
   return (
     <nav className="rail" aria-label="Điều hướng chính">
       {NAV.map((group) => (
         <div key={group.group}>
           <div className="rail-group eyebrow">{group.group}</div>
           {group.items.map((item) => {
-            const badge = item.staged && pending > 0
-              ? <span className="count">{pending}</span>
+            const mark = item.staged && showBadge
+              ? <span className="count" title={badge.title || undefined}>{badge.text}</span>
               : null;
             const body = (
               <>
                 <Icon name={item.icon} />
                 <span>{item.label}</span>
-                {badge}
+                {mark}
               </>
             );
             return item.built ? (

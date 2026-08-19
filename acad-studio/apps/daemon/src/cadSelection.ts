@@ -634,12 +634,78 @@ function operationRevision(
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-function operationView(operation: SelectionOperation) {
-  const preview = operation.subjects.slice(0, SUBJECT_PREVIEW_LIMIT);
-  const subjectCountKnown =
+/** Bản GỌN cho lượt liệt kê — bỏ những mảng chỉ có nghĩa khi xem MỘT thao tác.
+ *
+ * `operationView()` kèm cả `scope.handles` (tới 5.000 phần tử) và bản xem trước
+ * `subjects`. Đường `/operations` bị hỏi **mỗi 5 giây** ở mọi màn hình có thanh
+ * trên, trong khi bảng chỉ cần vài trường tóm tắt — trả bản đầy đủ là serialize,
+ * truyền và parse hàng nghìn phần tử mỗi lượt cho không ai đọc.
+ *
+ * GIỮ `scope.kind` + `scope.name`: giao diện dùng chúng để nói "chọn layer
+ * A-WALL" ở thẻ xác nhận. Bỏ chúng thì hai đề xuất trên cùng một bản vẽ trông y
+ * hệt nhau.
+ */
+/** Số đối tượng này có ĐÁNG TIN không.
+ *
+ * Tách riêng vì cả bản đầy đủ lẫn bản gọn đều phải trả lời giống hệt nhau: web
+ * phân biệt `0` ("không chạm đối tượng nào") với trường THIẾU ("không biết"),
+ * và hai câu đó dẫn tới hai quyết định khác nhau ở người sắp bấm một nút ghi
+ * không hoàn tác được. Hai bản trả lời lệch nhau thì cùng một thao tác đọc ở
+ * bảng hàng chờ và ở thẻ xác nhận lại ra hai con số.
+ */
+function subjectCountKnown(operation: SelectionOperation): boolean {
+  return (
     operation.action === "move-to-layer" ||
     (operation.action === "select" &&
-      (operation.scope?.kind === "handles" || operation.subjectCount > 0));
+      (operation.scope?.kind === "handles" || operation.subjectCount > 0))
+  );
+}
+
+/** Bản gọn cho đường liệt kê — dựng bằng danh sách CHO PHÉP, không phải bằng
+ * cách trừ bớt `operationView()`.
+ *
+ * Đường này bị hỏi **mỗi 5 giây** ở mọi màn hình có thanh trên, nên mọi trường
+ * không giới hạn độ dài đều là chi phí nhân với nhịp đó: `subjects` (bản xem
+ * trước), `scope.handles` (tới 5.000 phần tử), `summary.fromLayers` (mọi layer
+ * nguồn), `params`, `catalogScope`.
+ *
+ * Bản đầu tiên tôi viết liệt kê những trường cần BỎ. Nó bỏ sót `fromLayers`
+ * ngay lượt review kế tiếp — và sẽ bỏ sót y như vậy với mọi trường thêm sau
+ * này, vì trường mới mặc định được đi kèm. Danh sách CHO PHÉP thì hỏng theo
+ * chiều ngược lại: quên khai một trường thì màn hình thiếu dữ liệu và thấy
+ * ngay, thay vì âm thầm phình payload.
+ *
+ * Danh sách này phải khớp đúng phần `normalizeQueuedOp()` bên web đọc tới. */
+function operationListView(operation: SelectionOperation) {
+  const summary = operation.summary || {};
+  const scope = operation.scope;
+  return {
+    id: operation.id,
+    revision: operation.revision,
+    action: operation.action,
+    state: operation.state,
+    target: operation.target,
+    document: operation.document,
+    summary: {
+      ...(summary.count === undefined ? {} : { count: summary.count }),
+      ...(summary.toLayer === undefined ? {} : { toLayer: summary.toLayer }),
+      ...(summary.scopeKind === undefined ? {} : { scopeKind: summary.scopeKind }),
+      ...(summary.scopeName === undefined ? {} : { scopeName: summary.scopeName }),
+    },
+    expiresAt: operation.expiresAt,
+    ...(subjectCountKnown(operation) ? { subjectCount: operation.subjectCount } : {}),
+    /* Tách theo biến thể chứ không ép kiểu: `handles` KHÔNG có `name`, và nếu
+       sau này thêm một biến thể mang trường dài thì trình biên dịch bắt được ở
+       đây thay vì để nó lọt vào nhịp 5 giây. */
+    ...(scope
+      ? { scope: scope.kind === "handles" ? { kind: scope.kind } : { kind: scope.kind, name: scope.name } }
+      : {}),
+    ...(operation.error ? { error: operation.error } : {}),
+  };
+}
+
+function operationView(operation: SelectionOperation) {
+  const preview = operation.subjects.slice(0, SUBJECT_PREVIEW_LIMIT);
   return {
     id: operation.id,
     revision: operation.revision,
@@ -649,7 +715,7 @@ function operationView(operation: SelectionOperation) {
     document: operation.document,
     summary: operation.summary,
     expiresAt: operation.expiresAt,
-    ...(subjectCountKnown ? { subjectCount: operation.subjectCount } : {}),
+    ...(subjectCountKnown(operation) ? { subjectCount: operation.subjectCount } : {}),
     ...(operation.scope ? { scope: operation.scope } : {}),
     ...(operation.catalogScope ? { catalogScope: operation.catalogScope } : {}),
     ...(operation.params ? { params: operation.params } : {}),
@@ -1207,6 +1273,36 @@ export function cadSelectionRouter(
   }
 
   const router = express.Router();
+
+  /** Liệt kê thao tác đã chuẩn bị — trục xoay của màn "Thay đổi chờ duyệt".
+   *
+   * Trước đây `/prepare` trả về id và **chỉ nơi gọi đó** biết id ấy. Một thao
+   * tác chuẩn bị ở màn Kiểm tra bản vẽ rồi chuyển sang màn khác là biến mất khỏi
+   * tầm mắt: nó vẫn nằm trong hàng chờ của daemon, vẫn sẽ ghi vào bản vẽ khi ai
+   * đó xác nhận, nhưng không màn hình nào liệt kê được. Một hàng chờ không nhìn
+   * thấy được trên đường ghi KHÔNG HOÀN TÁC ĐƯỢC là chỗ tệ nhất để giấu thông tin.
+   *
+   * Trả về **mọi** trạng thái, không chỉ `pending`: người dùng cần thấy cả cái
+   * vừa hỏng (`failed`) và cái vừa hết hạn (`expired`) — đó là câu trả lời cho
+   * "tôi vừa bấm xong, sao không thấy gì xảy ra". Giao diện tự lọc.
+   *
+   * Gọi `expireOperations()` trước: trạng thái `expired` được tính khi ĐỌC chứ
+   * không có bộ đếm giờ chạy nền, nên không gọi là danh sách bày ra những thao
+   * tác `pending` đã chết từ lâu.
+   */
+  router.get("/operations", (_request, response) => {
+    expireOperations();
+    /* `.reverse()` TRƯỚC khi sắp, và dựa vào phép sắp ỔN ĐỊNH của JS: hai thao
+       tác chuẩn bị trong cùng một mili-giây có `createdAt` bằng nhau, và khi đó
+       thứ tự phải là thứ tự chèn ĐẢO — cái vừa tạo nằm trên. Sắp không thôi sẽ
+       để nguyên thứ tự chèn, tức cái CŨ nhất lên đầu ở đúng ca hay gặp nhất
+       (bấm hai lần liên tiếp). */
+    const list = [...operations.values()]
+      .reverse()
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+      .map(operationListView);
+    return response.json({ ok: true, operations: list });
+  });
 
   router.get("/current", async (request, response) => {
     try {

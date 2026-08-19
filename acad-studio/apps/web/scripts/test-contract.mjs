@@ -475,10 +475,302 @@ function occurrencesIn(source, pattern) {
     /mode === "data" \? \(\s*<Button/,
     "chế độ `data` phải dùng <Button>, không phải <WriteButton>",
   );
+  /* KHÔNG neo vào dấu `;`: nó chỉ đúng khi `data` là chế độ CUỐI trong union, và
+     thêm một chế độ mới ở sau làm phép kiểm này đỏ vì một lý do vô nghĩa. */
   assert.match(
     sheet,
-    /\| "data";/,
+    /\| "data"\n/,
     "ConfirmMode phải có chế độ `data` cho thao tác không chạm bản vẽ",
+  );
+  /* Đổi BẢN VẼ HOẠT ĐỘNG có chế độ riêng. Dùng chung `selection` là nói "bộ chọn
+     sẽ đổi" và gắn nhãn nút "Chọn trong AutoCAD" — cả hai đều sai; dùng chung
+     `session` thì câu "phiên chỉ trở lại như cũ khi đóng AutoCAD" cũng sai. */
+  assert.match(
+    sheet,
+    /\| "document";/,
+    "ConfirmMode phải có chế độ `document` cho việc đổi bản vẽ hoạt động",
+  );
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /if \(action === "activate-document"\) return "document";/,
+    "đổi bản vẽ hoạt động phải dùng chế độ xác nhận riêng",
+  );
+
+  /* Chip ở thanh trên, huy hiệu ở rail và màn "Thay đổi chờ duyệt" phải đọc CÙNG
+     một nguồn. Trước giai đoạn 7 chip lấy số từ một kho trong trình duyệt mà
+     KHÔNG hàm nào ghi vào — nó vĩnh viễn bằng 0 trong khi hàng chờ thật có thể
+     đầy. Chú thích của chính kho đó đã viết ra bất biến này rồi. */
+  /* `undefined` = CHƯA BIẾT, khác `0` = "không có gì chờ". Hiện `0` trước khi đọc
+     được lần nào là nói dối ở đúng chỗ sinh ra để nhắc người dùng đừng quên một
+     lệnh ghi đang chờ. */
+  assert.match(
+    sourceAt("features/staged-ops/queue.ts"),
+    /useState<number \| undefined>\(undefined\)/,
+    "số chờ duyệt phải bắt đầu ở CHƯA BIẾT, không phải 0",
+  );
+  /* Chữ trên huy hiệu giờ do `pendingBadge()` quyết — hành vi thật đã có test
+     riêng ở `test-staged-queue.test.ts`, mạnh hơn phép so chuỗi này. Chỗ này chỉ
+     còn chốt hai thanh CÙNG đi qua hàm đó: mỗi nơi tự diễn giải lại cặp
+     `(pending, stale)` là hai góc màn hình nói hai điều khác nhau về cùng một
+     hàng chờ — đúng cái đã xảy ra một lần (thanh trên hiện `—?` kèm câu "số của
+     lần trước" khi chưa hề có lần trước nào). */
+  for (const file of ["Titlebar.tsx", "Rail.tsx"]) {
+    assert.match(
+      sourceAt(file),
+      /pendingBadge\(pending, !!pendingStale\)/,
+      `${file} phải dùng chung pendingBadge, không tự diễn giải lại`,
+    );
+    assert.doesNotMatch(
+      sourceAt(file),
+      /pending === undefined \?/,
+      `${file} không được tự quyết chữ cho trạng thái chưa biết`,
+    );
+  }
+  /* Chip không được suy sắc thái từ con số: `pending ?? 0` biến cả "0 cũ" lẫn
+     "chưa đọc được" thành `"0"`, và CSS tô giá trị đó thành "rỗng, yên tâm". */
+  assert.doesNotMatch(
+    sourceAt("Titlebar.tsx"),
+    /data-count=\{pending \?\? 0\}/,
+    "chip phải dùng data-tone của pendingBadge, không suy màu từ con số",
+  );
+  assert.match(
+    sourceAt("app/design-system.css"),
+    /\.stagedchip\[data-tone="unsure"\]/,
+    "phải có kiểu riêng cho trạng thái không đáng tin",
+  );
+  /* Rail chỉ được ẩn huy hiệu khi hàng chờ CHẮC CHẮN rỗng. Suy từ
+     `pending`/`pendingStale` thì lượt đọc ĐẦU (chưa có số, chưa hỏng) bị ẩn
+     trong khi thanh trên hiện `—` — hai góc màn hình nói hai điều khác nhau về
+     cùng một hàng chờ, và ở rail thì "không có huy hiệu" đọc như "không có gì". */
+  assert.match(
+    sourceAt("Rail.tsx"),
+    /const showBadge = badge\.tone !== "empty";/,
+    "rail chỉ được ẩn huy hiệu khi hàng chờ chắc chắn rỗng",
+  );
+  /* Lời báo thành công không được nói "không bản vẽ nào bị sửa" khi lượt vừa rồi
+     đã xoá hình: `/draw/target` gửi lệnh reject vào AutoCAD cho từng bản xem
+     trước còn `staged`. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /setNote\(\s*\n?\s*discarded/,
+    "có bản xem trước bị huỷ thì lời báo phải nói ra, không dùng câu mặc định",
+  );
+  /* `/draw/target` huỷ TỪNG bản xem trước một và dừng ngay khi một cái hỏng —
+     những cái trước đó đã bị xoá khỏi AutoCAD rồi. "Lời gọi hỏng" vì thế KHÔNG
+     có nghĩa là "không mất gì", nên đường lỗi phải nói ra là không chắc thay vì
+     để lời báo mặc định hứa rằng bản vẽ còn nguyên. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /previewsUncertain = doomed\.length > 0;\s*\n\s*await setDrawTarget/,
+    "phải đánh dấu 'có thể đã xoá' TRƯỚC khi gọi đường huỷ",
+  );
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /: previewsUncertain/,
+    "hỏng giữa chừng thì lời báo không được dùng câu 'không bản vẽ nào bị sửa'",
+  );
+  /* Bảng rỗng vì LỖI trông y hệt bảng rỗng vì hàng chờ trống, mà hai câu đó
+     ngược nhau. Chưa đọc được lần nào thì không hiện con số. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /\{hasData \? visible\.length : "—"\}/,
+    "đếm ở tiêu đề bảng phải chờ đọc được rồi mới hiện",
+  );
+  /* Kích hoạt bản vẽ xong PHẢI đặt lại đích vẽ. Daemon giữ HAI đích khác nhau,
+     và `activate-document` chỉ đổi cái của AutoCAD — bỏ bước này là lệnh vẽ tiếp
+     theo ghi vào bản vẽ CŨ, trong khi thẻ xác nhận vừa hứa ngược lại. Màn hình
+     legacy đã làm đúng từ lâu; màn mới thì không, cho tới khi review chỉ ra. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /if \(op\.action === "activate-document"\) \{[\s\S]{0,4000}?setDrawTarget\(DAEMON_BASE, op\.target\)/,
+    "kích hoạt bản vẽ xong phải đặt lại đích vẽ",
+  );
+  /* Hai tab cùng mở màn này: lượt của tab A có thể về SAU lượt của tab B, ghi đè
+     đích vẽ thành A trong khi bản vẽ đang mở là B. Kiểm bản vẽ ĐANG hoạt động
+     trước khi đặt đích. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /snapshot\.docs\.filter\(\(doc\) => doc\.active\)/,
+    "phải kiểm bản vẽ đang hoạt động trước khi đặt lại đích vẽ",
+  );
+  /* Chốt phải ĐÓNG khi không biết. Bản trước hỏi "có chắc là SAI không", nên đọc
+     không ra bản vẽ hoạt động nào — hay đọc không tới AutoCAD — đều lọt xuống
+     nhánh GỌI, mà nhánh gọi là nhánh xoá bản xem trước. `find` cũng không dùng
+     được: nhiều bản vẽ cùng khai `active` thì nó nhặt cái đầu, tức đoán bừa ngay
+     trước một lệnh không hoàn tác được. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /const confirmed = snapshot\.alive[\s\S]{0,200}?actives\.length === 1[\s\S]{0,200}?documentMatchesTarget\(actives\[0\], op\.target\)/,
+    "chỉ đặt lại đích vẽ khi CHẮC CHẮN đúng: sống, đúng một bản vẽ hoạt động, và khớp đích",
+  );
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /if \(!confirmed\) \{/,
+    "không xác nhận được thì KHÔNG gọi đường xoá bản xem trước",
+  );
+  /* So bằng CẢ BA dạng đích. `file || title` luôn lệch với mã phiên, và chốt khi
+     đó nổ mỗi lần — chặn oan đúng nhóm bản vẽ chưa lưu nó sinh ra để bảo vệ. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /documentMatchesTarget\(actives\[0\], op\.target\)/,
+    "so đích phải dùng documentMatchesTarget, không phải file || title",
+  );
+  /* `/draw/target` HUỶ mọi bản xem trước còn `staged` của bộ vẽ — nó gửi lệnh
+     reject vào AutoCAD, tức xoá hình đã vẽ, không hoàn tác được. Hàng chờ đó là
+     một hàng chờ KHÁC, màn hình này không bày ra, nên nếu không nói trước thì một
+     lượt xác nhận "chỉ đổi tab" lại âm thầm xoá hình của người dùng. Phải đọc và
+     nói ra TRƯỚC nút bấm, không phải trong lời báo sau khi đã xoá. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /stagedDrawPreviews\(DAEMON_BASE\)/,
+    "phải đọc hàng chờ bộ vẽ trước khi xác nhận activate-document",
+  );
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /previews\.kind === "unknown"/,
+    "đọc hỏng phải nói ra, không được im lặng như thể hàng chờ rỗng",
+  );
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /Sẽ huỷ \{previews\.ids\.length\} bản xem trước/,
+    "phải nói SỐ bản xem trước sắp bị huỷ, ngay trên thẻ xác nhận",
+  );
+  /* Cảnh báo chỉ bảo vệ được người dùng nếu nó KỊP hiện trước lúc bấm. Để nút
+     sống trong lúc còn đang đọc `/draw/ops` là mở đúng cái cửa nó sinh ra để
+     đóng: bấm nhanh là ghi mà chưa thấy câu nào. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /* Neo vào chính thuộc tính `blocked`. Bản đầu tôi viết chỉ khớp câu cảnh
+       báo đang hiện ra — mà câu đó nằm ở chỗ khác trong cùng tệp, nên phép so
+       vẫn xanh khi khoá bị gỡ. Đột biến bắt được; nếu không kiểm đột biến thì
+       đây là một guardrail chỉ trông như đang canh.
+       Giới hạn của nó: phép so nguồn chốt được CẤU TRÚC (nhánh còn nằm trong
+       `blocked`), không chốt được HÀNH VI — chèn `false &&` vào giữa biểu thức
+       thì nó vẫn xanh. Muốn chốt hành vi phải dựng component, mà dự án chưa có
+       bộ dựng React trong test. Ghi ra đây để không ai tưởng nó mạnh hơn thật. */
+    /blocked=\{applyBlockedReason\(confirming, now\)[\s\S]{0,200}?previews\.kind === "loading"/,
+    "đang kiểm hàng chờ bộ vẽ thì phải KHOÁ nút xác nhận",
+  );
+  /* Đọc HỎNG cũng phải khoá, cùng lý do với phép kiểm lúc gửi. Để nút sống ở đây
+     là hứa một điều lúc gửi sẽ từ chối: người dùng bấm, nhận lỗi, và không hiểu
+     vì sao nút lại sáng. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /blocked=\{applyBlockedReason\(confirming, now\)[\s\S]{0,900}?previews\.kind === "unknown"/,
+    "đọc hỏng hàng chờ bộ vẽ thì cũng phải KHOÁ nút xác nhận",
+  );
+  /* Và đọc lại NGAY TRƯỚC khi ghi: một tab khác có thể vừa dựng bản xem trước
+     sau lúc thẻ hiện ra, nên câu người dùng đã đồng ý không còn đúng. Phải nằm
+     TRƯỚC `applyStagedOp` — đó là điểm dừng sạch duy nhất. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /stagedDrawPreviews\(DAEMON_BASE\)\.catch[\s\S]{0,1800}?await applyStagedOp\(DAEMON_BASE, op\)/,
+    "phải đọc lại hàng chờ bộ vẽ TRƯỚC khi ghi, không phải sau",
+  );
+  /* Đọc hỏng phải DỪNG. Hai phía không cân nhau: chặn nhầm thì người dùng thử
+     lại, còn đi liều thì `/draw/target` xoá hình đã vẽ và không có đường về. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /if \(current === undefined\) \{[\s\S]{0,600}?return;/,
+    "đọc hỏng hàng chờ bộ vẽ thì phải dừng, không được ghi tiếp",
+  );
+  /* So theo MÃ, không theo số lượng: một tab khác bỏ một bản xem trước rồi dựng
+     cái mới thì con số y nguyên, nhưng thứ sắp bị xoá đã là thứ khác. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /unwarnedPreviews\(/,
+    "phải so tập MÃ bản xem trước, không so số lượng",
+  );
+  assert.doesNotMatch(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /current > \(warned/,
+    "phép so theo số lượng bỏ lọt trường hợp thay bản xem trước",
+  );
+  /* Thẻ xác nhận cuối phải chỉ ĐÚNG bản vẽ: hai bản vẽ đang mở có thể trùng tiêu
+     đề, và đây là bước xác nhận của một lệnh MỘT LẦN. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /target=\{confirming\.target \|\| confirming\.documentTitle\}/,
+    "thẻ xác nhận phải hiện đích chính xác, không phải tiêu đề có thể trùng",
+  );
+  /* Bộ lọc mặc định chỉ được giấu thứ người dùng đã TỰ quyết (đã ghi, đã bỏ).
+     `failed`/`expired` là kết cục họ KHÔNG chọn — giấu chúng thì một lượt ghi
+     hỏng ở tab khác đi qua trong im lặng, đúng bằng việc không có màn hình này. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /op\.state !== "applied" && op\.state !== "rejected"/,
+    "bộ lọc mặc định không được giấu mục hỏng hay hết hạn",
+  );
+
+  /* Màn hình KHÔNG được hứa nhiều hơn nó làm. Daemon giữ nhiều hàng chờ rời
+     nhau; bảng này mới đọc được một (bộ chọn). Bản xem trước của bộ vẽ nằm ở map
+     khác — để câu "mọi lệnh ghi dừng ở đây" đứng nguyên là hứa thừa, và ở màn AN
+     TOÀN thì lời hứa thừa nguy hiểm hơn một khoảng trống được nói rõ. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /chưa hiện ở đây/,
+    "màn Thay đổi phải nói rõ hàng chờ của bộ vẽ chưa nằm trong bảng",
+  );
+  /* Huy hiệu ở rail cũng phải biết số đã cũ: `0` của một lượt đọc hỏng KHÔNG
+     chứng minh hàng chờ rỗng. */
+  assert.match(
+    sourceAt("AppShell.tsx"),
+    /pendingStale=\{pendingOps\.stale\}[\s\S]{0,200}?<Rail|<Rail[\s\S]{0,200}?pendingStale=\{pendingOps\.stale\}/,
+    "rail cũng phải nhận tín hiệu số cũ",
+  );
+
+  /* Huy hiệu cũng phải nói khi số đã cũ — nếu không, một thao tác chuẩn bị ngay
+     trước lúc mạng trục trặc bị giấu sau con số 0 của lượt đọc trước. */
+  assert.match(
+    sourceAt("features/staged-ops/queue.ts"),
+    /setStale\(true\);/,
+    "lượt đọc hỏng phải đánh dấu số là cũ",
+  );
+  /* Màn hình phải tự đọc lại: không thì huy hiệu (có nhịp) nói 2 trong khi bảng
+     (một lượt duy nhất) vẫn trống — hai con số nói hai điều khác nhau. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /setInterval\(\(\) => void load\(\), 5_000\)/,
+    "màn Thay đổi phải đọc lại theo nhịp, cùng nhịp với huy hiệu",
+  );
+  /* Lượt đọc lại hỏng thì số cũ phải được gắn nhãn là CŨ. */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /stale \? " \(số của lần đọc trước\)" : ""/,
+    "số của lượt đọc hỏng phải được gắn nhãn, không bày như số hiện tại",
+  );
+
+  /* Đọc hỏng thì không được khẳng định "0 thao tác đang chờ". */
+  assert.match(
+    sourceAt("app/(shell)/changes/page.tsx"),
+    /sub=\{hasData/,
+    "chỉ nói số khi đã có một lượt đọc THÀNH CÔNG",
+  );
+
+  /* `.banner` dùng `data-tone`; `data-kind` là của `.callout`. Gõ nhầm thì băng
+     lỗi hiện ra như một băng thường — mất hẳn dấu hiệu mức độ. */
+  assert.doesNotMatch(
+    stripComments(sourceAt("app/(shell)/changes/page.tsx")),
+    /className="banner" data-kind=/,
+    "banner dùng data-tone, không phải data-kind",
+  );
+  /* Bẫy focus của `Modal` chỉ được đặt lại focus MỘT LẦN cho mỗi lượt mở. Để
+     `onClose` trong deps là focus bị giật về ô đầu mỗi lần cha render lại. */
+  assert.match(
+    sourceAt("Modal.tsx"),
+    /returnTo\?\.focus\?\.\(\);\s*\};\s*\}, \[\]\);/,
+    "hiệu ứng bẫy focus của Modal không được phụ thuộc onClose",
+  );
+
+  assert.match(
+    sourceAt("AppShell.tsx"),
+    /usePendingOpsCount\(\)/,
+    "huy hiệu hàng chờ phải đọc từ daemon, cùng nguồn với màn Thay đổi",
+  );
+  assert.equal(
+    existsSync(join(webDir, "features/staged-ops/store.ts")),
+    false,
+    "kho hàng chờ trong trình duyệt đã chết (không ai ghi vào) — không được sống lại",
   );
   /* Và nó KHÔNG được nhắc `UNDO`: AutoCAD không biết gì về dữ liệu này, nên câu
      "gõ UNDO để hoàn tác" là một đường thoát không tồn tại. */

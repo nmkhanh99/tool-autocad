@@ -23,6 +23,13 @@ export const endpoints = {
   /** Chuẩn bị một thao tác ghi. Trả về operation chờ xác nhận, chưa chạm bản vẽ. */
   selectionPrepare: (base: string) => `${trim(base)}/api/acad/selection/prepare`,
 
+  /** Liệt kê thao tác đã chuẩn bị. Trục xoay của màn "Thay đổi chờ duyệt".
+   *
+   * Hàng chờ sống trong BỘ NHỚ của daemon: khởi động lại daemon là mất sạch, và
+   * không có thao tác nào được ghi. Đó là hành vi đúng — nhưng màn hình phải nói
+   * ra, vì người dùng không có cách nào đoán được điều đó. */
+  selectionOperations: (base: string) => `${trim(base)}/api/acad/selection/operations`,
+
   /** Xác nhận và ghi. One-shot: hỏng thì phải chuẩn bị lại, không retry cùng id. */
   selectionOperationApply: (base: string, id: string) =>
     `${trim(base)}/api/acad/selection/operations/${encodeURIComponent(id)}/apply`,
@@ -30,6 +37,19 @@ export const endpoints = {
   /** Bỏ thao tác đã chuẩn bị. Best-effort — không có nó thì op cũng tự hết hạn. */
   selectionOperationReject: (base: string, id: string) =>
     `${trim(base)}/api/acad/selection/operations/${encodeURIComponent(id)}/reject`,
+
+  /** Đích của bộ vẽ (`/draw/stage`). **Tách khỏi bản vẽ đang hoạt động** của
+   * AutoCAD: kích hoạt một bản vẽ KHÔNG tự đổi đích này, nên sau mỗi lượt
+   * `activate-document` phải đặt lại nó — nếu không, lệnh vẽ tiếp theo ghi vào
+   * bản vẽ cũ hoặc vào tệp `.work` mặc định. */
+  drawTarget: (base: string) => `${trim(base)}/api/acad/draw/target`,
+
+  /** Hàng chờ của BỘ VẼ — hoàn toàn tách khỏi hàng chờ `/selection/operations`
+   * mà màn hình `/changes` bày ra. Cần đọc được vì `POST /draw/target` **huỷ**
+   * mọi bản xem trước còn `staged` trước khi đổi đích: một lượt xác nhận
+   * `activate-document` ở `/changes` do đó xoá luôn hình đang chờ trong AutoCAD,
+   * ở một hàng chờ màn hình đó không hề hiện. */
+  drawOps: (base: string) => `${trim(base)}/api/acad/draw/ops`,
 
   /** Bản vẽ AutoCAD ĐANG MỞ. Không phải danh sách tệp mở gần đây. */
   docs: (base: string) => `${trim(base)}/api/acad/docs`,

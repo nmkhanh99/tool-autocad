@@ -468,6 +468,38 @@ route, như `blocks.module.css` vừa làm.
   active". Chạm tới bộ chạy dùng chung cho MỌI lệnh ghi (chèn block, LISP, sửa
   tiêu chuẩn), nên phải làm thành một lượt riêng có test cho từng đường.
 - **Giai đoạn 7** — `/changes` (trục xoay), `/takeoff`, `/settings`.
+
+  **`/changes` đã dựng (2026-08-18).** Phần backend cần thêm hoá ra chỉ là một
+  đường liệt kê: `GET /api/acad/selection/operations`. Daemon vốn đã giữ thao tác
+  đã chuẩn bị trong một `Map` — chỉ là không ai liệt kê được, nên hàng chờ **vô
+  hình** với mọi màn hình trừ chính màn vừa tạo ra nó.
+
+  Kèm theo: chip ở thanh trên và huy hiệu ở rail chuyển sang đọc **cùng nguồn**
+  với màn hình. Trước đó chúng đọc `features/staged-ops/store.ts` — kho trong
+  trình duyệt mà `writeStaged()` có **0 nơi gọi**, tức chip vĩnh viễn bằng 0. Kho
+  đó đã xoá, và `test-contract.mjs` chặn nó sống lại.
+
+  **Hai khoảng trống đã biết, ghi ra thay vì để màn hình hứa thừa:**
+
+  | Việc | Vì sao chưa làm trong lượt này |
+  |---|---|
+  | Gộp **hàng chờ của bộ vẽ** (`/draw/stage`) vào cùng bảng | `drawRouter` giữ một `Map` riêng với vòng đời `stage → apply/reject` khác hẳn. Cần thêm một đường liệt kê nữa và một mô hình gộp hai loại thao tác có hình dạng khác nhau. Màn hình nay **nói rõ** nó chỉ liệt kê thao tác của bộ chọn, thay vì để câu "mọi lệnh ghi dừng ở đây" hứa thừa |
+  | `/draw/target` **đánh rơi mã phiên** | Nó lưu `DrawTarget` chỉ gồm `title` + `file`. Hai bản vẽ **chưa lưu trùng tiêu đề** vì thế không đặt đích được: lượt `/draw/stage` sau đó gửi một tiêu đề mơ hồ và `findDocExact` từ chối. Lỗi có sẵn ở `drawRouter`, mọi nơi gọi `/draw/target` đều dính; sửa phải thêm `instance` vào `DrawTarget` và truy hết đường dùng nó |
+
+  **17 vòng Codex review (2026-08-18 → 19).** Phần lớn phát hiện không nằm ở
+  màn hình mới mà ở chỗ nó **chạm vào hệ thống cũ**. Nặng nhất: xác nhận một
+  lượt đổi bản vẽ gọi `/draw/target`, mà đường đó `discardStagedOps()` — gửi
+  lệnh reject vào AutoCAD, tức **xoá hình đã vẽ** ở một hàng chờ màn hình này
+  không hề bày ra. Mối nguy ấy đã được ghi ở bảng trên từ đầu; ghi lại một mối
+  nguy không phải là xử lý nó, và trong khoảng đó nó vẫn xoá hình thật.
+
+  Ba lỗi cùng một hình dạng, đáng ghi lại vì sẽ còn gặp: **không biết bị quy
+  thành cho qua**. Đọc hỏng hàng chờ bộ vẽ → coi như rỗng; không xác nhận được
+  bản vẽ hoạt động → vẫn gọi đường xoá; `{ok: true}` thiếu `operations` → dựng
+  bảng trống rồi báo "không có gì chờ". Chốt phải hỏi *"có chắc là ĐÚNG không"*,
+  không phải *"có chắc là SAI không"*.
+
+  **Còn lại của giai đoạn 7:** `/takeoff` và `/settings`.
 - **Giai đoạn 8** — `/publish`, `/batch`, `/cadweb`, `/` Tổng quan. Phạm vi đã
   chốt qua D3/D4/D5; **backend phải xong trước** (xem mục dưới).
 - **Giai đoạn 9** — `/assistant`, xoá route legacy.
@@ -517,6 +549,17 @@ rồi khởi động lại AutoCAD.
 ---
 
 ## Technical Debt
+
+- **Kích hoạt bản vẽ và đặt đích vẽ chưa nguyên tử.** Daemon giữ HAI đích: bản vẽ
+  đang hoạt động của AutoCAD, và đích của `/draw/stage`. `activate-document` chỉ
+  đổi cái đầu, nên khách phải gọi thêm `/draw/target` — và hai tab cùng làm việc
+  đó sẽ đua nhau. Đã thu hẹp bằng cách kiểm bản vẽ đang hoạt động trước khi đặt
+  đích (2026-08-18), nhưng khe giữa lúc đọc và lúc POST vẫn còn.
+
+  Đóng hẳn: gộp hai bước vào một giao dịch phía daemon. Vướng ở chỗ
+  `/draw/target` hiện còn **huỷ staged op** và tự giải bản vẽ, nên gọi nó từ
+  đường apply của `cadSelection` kéo theo hành vi phụ mà đường đó chưa từng có.
+
 
 - ~~**Script test đọc/ghi được vào kho dữ liệu thật.**~~ **ĐÓNG 2026-08-18.**
 

@@ -67,3 +67,25 @@ export async function fetchDocs(base: string, signal?: AbortSignal): Promise<Doc
     docs: Array.isArray(body.docs) ? body.docs : [],
   };
 }
+
+/** Bản vẽ này có phải là bản vẽ mà `target` trỏ tới không.
+ *
+ * `target` của một thao tác đã chuẩn bị có thể là **bất kỳ dạng nào trong ba**:
+ * đường dẫn tệp, MÃ PHIÊN (bản vẽ chưa lưu, plugin có `targetsInstance`), hay
+ * tiêu đề. Daemon chọn dạng nào là tuỳ năng lực plugin lúc chuẩn bị, và khách
+ * không suy ngược được.
+ *
+ * Nên so với **cả ba**, đừng lùi theo một thứ tự cố định: một phép so
+ * `file || title` sẽ luôn LỆCH với mã phiên, và ở chỗ nó được dùng làm chốt an
+ * toàn thì "luôn lệch" nghĩa là chốt luôn nổ — chặn oan đúng nhóm bản vẽ chưa
+ * lưu mà nó sinh ra để bảo vệ. Đây là bẫy đã cắn nhiều lần trong dự án này; xem
+ * `sendTarget()`/`targetOf()` ở `features/standards/model.ts`.
+ */
+export function documentMatchesTarget(doc: AcadDocument, target: string): boolean {
+  const wanted = target.trim();
+  if (!wanted) return false;
+  return [doc.file, doc.instance, doc.title]
+    .map((value) => (value || "").trim())
+    .filter(Boolean)
+    .includes(wanted);
+}

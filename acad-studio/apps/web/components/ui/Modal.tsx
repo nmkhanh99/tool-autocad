@@ -21,6 +21,14 @@ export function Modal({ title, sub, wide = false, footer, onClose, children }: {
   children?: ReactNode;
 }) {
   const box = useRef<HTMLDivElement>(null);
+  /* Gương của `onClose`. Hiệu ứng dưới đây ĐẶT LẠI focus mỗi lần nó chạy, nên
+     nó chỉ được chạy đúng một lần cho mỗi lượt mở. Nhưng nơi gọi hầu như luôn
+     truyền một arrow mới mỗi lượt render — `onClose={() => …}` — nên để `onClose`
+     trong deps là: cha render lại (một nhịp đồng hồ, một lượt nạp về) → hiệu ứng
+     dọn rồi chạy lại → focus bị giật về ô đầu tiên. Người dùng đang dùng bàn
+     phím thì không tới được nút xác nhận. */
+  const closeRef = useRef(onClose);
+  useEffect(() => { closeRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
     const returnTo = document.activeElement as HTMLElement | null;
@@ -28,7 +36,7 @@ export function Modal({ title, sub, wide = false, footer, onClose, children }: {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        closeRef.current();
         return;
       }
       if (event.key !== "Tab" || !box.current) return;
@@ -52,7 +60,7 @@ export function Modal({ title, sub, wide = false, footer, onClose, children }: {
       document.removeEventListener("keydown", onKeyDown);
       returnTo?.focus?.();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div

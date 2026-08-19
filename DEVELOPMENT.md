@@ -593,6 +593,56 @@ khác nhau — tương thích ngược và một lần đọc hỏng. Gộp chú
 thành giấy phép đi qua. Giao thức raw xuống plugin không tự phân biệt được, nên
 phải kèm cờ hiện diện riêng (`spaceKnown`).
 
+### `GET /api/acad/selection/operations` — hàng chờ ghi
+
+Trục xoay của màn **Thay đổi chờ duyệt**. Trước đó `/prepare` trả về một id và
+**chỉ nơi gọi biết id ấy**: một thao tác chuẩn bị ở màn này rồi chuyển sang màn
+khác là biến mất khỏi tầm mắt — vẫn nằm trong hàng chờ của daemon, vẫn sẽ ghi
+khi ai đó xác nhận, nhưng không màn hình nào liệt kê được.
+
+Ba tính chất phải biết trước khi dùng:
+
+- **Hàng chờ sống trong BỘ NHỚ** (`Map` trong `cadSelection.ts`). Khởi động lại
+  daemon là mất sạch, và **không thao tác nào được ghi** — an toàn, nhưng giao
+  diện phải nói ra vì người dùng không đoán được.
+- **Hết hạn tính KHI ĐỌC**, không có bộ đếm giờ nền. Endpoint gọi
+  `expireOperations()` trước khi trả lời; giao diện vẫn phải kiểm lại theo đồng
+  hồ của chính nó, vì một mục còn `pending` trên màn hình có thể đã chết từ lúc
+  danh sách được tải.
+- **Trả về MỌI trạng thái**, không chỉ `pending`. `failed` và `expired` chính là
+  câu trả lời cho "tôi vừa bấm xong, sao không thấy gì xảy ra".
+
+Sắp **mới nhất trước**, và ổn định: hai thao tác chuẩn bị trong cùng một
+mili-giây có `createdAt` bằng nhau, nên danh sách `.reverse()` trước khi sắp và
+dựa vào phép sắp ổn định của JS. Không làm vậy thì ở đúng ca hay gặp nhất — bấm
+hai lần liên tiếp — cái CŨ nhất lại lên đầu.
+
+**Bản trả về là bản GỌN, dựng bằng danh sách CHO PHÉP** (`operationListView()`).
+Đường này bị hỏi **mỗi 5 giây** ở mọi màn hình có thanh trên, nên mọi trường
+không giới hạn độ dài đều là chi phí nhân với nhịp đó: `subjects`,
+`scope.handles` (tới 5.000 phần tử), `summary.fromLayers`, `params`,
+`catalogScope`. Danh sách cho phép chứ không phải danh sách loại trừ — bản đầu
+viết theo kiểu loại trừ và bỏ sót `fromLayers` ngay lượt review kế tiếp, vì
+trường mới mặc định được đi kèm. Test chốt cả **tập khoá**, nên thêm trường vào
+`operationView()` mà quên cân nhắc là đỏ. Danh sách này phải khớp đúng phần
+`normalizeQueuedOp()` bên web đọc tới.
+
+`subjectCount` **vắng** khi không đếm được, không phải `0` — hai câu đó dẫn tới
+hai quyết định khác nhau ở người sắp bấm một nút ghi không hoàn tác được. Quy
+tắc nằm ở `subjectCountKnown()`, dùng chung cho cả bản đầy đủ lẫn bản gọn.
+
+> **Bẫy chéo hàng chờ — đọc trước khi sửa `/changes`.** Xác nhận một thao tác
+> `activate-document` kéo theo `POST /api/acad/draw/target` để đích vẽ theo kịp.
+> Đường đó chạy `discardStagedOps()`: nó gửi lệnh **reject vào AutoCAD** cho mọi
+> bản xem trước còn `staged` của bộ vẽ — tức **xoá hình đã vẽ**, không hoàn tác
+> được — rồi mới đổi đích. Hàng chờ ấy là một `Map` RIÊNG trong `drawRouter.ts`,
+> `/changes` không bày ra. Vì vậy màn hình phải: đọc `GET /api/acad/draw/ops`
+> lúc mở thẻ xác nhận và nói ra số bản xem trước sắp mất; **khoá** nút khi đang
+> đọc hoặc đọc hỏng; đọc lại **trước** `applyStagedOp` (điểm dừng sạch duy nhất)
+> và so **tập mã**, không so số lượng — thay một bản xem trước bằng cái khác thì
+> con số y nguyên. Lỗi giữa chừng cũng phải báo là **không chắc**: `/draw/target`
+> huỷ từng cái một và dừng khi hỏng, nên những cái trước đó đã mất rồi.
+
 ### `/api/acad/standards/*` — hồ sơ quy tắc và lượt quét
 
 Hai màn hình dùng chung một API, và ràng buộc giữa chúng là thứ dễ sai nhất.

@@ -15,15 +15,21 @@ import Link from "next/link";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/icons";
 import { isRouteBuilt } from "./nav";
+import { pendingBadge } from "../../features/staged-ops/queue";
 import { ACAD_STATE_LABEL, type AcadState } from "../../features/acad-connection/useAcadState";
 import type { AcadDocument } from "../../lib/daemon/docs";
 
 export function Titlebar({
-  docs, acadState, pending, railLocked, railExpanded, onToggleRail, onOpenPalette, onOpenDrawer,
+  docs, acadState, pending, pendingStale, railLocked, railExpanded, onToggleRail, onOpenPalette, onOpenDrawer,
 }: {
   docs: AcadDocument[];
   acadState: AcadState;
-  pending: number;
+  /** Số thao tác đang chờ, hoặc `undefined` khi CHƯA đọc được. Hai thứ khác
+   * nhau: `0` là "không có gì chờ", còn `undefined` là "chưa biết" — và hiện
+   * `0` cho cái sau là nói dối ở đúng chỗ nhắc người dùng đừng quên lệnh ghi. */
+  pending: number | undefined;
+  /** Số đang hiện là của lượt đọc TRƯỚC (lượt gần nhất hỏng). */
+  pendingStale?: boolean;
   railLocked: boolean;
   railExpanded: boolean;
   onToggleRail: () => void;
@@ -34,6 +40,7 @@ export function Titlebar({
   // Pill kết nối và chip thay đổi đều là liên kết. Route chưa tồn tại thì
   // chúng phải hiện dạng tĩnh kèm lý do — dẫn người dùng tới 404 tệ hơn hẳn.
   const settingsBuilt = isRouteBuilt("/settings");
+  const badge = pendingBadge(pending, !!pendingStale);
   const changesBuilt = isRouteBuilt("/changes");
 
   return (
@@ -92,23 +99,24 @@ export function Titlebar({
           <Link
             className="stagedchip"
             href="/changes"
-            data-count={pending}
-            aria-label={`${pending} thay đổi chờ duyệt`}
+            data-tone={badge.tone}
+            aria-label={badge.aria}
+            title={badge.title || undefined}
             data-od-id="staged-changes"
           >
             <Icon name="changes" />
-            Chờ duyệt<span className="n">{pending}</span>
+            Chờ duyệt<span className="n">{badge.text}</span>
           </Link>
         ) : (
           <span
             className="stagedchip"
-            data-count={pending}
-            aria-label={`${pending} thay đổi chờ duyệt`}
+            data-tone={badge.tone}
+            aria-label={`${badge.aria} — màn hình Thay đổi chưa được dựng`}
             title="Màn hình Thay đổi chưa được dựng"
             data-od-id="staged-changes"
           >
             <Icon name="changes" />
-            Chờ duyệt<span className="n">{pending}</span>
+            Chờ duyệt<span className="n">{badge.text}</span>
           </span>
         )}
 
