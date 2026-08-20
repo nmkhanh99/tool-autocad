@@ -288,7 +288,10 @@ export default function CadWebViewerPanel({
         setLoadError(
           `Cần tải lại snapshot${response.currentRevision === undefined
             ? ""
-            : ` từ revision ${response.currentRevision}`}: ${response.code}: ${response.message}`,
+            /* "bản mô hình" chứ không phải "revision": giá trị này tiến theo
+               mỗi delta của MÔ HÌNH, không phải phiên bản định dạng tệp
+               (`formatVersion`). Xem `lib/revisionKinds.ts`. */
+            : ` từ bản mô hình ${response.currentRevision}`}: ${response.code}: ${response.message}`,
         );
         return;
       }

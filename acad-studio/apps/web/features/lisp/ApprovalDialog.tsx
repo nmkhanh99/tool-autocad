@@ -25,6 +25,7 @@ import { Button } from "../../components/ui/Button";
 import { coverageFor, manifestToApprove } from "./approval";
 import { coverageLabel, type LispResource } from "./model";
 import type { JsonRecord } from "../../lib/daemon/client";
+import { revisionLabel } from "../../lib/revisionKinds";
 
 export function ApprovalDialog({
   resource, revision, source, effectiveManifest, inferred, signerPresent, busy, error, onApprove, onCancel,
@@ -52,7 +53,7 @@ export function ApprovalDialog({
   const blocked = !signerPresent
     ? "Cửa sổ này không có bộ ký của app desktop."
     : !revision
-      ? "Chưa đọc được revision của tài nguyên."
+      ? `Chưa đọc được ${revisionLabel("manifest").toLowerCase()} của tài nguyên.`
       : !summary.trim()
         ? "Máy chủ bắt buộc một câu tóm tắt script này làm gì."
         : !readAck

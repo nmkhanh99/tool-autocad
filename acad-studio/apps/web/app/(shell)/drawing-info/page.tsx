@@ -59,6 +59,7 @@ import {
 import type { StagedOp } from "../../../features/staged-ops/types";
 import { DAEMON_BASE, endpoints } from "../../../lib/daemon/endpoints";
 import { daemonFailureText, daemonRecord } from "../../../lib/daemon/client";
+import { revisionHint, revisionLabel, revisionText } from "../../../lib/revisionKinds";
 
 export default function DrawingInfoPage() {
   const info = useDrawingInfo(DAEMON_BASE);
@@ -619,7 +620,11 @@ export default function DrawingInfoPage() {
                 <dl className="kv">
                   <dt>Tên tệp</dt><dd>{String(doc.title ?? "—")}</dd>
                   <dt>Đường dẫn</dt><dd>{String(doc.file ?? "—")}</dd>
-                  <dt>Revision database</dt><dd>{String(doc.revision ?? "—")}</dd>
+                  {/* Nhãn lấy từ `lib/revisionKinds.ts`: bốn thứ khác nhau trong
+                      app cùng tên "revision", và chỉ ghi "Revision database" thì
+                      người đọc không có cách nào biết đây là cái nào. */}
+                  <dt title={revisionHint("document")}>{revisionLabel("document")}</dt>
+                  <dd>{revisionText(doc.revision as number | undefined)}</dd>
                   <dt>Trạng thái lưu</dt>
                   <dd>
                     dbmod = {saved.dbmod ?? "—"}

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { asRecord, daemonRecord, type JsonRecord } from "../lib/daemon/client";
 import { fetchDocs } from "../lib/daemon/docs";
+import { revisionLabel, revisionText } from "../lib/revisionKinds";
 
 export type LispReviewStatus = "unreviewed" | "approved" | "stale";
 
@@ -295,7 +296,14 @@ function OverviewTab({ resource }: { resource: LispResourceDetail }) {
           values={[
             `resourceId: ${resource.id}`,
             `sourceHash: ${resource.sourceHash || "—"}`,
-            `manifestRevision: ${resource.manifestRevision || "—"}`,
+            /* Cùng từ vựng với màn hình mới (`lib/revisionKinds.ts`). Màn này
+               CŨ nhưng `/library/lisp` dẫn thẳng người dùng sang đây, nên hai
+               bên gọi cùng một cái băm bằng hai tên là chuyện họ gặp hôm nay. */
+            /* Nhãn LẤY TỪ từ vựng, không chép cứng: chép cứng thì đổi tên ở
+               `lib/revisionKinds.ts` xong màn này vẫn hiện tên cũ, và lệch âm
+               thầm — bất biến #9 chỉ cấm chữ "revision" trần, nó không bắt được
+               hai nhãn khác nhau cho cùng một thứ. */
+            `${revisionLabel("manifest")}: ${revisionText(resource.manifestRevision)}`,
           ]}
         />
         <StringGroup title="Cảnh báo" values={resource.warnings || []} empty="Không có cảnh báo." />

@@ -641,9 +641,35 @@ rồi khởi động lại AutoCAD.
 - **Thao tác chờ duyệt không persist** — 6 cơ chế staged đều trong `Map` RAM,
   không có API liệt kê. Cần `StagedOpRegistry` + persist trước khi `/changes` có
   thể hứa một hàng chờ thật.
-- **"Revision" mang 4 nghĩa không so sánh được với nhau** (CadWeb integer ·
-  document instance · content-hash hồ sơ/catalog · `manifestRevision`). Phải đặt
-  4 nhãn khác nhau trong UI trước khi viết thêm màn hình.
+- ~~**"Revision" mang 4 nghĩa không so sánh được với nhau.**~~ **ĐÓNG
+  2026-08-19.** Bốn nghĩa đã xác minh trong code, không lấy từ trí nhớ:
+
+  | Loại | Kiểu | Nguồn | Trả lời được câu gì |
+  |---|---|---|---|
+  | `document` | số | `AcadDocument.revision` | dữ liệu đọc lúc trước còn dùng được không (chỉ có nghĩa khi kèm `instance`). **Không** đếm số lần sửa — thao tác chỉ-đọc như `ssget "_X"` cũng làm nó nhảy |
+  | `content` | chuỗi | `calculateProfileRevision()` | nội dung hồ sơ có đổi không — **không** nói được cái nào mới hơn |
+  | `manifest` | chuỗi | `lispLibrary.revisionFor()` | băm nội dung tài nguyên LISP **kể cả phụ thuộc** — đổi một phụ thuộc là mã đổi dù tài nguyên không sửa dòng nào |
+  | `cadweb` | số | `CadWebRevisionState` | MÔ HÌNH đang ở bản nào (tiến theo delta/epoch) — **không** phải phiên bản định dạng tệp, cái đó là `manifest.formatVersion` |
+
+  Từ vựng ở `lib/revisionKinds.ts` (cùng hình dạng với `lib/acadState.ts`: tên
+  tách khỏi cách đọc). **Bất biến #9** cấm nhãn trần "Revision" trong
+  `app/(shell)` — chỉ soi màn hình mới, vì màn cũ và hai panel dựng thử còn dùng
+  chữ đó theo nghĩa thứ năm (revision bản vẽ P01/P02) và sẽ bị xoá ở giai đoạn
+  9-10; áp luật lên chúng là ép sửa thứ sắp vứt.
+
+  **Ba** nhãn tôi đặt SAI, review bắt được — bảng sinh ra để chống lẫn lộn thì
+  chính nó lẫn trước: gọi `manifest` là "Phiên bản thư
+  viện" (nghe như có thứ tự, trong khi nó là băm) và gọi `cadweb` là "Bản dựng
+  .cadweb" (sai đối tượng — nó đếm mô hình, không phải tệp), và gọi `document` là
+  "Bản sửa của bản vẽ" (AutoCAD đẩy bộ đếm đó lên cả khi chỉ-đọc, nên nhãn ấy làm
+  màn hình báo một lượt sửa chưa từng xảy ra). Thêm
+  `revisionOrdering()` cho chỗ nào định sắp xếp hay so `>`. Ba mức: `none` (hai
+  loại băm) · `within-instance` (bộ đếm bản vẽ) · `within-drawing-epoch` (bản mô
+  hình CadWeb). **Không có mức toàn cục** — cả hai loại có thứ tự đều kèm điều
+  kiện, và mỗi lần tôi bỏ điều kiện đi là một vòng review bắt lại.
+
+  Kèm `revisionText()`: `0` là bộ đếm THẬT (bản vẽ vừa mở, chưa sửa gì), không
+  phải "chưa biết" — quy nó về `—` là nói sai theo chiều ngược lại.
 - ~~**`copyfloor` và `tagmeta` có thể là 2 nút luôn báo lỗi.**~~ **ĐÓNG
   2026-08-19 — mục nợ này SAI.**
 

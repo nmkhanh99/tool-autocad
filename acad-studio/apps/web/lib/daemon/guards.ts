@@ -1,3 +1,4 @@
+import { revisionLabel } from "../revisionKinds";
 /** Câu chữ cho mọi mã lỗi có kiểu mà daemon phát ra.
  *
  * Bộ mẫu thiết kế liệt kê 11 mã. Daemon thật phát 62 — trong đó bốn mã mà màn
@@ -63,7 +64,10 @@ export const guards: Record<string, Guard> = {
   },
   drawing_stale: {
     title: "Bản vẽ đã thay đổi",
-    why: "Revision của bản vẽ trong AutoCAD không còn khớp với lúc app đọc.",
+    /* "Mã chốt" chứ không phải "Revision": bốn thứ trong app cùng tên đó (xem
+       `lib/revisionKinds.ts`), và bộ đếm này KHÔNG đo số lần sửa — AutoCAD đẩy
+       nó lên cả trong thao tác chỉ-đọc. */
+    why: `${revisionLabel("document")} trong AutoCAD không còn khớp với lúc app đọc.`,
     fix: "Quét lại từ AutoCAD rồi thực hiện lại thao tác.",
   },
   space_changed: {
@@ -202,8 +206,9 @@ export const guards: Record<string, Guard> = {
     fix: "Chọn một DIM chuẩn cùng trục với lô.",
   },
   drawing_revision_unavailable: {
-    title: "Không đọc được revision của bản vẽ",
-    why: "Không có revision thì app không đảm bảo được là ghi đúng vào bản vẽ đã xem.",
+    title: `Không đọc được ${revisionLabel("document").toLowerCase()}`,
+    why: `Không có ${revisionLabel("document").toLowerCase()} thì app không đảm bảo được là ghi`
+      + " đúng vào bản vẽ đã xem.",
     fix: "Kiểm tra plugin AcadBridge còn phản hồi, rồi quét lại.",
   },
   revision_conflict: {

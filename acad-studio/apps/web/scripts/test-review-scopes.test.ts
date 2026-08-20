@@ -129,4 +129,26 @@ test("bất biến #7 phải CÒN trong test-contract.mjs", () => {
     "phép so phải ĐỌC standardsEngine.ts, không chép cứng danh sách scope");
   assert.match(contract, /features\/review\/scopes\.ts/,
     "và phải đọc chính bảng nhãn, không chép cứng nó");
+
+  /* Bất biến #9 cũng vậy — và nó đã bị xoá đúng một lần, bằng đúng cái lệnh mà
+     chú thích trên vừa cảnh báo: `git checkout --` trên một tệp CHƯA commit,
+     trong lúc kiểm đột biến. Lần đó `test-contract.mjs` vẫn chạy XANH, vì một
+     phép kiểm không tồn tại thì không đỏ được. Xanh giả là cách hỏng tệ nhất ở
+     đây, nên khoá luôn nó từ tệp khác. */
+  assert.match(contract, /Bất biến #9/,
+    "test-contract.mjs mất phép cấm nhãn trần \"Revision\"");
+  /* Chốt NGUYÊN VĂN cả hai danh sách, không chỉ chốt là chúng tồn tại. Thêm một
+     mục như `"page.tsx"` hay `".tsx"` vào danh sách miễn trừ thì phép kiểm vẫn
+     xanh trong khi nó đã bỏ qua gần hết dự án — nới danh sách là cách làm một
+     guardrail im lặng mà không phải xoá dòng nào. */
+  assert.match(
+    contract,
+    /const REVISION_LABEL_EXEMPT = \["DocumentReviewPanel\.tsx", "PreconstructionPanel\.tsx"\];/,
+    "danh sách miễn trừ TỆP phải đúng hai panel dựng thử — nới ra là vô hiệu hoá #9",
+  );
+  assert.match(
+    contract,
+    /const REVISION_PROSE_ALLOWED = \[\s*"So sánh revision, overlay, batch workflow và AI review",\s*\];/,
+    "danh sách chuỗi được phép phải đúng một câu, và là nghĩa thứ năm (revision bản vẽ)",
+  );
 });

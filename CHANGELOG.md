@@ -66,6 +66,45 @@
   đã rụng. Một cái hạn đứng im nói sai đều đặn, tệ hơn không có hạn. Nhịp 1 giây
   và CHỈ trong lúc chờ.
 
+- **Bốn thứ cùng tên "revision" nay có bốn nhãn.** Bộ đếm bản vẽ · băm nội dung
+  hồ sơ · phiên bản manifest LISP · bản dựng `.cadweb` — khác kiểu, khác vòng
+  đời, hỏng theo bốn kiểu khác nhau, và giống nhau đúng một điểm là cái tên. Hai
+  chỗ trên cùng màn hình ghi "Revision" với hai con số khác nhau thì người đọc
+  không có cách nào biết đó là hai thứ khác nhau — còn người viết thì đem hai
+  cái so với nhau. Từ vựng ở `lib/revisionKinds.ts`, **bất biến #9** cấm nhãn
+  trần "Revision" trong màn hình mới, và `revisionIsOrdered()` cho chỗ nào định
+  sắp xếp. **Ba mức**, không phải cờ đúng/sai: `none` · `within-instance` ·
+  `global`. Mức giữa là chỗ tôi sai HAI lần — đầu tiên để `document` có thứ tự
+  trơn (mời so giữa hai phiên mở), rồi sửa quá tay thành "không xếp được" với lý
+  do UNDO làm bộ đếm lùi. Lý do đó tôi **suy ra chứ không đo**, và mã plugin nói
+  ngược: `gDatabaseRevisions` chỉ có `++` ở bốn chỗ, không chỗ nào giảm, và bị
+  **xoá** khi bản vẽ đóng. Nên nó có thứ tự trong một phiên mở và mất hết nghĩa
+  qua hai phiên — một cờ boolean không có chỗ nào để nói ra điều kiện đó.
+  Rồi vòng sau lại bắt tiếp: `cadweb` cũng KHÔNG toàn cục.
+  `CadWebRevisionCursor` gồm `(drawingId, modelEpoch, revision)` và mỗi bản vẽ
+  bắt đầu từ 0, nên bản 5 của bản vẽ này với bản 1 của bản vẽ kia không có quan
+  hệ thứ tự nào. Tôi vơ lấy "global" đúng cho loại mình chưa soi tới — cùng một
+  lối tắt, lặp hai vòng liền. Không loại nào là toàn cục.
+- **Nhãn phải lấy từ từ vựng, không chép cứng.** Ba màn hình đang chép cứng
+  chuỗi ra ngoài; đổi tên ở `revisionKinds.ts` xong chúng vẫn hiện tên cũ — hai
+  nhãn khác nhau cho cùng một thứ, đúng cái nhập nhằng bảng này sinh ra để dẹp.
+  Bất biến #9 thêm phép cấm chép cứng, trích nhãn từ chính tệp từ vựng.
+  Ba nhãn đầu tôi đặt sai và review bắt được — bảng sinh ra để chống lẫn lộn thì
+  chính nó lẫn trước. Nặng nhất: `document` KHÔNG đếm số lần sửa (AutoCAD đẩy bộ
+  đếm lên cả khi chỉ-đọc), nên nhãn "Bản sửa của bản vẽ" làm màn hình báo một
+  lượt sửa chưa từng xảy ra. Bất biến #9 cũng mở rộng sang `features/` và
+  `components/`: soi mỗi thư mục route là bỏ sót đúng phần người dùng đọc, vì
+  màn hình mới **dựng** component ở đó — và sang cả màn CŨ mà màn mới **dẫn
+  tới**: `/library/lisp` có liên kết `/?panel=lisp`, nên "sắp bị xoá" không phải
+  lý do miễn trừ khi người dùng được đưa sang đó hôm nay. Guardrail vừa mở đã
+  tìm ra ba chỗ nữa tôi không biết: câu chốt `drawing_stale`, `manifestRevision:`
+  ở màn LISP cũ, và `từ revision` ở CadWeb.
+
+  Giới hạn đã ghi thẳng vào phép kiểm: nó soi CHUỖI trong nguồn, mà nguồn không
+  nói được đâu là chữ người dùng đọc. Tôi đã thử quét "mọi literal chứa chữ
+  revision" và bỏ — nó nuốt cả tên biến lẫn khoá object, cho ra hàng trăm kết
+  quả rác, và một phép kiểm ai cũng phải bỏ qua thì tệ hơn không có.
+
 ### Technical
 
 - **Bất biến #8** trong `test-contract.mjs`: mọi mục `live: true` ở

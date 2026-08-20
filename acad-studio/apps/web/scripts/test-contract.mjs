@@ -889,6 +889,113 @@ function occurrencesIn(source, pattern) {
     `nút live không có handler trong opLisp() — mỗi lần bấm là một lỗi 400: [${broken}]`);
 }
 
+/* ── Bất biến #9: không bày nhãn trần "Revision" ────────────────────────────
+ *
+ * Bốn thứ khác kiểu, khác vòng đời, hỏng theo bốn kiểu khác nhau — và giống
+ * nhau đúng một điểm: cùng tên `revision` (bộ đếm bản vẽ · băm nội dung hồ sơ ·
+ * băm tài nguyên LISP · bản mô hình CadWeb). Hai chỗ trên cùng một màn hình cùng
+ * ghi "Revision" với hai con số khác nhau thì người đọc không có cách nào biết
+ * đó là hai thứ khác nhau — và người VIẾT thì đem hai cái so với nhau.
+ *
+ * Soi cả màn hình CŨ mà màn hình mới DẪN TỚI. "Sắp bị xoá" không phải lý do
+ * miễn trừ khi người dùng được đưa sang đó hôm nay: `/library/lisp` có liên kết
+ * `/?panel=lisp`, và màn đó bày ra cùng một cái băm manifest dưới một tên khác.
+ *
+ * Vẫn miễn trừ hai panel DỰNG THỬ: chúng dùng chữ đó theo nghĩa thứ năm
+ * (revision bản vẽ P01/P02) và không có backend, nên đổi tên ở đó là sửa nội
+ * dung giả.
+ *
+ * **Giới hạn, nói thẳng:** phép kiểm này soi CHUỖI trong nguồn, mà nguồn thì
+ * không nói được đâu là chữ người dùng đọc. Nó bắt những dạng viết đã gặp thật;
+ * một nhãn dựng bằng cách nối chuỗi lạ vẫn lọt. Tôi đã thử viết một phép quét
+ * "mọi literal chứa chữ revision" và bỏ: nó nuốt cả tên biến lẫn khoá object,
+ * cho ra hàng trăm kết quả rác — một phép kiểm mà ai cũng phải bỏ qua thì tệ
+ * hơn không có. Phần chắc chắn nằm ở `lib/revisionKinds.ts` và test của nó;
+ * đây chỉ là lưới chặn những kiểu đã trượt một lần. */
+const REVISION_LABEL_EXEMPT = ["DocumentReviewPanel.tsx", "PreconstructionPanel.tsx"];
+/* Chuỗi được phép giữ chữ "revision": NGHĨA THỨ NĂM — revision bản vẽ (P01/P02)
+   của ngành, không phải một trong bốn thứ ở `lib/revisionKinds.ts`. Ở đó nó là
+   từ chuyên ngành đúng, đổi tên mới là sai.
+   Liệt kê NGUYÊN VĂN chứ không miễn trừ cả tệp: miễn cả tệp thì mọi nhãn mơ hồ
+   thêm vào tệp đó sau này cũng lọt theo. */
+/* Nhãn do `lib/revisionKinds.ts` SỞ HỮU. Trích từ chính tệp đó, không chép tay:
+   chép tay là dựng lại đúng cái lỗi phép kiểm này đi bắt. */
+const REVISION_LABELS_TEXT = Object.fromEntries(
+  [...sourceAt("lib/revisionKinds.ts").matchAll(/^\s+label: "([^"]+)",$/gm)]
+    .map((match, index) => [index, match[1]]),
+);
+
+const REVISION_PROSE_ALLOWED = [
+  "So sánh revision, overlay, batch workflow và AI review",
+];
+{
+  const scanned = sources.filter((entry) =>
+    (entry.path.endsWith(".tsx") || entry.path.endsWith(".ts"))
+    && !REVISION_LABEL_EXEMPT.some((name) => entry.path.endsWith(name)));
+  assert.ok(scanned.length >= 20, `chỉ thấy ${scanned.length} tệp để soi — locator lạc hậu`);
+
+  const offenders = [];
+  for (const entry of scanned) {
+    /* Bóc chú thích trước: bàn VỀ chữ "Revision" trong chú thích là chuyện bình
+       thường và cần thiết, chỉ nhãn NGƯỜI DÙNG ĐỌC mới bị cấm. */
+    const code = entry.text
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+      .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    /* Bắt cả bốn dạng viết: chữ trong JSX, và chuỗi mở đầu bằng "Revision" ở cả
+       ba kiểu nháy. Bản đầu chỉ bắt hai dạng, nên nó XANH trong khi màn LISP vẫn
+       in `manifestRevision: …` bằng template literal — review bắt được. */
+    const bare = [
+      />\s*Revision\b/,
+      /"Revision\b/,
+      /'Revision\b/,
+      /`Revision\b/,
+      /\bmanifestRevision:\s/,
+      /\btừ revision\b/i,
+      /* Chữ THƯỜNG giữa câu — dạng đã trượt ở `drawing_revision_unavailable`
+         ("Không đọc được revision của bản vẽ"). Hai điều kiện thu hẹp:
+         · khoảng trắng ở TRƯỚC (nên định danh như `manifestRevision` hay
+           `baseRevision` không bao giờ khớp — tên biến không có dấu cách) và
+           ranh giới từ ở SAU. Bản đầu đòi khoảng trắng cả hai bên, nên
+           `"So sánh revision, overlay…"` lọt: sau chữ đó là dấu phẩy;
+         · trong chuỗi phải có một dấu tiếng Việt, tức đây là CHỮ NGƯỜI DÙNG ĐỌC.
+           Thông điệp giao thức CadWeb bằng tiếng Anh ("snapshot revision must be
+           a positive safe integer") thì `revision` đúng là tên trường của giao
+           thức — đổi tên chúng là làm sai tài liệu, không phải dọn nhập nhằng. */
+      /["'`][^"'`\n]*[àáảãạăâđêôơưèéẹëìíĩòóõùúũỳýỹ][^"'`\n]*\srevision\b[^"'`\n]*["'`]/i,
+      /["'`][^"'`\n]*\srevision\b[^"'`\n]*[àáảãạăâđêôơưèéẹëìíĩòóõùúũỳýỹ][^"'`\n]*["'`]/i,
+    ];
+    const scrubbed = REVISION_PROSE_ALLOWED.reduce(
+      (text, allowed) => text.split(allowed).join(""), code);
+    if (bare.some((pattern) => pattern.test(scrubbed))) offenders.push(entry.path);
+  }
+  assert.deepEqual(
+    offenders, [],
+    `nhãn trần "Revision": [${offenders}] — dùng revisionLabel() ở lib/revisionKinds.ts`
+    + " để nói rõ đó là loại nào",
+  );
+
+  /* Và nhãn phải LẤY TỪ từ vựng, đừng chép cứng chuỗi ra ngoài. Chép cứng thì
+     đổi tên ở `revisionKinds.ts` xong những chỗ kia vẫn hiện tên cũ — hai nhãn
+     khác nhau cho cùng một thứ, đúng cái nhập nhằng bảng này sinh ra để dẹp, và
+     phép cấm chữ "revision" trần ở trên KHÔNG bắt được chuyện đó. */
+  const owned = Object.values(REVISION_LABELS_TEXT);
+  const copies = [];
+  for (const entry of scanned) {
+    if (entry.path.endsWith("lib/revisionKinds.ts")) continue;
+    /* So KHÔNG PHÂN BIỆT HOA THƯỜNG và ở BẤT KỲ đâu trong tệp, không chỉ ngay
+       sau dấu nháy. Bản đầu chỉ bắt `"Nhãn` và `` `Nhãn ``, nên chữ trong JSX,
+       chuỗi nháy đơn, và bản viết thường giữa câu ("…đọc được mã chốt thư viện
+       của tài nguyên") đều lọt — đúng những dạng tôi vừa viết ra ở vòng trước. */
+    const haystack = entry.text.toLowerCase();
+    for (const label of owned) {
+      if (haystack.includes(label.toLowerCase())) copies.push(`${entry.path} :: ${label}`);
+    }
+  }
+  assert.deepEqual(copies, [],
+    `nhãn chép cứng thay vì gọi revisionLabel(): [${copies}]`);
+}
+
 /* Quyết định D6: nếu UI hiển thị trạng thái đã lưu / chưa lưu thì `/docs`
  * PHẢI trả `dbmod`, và plugin PHẢI phát trường đó. Ba nơi phải khớp nhau —
  * lệch một nơi là chấm xanh nói dối trên một bản vẽ chưa lưu. */

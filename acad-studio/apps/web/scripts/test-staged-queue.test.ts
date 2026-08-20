@@ -13,6 +13,7 @@ import {
 } from "../features/staged-ops/queue";
 import { documentMatchesTarget } from "../lib/daemon/docs";
 import { ACAD_STATE_LABEL, busyText } from "../lib/acadState";
+import { REVISION_LABELS, revisionOrdering, revisionText } from "../lib/revisionKinds";
 import { stagedDrawPreviews, unwarnedPreviews } from "../lib/daemon/drawTarget";
 
 const NOW = Date.parse("2026-08-18T10:00:00.000Z");
@@ -394,3 +395,96 @@ test("trạng thái chờ không được CHẨN ĐOÁN thay daemon", () => {
   assert.doesNotMatch(busyText("2026-08-19T09:59:00.000Z", now), /giây/);
 });
 
+
+test("bốn loại “revision” phải có bốn NHÃN khác nhau", () => {
+  /* Bốn khái niệm khác kiểu, khác vòng đời, hỏng theo bốn kiểu khác nhau — và
+     giống nhau đúng một điểm: cùng tên `revision`. Hai chỗ trên cùng màn hình
+     ghi "Revision" với hai con số khác nhau thì người đọc không có cách nào biết
+     đó là hai thứ khác nhau. Trùng nhãn là dựng lại đúng chuyện đó. */
+  const kinds = Object.keys(REVISION_LABELS) as (keyof typeof REVISION_LABELS)[];
+  assert.equal(kinds.length, 4, "thêm/bớt một loại thì phải cập nhật cả mục nợ trong ROADMAP");
+
+  const labels = kinds.map((kind) => REVISION_LABELS[kind].label);
+  assert.equal(new Set(labels).size, labels.length, `nhãn trùng: ${labels}`);
+
+  for (const kind of kinds) {
+    const { label, hint } = REVISION_LABELS[kind];
+    assert.ok(label.trim(), `${kind} thiếu nhãn`);
+    assert.ok(hint.trim(), `${kind} thiếu câu giải thích`);
+    /* Nhãn trần "Revision" là đúng thứ đang gây nhập nhằng — cấm nó ở đây, nếu
+       không bảng này chỉ chép lại vấn đề vào một chỗ mới. */
+    assert.notEqual(label.trim().toLowerCase(), "revision",
+      `${kind}: nhãn phải nói nó đếm CÁI GÌ, không chỉ là "Revision"`);
+  }
+});
+
+test("băm nội dung KHÔNG được đặt tên nghe như có thứ tự", () => {
+  /* `content` và `manifest` đều là băm nội dung: chúng trả lời "giống hay khác",
+     không trả lời "cái nào mới hơn". Đặt nhãn kiểu "Phiên bản …" là mời người
+     đọc — và người viết — đem chúng so lớn-bé, một phép so vô nghĩa mà ngôn ngữ
+     vẫn cho chạy.
+
+     Đây không phải lo xa: tôi đã đặt đúng cái nhãn đó cho `manifest` ở bản đầu,
+     trong khi nó là `sha256` trên nguồn + manifest + PHỤ THUỘC — đổi một phụ
+     thuộc là mã đổi, dù tài nguyên không sửa dòng nào. */
+  assert.equal(revisionOrdering("content"), "none");
+  assert.equal(revisionOrdering("manifest"), "none");
+  /* Ba mức chứ không phải cờ đúng/sai, vì mức GIỮA mới là chỗ tôi đã sai hai
+     lần: đầu tiên để `document` là "có thứ tự" trơn (mời so giữa hai phiên mở),
+     rồi sửa quá tay thành "không xếp được" với lý do UNDO làm bộ đếm lùi — một
+     khẳng định tôi SUY RA chứ không đo. Mã plugin nói ngược: `gDatabaseRevisions`
+     chỉ có `++` ở bốn chỗ, không chỗ nào giảm, và bị XOÁ khi bản vẽ đóng. Nên nó
+     có thứ tự trong một phiên mở, và mất hết nghĩa qua hai phiên. */
+  assert.equal(revisionOrdering("document"), "within-instance",
+    "bộ đếm bản vẽ chỉ tăng, nhưng bắt đầu lại khi bản vẽ đóng — so trong CÙNG instance");
+  /* Cũng CÓ ĐIỀU KIỆN: `CadWebRevisionCursor` gồm `(drawingId, modelEpoch,
+     revision)` và mỗi bản vẽ bắt đầu từ 0, nên bản 5 của bản vẽ này với bản 1
+     của bản vẽ kia không có quan hệ thứ tự nào. Không loại nào là toàn cục. */
+  assert.equal(revisionOrdering("cadweb"), "within-drawing-epoch",
+    "bản mô hình chỉ so được trong cùng một (drawingId, modelEpoch)");
+
+  for (const kind of ["content", "manifest"] as const) {
+    const { label, hint } = REVISION_LABELS[kind];
+    assert.doesNotMatch(label, /[Pp]hiên bản|[Bb]ản dựng/,
+      `${kind}: nhãn không được nghe như một phiên bản có thứ tự`);
+    assert.match(hint, /KHÔNG|không xếp|không sửa dòng nào|giống hay khác|đổi hay không/,
+      `${kind}: câu giải thích phải nói rõ nó không xếp được thứ tự`);
+  }
+
+  /* `cadweb` có thứ tự thật, nhưng nó đếm MÔ HÌNH chứ không phải TỆP: bản dựng
+     của tệp là `manifest.formatVersion` (major.minor), một khái niệm khác hẳn.
+     Gọi nó là "bản dựng .cadweb" thì một màn hình dòng thời gian viết sau sẽ bày
+     ra sai loại phiên bản — đúng thứ bảng nhãn này sinh ra để chặn. Đây là nhãn
+     tôi đặt sai ở bản đầu. */
+  /* `document` có thứ tự, nhưng nó KHÔNG đếm số lần người dùng sửa: AutoCAD đẩy
+     bộ đếm này lên cả trong việc chỉ-đọc (`ssget "_X"` là một ví dụ, xem
+     `drawingChangedSince()` ở daemon). Gọi nó là "bản sửa" thì màn hình báo một
+     lượt sửa chưa từng xảy ra — và người dùng đi tìm thứ mình không làm. Nó là
+     một CHỐT: "dữ liệu tôi đọc lúc trước còn dùng được không". */
+  const doc = REVISION_LABELS.document;
+  assert.doesNotMatch(doc.label, /sửa/i,
+    "nhãn document không được nói nó đếm số lần SỬA — thao tác chỉ-đọc cũng làm nó nhảy");
+  assert.match(doc.hint, /KHÔNG phải số lần sửa|chỉ-đọc/,
+    "câu giải thích phải nói rõ chỉ-đọc cũng làm nó nhảy");
+
+  const cadweb = REVISION_LABELS.cadweb;
+  assert.doesNotMatch(cadweb.label, /[Bb]ản dựng|\.cadweb|tệp/,
+    "nhãn cadweb không được mô tả nó như phiên bản của TỆP");
+  assert.match(cadweb.label, /mô hình/i, "phải nói rõ nó đếm mô hình");
+  assert.match(cadweb.hint, /formatVersion/,
+    "và câu giải thích phải chỉ ra formatVersion mới là phiên bản định dạng tệp");
+});
+
+test("`0` là một bộ đếm THẬT, không phải chưa biết", () => {
+  /* Bản vẽ vừa mở chưa sửa gì thì `revision` đúng bằng `0`. Quy nó về "—" là
+     nói "chưa đọc được" trong khi đã đọc được — và hai câu đó dẫn tới hai kết
+     luận trái ngược về việc bản vẽ đã đổi hay chưa. */
+  assert.equal(revisionText(0), "0");
+  assert.equal(revisionText(121), "121");
+  assert.equal(revisionText("abc123"), "abc123");
+
+  for (const unknown of [null, undefined, "", "   "]) {
+    assert.equal(revisionText(unknown), "—",
+      `${JSON.stringify(unknown)} = chưa biết, phải hiện "—" chứ không phải rỗng`);
+  }
+});

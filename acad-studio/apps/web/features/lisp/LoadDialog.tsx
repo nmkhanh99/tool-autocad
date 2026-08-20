@@ -13,6 +13,7 @@
  */
 import { ConfirmSheet } from "../../components/ui/ConfirmSheet";
 import { loadBlockLabel, reviewLabel, type LispResource } from "./model";
+import { revisionLabel } from "../../lib/revisionKinds";
 
 export function LoadDialog({ resource, revision, revisionLoading, revisionError, busy, onLoad, onCancel }: {
   resource: LispResource;
@@ -32,9 +33,10 @@ export function LoadDialog({ resource, revision, revisionLoading, revisionError,
     : !approved
       ? `Chỉ nạp được tài nguyên đã duyệt — hiện là “${reviewLabel(resource.reviewStatus)}”.`
       : revisionLoading
-        ? "Đang đọc revision của tài nguyên…"
+        ? `Đang đọc ${revisionLabel("manifest").toLowerCase()} của tài nguyên…`
         : !revision
-          ? revisionError || "Chưa đọc được revision nên không gửi lệnh nạp được."
+          ? revisionError
+            || `Chưa đọc được ${revisionLabel("manifest").toLowerCase()} nên không gửi lệnh nạp được.`
           : "";
 
   return (

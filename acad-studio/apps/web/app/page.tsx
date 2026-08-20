@@ -17,6 +17,7 @@ import LispLibraryPanel from "./LispLibraryPanel";
 import DocumentReviewPanel, { type ReviewWorkspaceView } from "./DocumentReviewPanel";
 import PreconstructionPanel, { type PreconstructionView } from "./PreconstructionPanel";
 import CadWebViewerPanel from "./CadWebViewerPanel";
+import { revisionLabel } from "../lib/revisionKinds";
 import {
   readLispProposal,
   proposalFingerprint,
@@ -1909,7 +1910,11 @@ function LispProposalCard({
         <span>{commands.length} lệnh</span>
         <span>{functions.length} hàm public</span>
         <span>{dependencies.length} dependency</span>
-        <span>Revision {proposal.baseRevision.slice(0, 18)}…</span>
+        {/* Cùng từ vựng với màn hình mới (`lib/revisionKinds.ts`). Màn này là
+            màn CŨ, nhưng `/library/lisp` dẫn thẳng người dùng sang đây, nên hai
+            bên gọi cùng một cái băm bằng hai tên là chuyện họ gặp HÔM NAY —
+            không phải chuyện của giai đoạn 9. */}
+        <span>{revisionLabel("manifest")} {proposal.baseRevision.slice(0, 18)}…</span>
       </div>
       <div className={
         "lisp-proposal-result " +

@@ -75,7 +75,7 @@ export async function prepareStagedOp(
   // Thiếu id hoặc revision thì không có gì để xác nhận, và cũng không có gì để
   // daemon so lại lúc apply. Dừng ở đây tốt hơn là dựng một thẻ xác nhận rỗng.
   if (!id) throw new DaemonError("Daemon không trả operation id để xác nhận.");
-  if (!revision) throw new DaemonError("Daemon không trả revision để đối chiếu lúc ghi.");
+  if (!revision) throw new DaemonError("Daemon không trả mã chốt để đối chiếu lúc ghi.");
 
   const target = String(operation.target || request.target || "");
   return {
